@@ -11,6 +11,7 @@ class FlagTarget(models.TextChoices):
     REPORT = "report"
     QR = "qr"
     MESSAGE = "message"
+    STORY = "story"   # D-S6-4 · stories are UGC and must be flaggable via the same pipeline
 
 
 class FlagStatus(models.TextChoices):

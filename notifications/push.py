@@ -37,7 +37,3 @@ def send_push(token, *, title, body, data) -> PushResult:
     if resp.get("error") == "UNREGISTERED" or resp.get("status") == 404:
         return PushResult(ok=False, unregistered=True)
     return PushResult(ok=False)
-
-
-def get_push_sender():
-    return send_push

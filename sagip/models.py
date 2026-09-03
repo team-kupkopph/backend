@@ -33,6 +33,26 @@ class StrayStatus(models.TextChoices):
     RESOLVED = "resolved"
 
 
+# Defined here (not imported from listings) because listings.models imports sagip.models —
+# importing back would cycle. The DB enum values are the same shared `sex`/`size_category` types.
+class Sex(models.TextChoices):
+    MALE = "male"
+    FEMALE = "female"
+    UNKNOWN = "unknown"
+
+
+class SizeCategory(models.TextChoices):
+    SMALL = "small"
+    MEDIUM = "medium"
+    LARGE = "large"
+
+
+class MatchStatus(models.TextChoices):
+    SUGGESTED = "suggested"
+    CONFIRMED = "confirmed"
+    DISMISSED = "dismissed"
+
+
 class StrayReport(models.Model):
     """A stray sighting (matches kupkop_mvp_schema.sql `stray_report`). `geom` is the one
     precise-GPS surface in the app (decision 11) — a PostGIS point; everywhere else a
@@ -51,6 +71,15 @@ class StrayReport(models.Model):
     species = models.CharField(max_length=10, choices=Species.choices)
     condition = models.CharField(max_length=10, choices=StrayCondition.choices)
     notes = models.TextField(blank=True)
+    # D-S6-1 · describable fields the §11 matcher scores lost<->found on. Nullable and
+    # meaningful only for report_type lost/found; a stray sighting leaves them blank. Stored on
+    # the report (a lost report may prefill them from the linked pet), never re-read live, so a
+    # later pet edit can't rewrite what the reporter actually described.
+    breed = models.CharField(max_length=80, null=True, blank=True)
+    color_markings = models.CharField(max_length=120, null=True, blank=True)
+    size_category = models.CharField(max_length=10, choices=SizeCategory.choices,
+                                     null=True, blank=True)
+    sex = models.CharField(max_length=10, choices=Sex.choices, null=True, blank=True)
     geom = models.PointField(geography=True, srid=4326)   # NOT NULL — a report needs a place
     location_text = models.CharField(max_length=160, blank=True)
     status = models.CharField(max_length=10, choices=StrayStatus.choices,
@@ -165,3 +194,35 @@ class CaseStatusHistory(models.Model):
     class Meta:
         db_table = "case_status_history"
         indexes = [models.Index(fields=["report", "-changed_at"], name="idx_case_history_report")]
+
+
+class ReportMatch(models.Model):
+    """US-L2 · a suggested lost<->found match (kupkop_mvp_schema.sql `report_match`).
+
+    The §11 matcher writes these with status `suggested` and a [0,1] score; a human always
+    confirms or dismisses (matching never auto-resolves). `report` is the newer report being
+    matched, `matched_report` the candidate. UNIQUE(report, matched_report) + a
+    report != matched_report check keep a pair from duplicating or self-matching (re-runs
+    refresh the score in place). A decision is applied to BOTH directions of a pair by the view.
+    """
+
+    match_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    report = models.ForeignKey(StrayReport, on_delete=models.CASCADE, related_name="matches")
+    matched_report = models.ForeignKey(StrayReport, on_delete=models.CASCADE, related_name="+")
+    score = models.DecimalField(max_digits=4, decimal_places=3, null=True, blank=True)
+    status = models.CharField(max_length=10, choices=MatchStatus.choices,
+                              default=MatchStatus.SUGGESTED)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "report_match"
+        constraints = [
+            models.UniqueConstraint(fields=["report", "matched_report"],
+                                    name="idx_report_match_pair"),
+            models.CheckConstraint(condition=~models.Q(report=models.F("matched_report")),
+                                   name="report_match_not_self"),
+        ]
+        indexes = [
+            models.Index(fields=["matched_report"], name="idx_report_match_matched"),
+            models.Index(fields=["status"], name="idx_report_match_status"),
+        ]

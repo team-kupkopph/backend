@@ -19,4 +19,5 @@ urlpatterns = [
     path("api/v1/", include("moderation.urls")),
     path("api/v1/", include("volunteer.urls")),
     path("api/v1/", include("devices.urls")),
+    path("api/v1/", include("community.urls")),
 ]

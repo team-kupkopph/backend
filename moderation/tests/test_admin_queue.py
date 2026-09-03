@@ -65,6 +65,38 @@ def test_mark_actioned_stamps_the_reviewer_and_status(admin_client, admin_user):
 
 
 @pytest.mark.django_db
+def test_actioning_a_story_flag_hides_the_story(admin_client, admin_user):
+    """US-T3 / D-S6-4 · the lever: an actioned story flag hides the story (not deleted)."""
+    from community.models import StoryPost, StoryStatus
+    account = AccountFactory(account_type="admin", email=admin_user.email or "rev@kupkop.ph")
+    StaffProfile.objects.create(user=admin_user, account=account)
+    story = StoryPost.objects.create(author_account=AccountFactory(), story_type="general",
+                                     caption="off-topic")
+    flag = _flag(reporter=AccountFactory(), target_type="story", target_id=str(story.pk))
+
+    admin_client.post(CHANGELIST, {"action": "mark_actioned", "_selected_action": [str(flag.pk)]})
+
+    story.refresh_from_db(); flag.refresh_from_db()
+    assert story.status == StoryStatus.HIDDEN          # hidden, not deleted
+    assert StoryPost.objects.filter(pk=story.pk).exists()
+    assert flag.status == FlagStatus.ACTIONED          # flag stays as the audit trail
+
+
+@pytest.mark.django_db
+def test_dismissing_a_story_flag_leaves_the_story_published(admin_client, admin_user):
+    from community.models import StoryPost, StoryStatus
+    account = AccountFactory(account_type="admin", email=admin_user.email or "rev@kupkop.ph")
+    StaffProfile.objects.create(user=admin_user, account=account)
+    story = StoryPost.objects.create(author_account=AccountFactory(), story_type="general")
+    flag = _flag(reporter=AccountFactory(), target_type="story", target_id=str(story.pk))
+
+    admin_client.post(CHANGELIST, {"action": "mark_dismissed", "_selected_action": [str(flag.pk)]})
+
+    story.refresh_from_db()
+    assert story.status == StoryStatus.PUBLISHED       # dismiss doesn't hide
+
+
+@pytest.mark.django_db
 def test_mark_dismissed_sets_status(admin_client, admin_user):
     account = AccountFactory(account_type="admin", email=admin_user.email or "rev@kupkop.ph")
     StaffProfile.objects.create(user=admin_user, account=account)

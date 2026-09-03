@@ -13,6 +13,8 @@ routine hourly sweeps.
 """
 from django.core.management.base import BaseCommand
 
+from community.sweeps import award_badges
+from sagip.matching import sweep_matches
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims
 from volunteer.sweeps import remind_shifts
 
@@ -21,6 +23,8 @@ SWEEPS = [
     ("escalated", escalate_reports),
     ("expired", expire_stalled_claims),
     ("reminded", remind_shifts),
+    ("badged", award_badges),
+    ("matched", sweep_matches),
 ]
 
 

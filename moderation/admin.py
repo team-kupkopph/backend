@@ -7,7 +7,7 @@ from django.db.models import Case, IntegerField, Value, When
 from django.utils import timezone
 
 from accounts.staff import reviewer_account
-from moderation.models import FlagStatus, ModerationFlag
+from moderation.models import FlagStatus, FlagTarget, ModerationFlag
 
 
 @admin.register(ModerationFlag)
@@ -40,8 +40,23 @@ class ModerationFlagAdmin(admin.ModelAdmin):
                 "Your admin login isn't linked to a reviewer account — decision not "
                 "recorded. Run `manage.py createstaff` to link it.", level=messages.ERROR)
             return
+        hidden = 0
+        if status == FlagStatus.ACTIONED:
+            # US-T3 / D-S6-4 · actioning a story flag HIDES the story (status='hidden') — the
+            # lever, not deletion: the row and its photos survive, the feed just excludes it, and
+            # the author still sees a hidden state. The flag stays as the audit trail. Capture ids
+            # before the status update (the queryset is re-evaluated after .update()).
+            story_ids = list(queryset.filter(target_type=FlagTarget.STORY)
+                             .values_list("target_id", flat=True))
+            if story_ids:
+                from community.models import StoryPost, StoryStatus
+                hidden = StoryPost.objects.filter(pk__in=story_ids).update(
+                    status=StoryStatus.HIDDEN)
         n = queryset.update(status=status, reviewed_by=reviewer, reviewed_at=timezone.now())
-        self.message_user(request, f"{n} flag(s) marked {status}.", level=messages.SUCCESS)
+        note = f"{n} flag(s) marked {status}."
+        if hidden:
+            note += f" {hidden} story(ies) hidden."
+        self.message_user(request, note, level=messages.SUCCESS)
 
     def get_queryset(self, request):
         qs = super().get_queryset(request).select_related("reporter_account")

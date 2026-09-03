@@ -42,6 +42,13 @@ _TYPES = [
     NotificationType("signup_declined", "{shift_id, signup_id}", True, "kupkop://shifts/history"),
     NotificationType("shift_cancelled_by_shelter", "{shift_id}", True, "kupkop://shifts/history"),
     NotificationType("shift_reminder", "{shift_id, signup_id, window}", True, "kupkop://shifts"),
+    NotificationType("pledge_received", "{need_id, pledge_id}", True, "kupkop://shelter/needs/{need_id}/pledges"),
+    NotificationType("pledge_confirmed", "{need_id, pledge_id}", True, "kupkop://donations"),
+    # D-S6-5: a badge is a celebration, in-app only — push:false, so it never buzzes a phone
+    # (pushing badges would cheapen push for a match or a pledge).
+    NotificationType("badge_earned", "{badge_code}", False, "kupkop://impact"),
+    # §11.3: a strong lost<->found suggestion pushes both reporters — a reunion is time-sensitive.
+    NotificationType("match_suggested", "{report_id}", True, "kupkop://reports/{report_id}"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}

@@ -52,5 +52,9 @@ def notify(account, type, *, title="", body="", data=None):
         raise UnregisteredNotificationType(type)
     row = Notification.objects.create(
         account=account, type=type, title=title, body=body, data=data)
+    # TODO(FCM-enable): the push fan-out runs inline in the triggering request's commit path.
+    # That is fine while send_push is a creds-guarded no-op, but once real FCM is configured it
+    # adds per-device network latency to the request that called notify(). Move _fan_out_push
+    # onto a task queue at FCM-enable time (US-D1). Recorded in the Sprint 5 review.
     transaction.on_commit(lambda: _fan_out_push(account, type, title, body, data))
     return row
