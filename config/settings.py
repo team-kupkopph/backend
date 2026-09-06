@@ -115,6 +115,10 @@ MIDDLEWARE = [
     # request.user.otp_device / is_verified() from the session, which
     # accounts.apps.AccountsConfig.ready()'s OTPAdminSite swap then gates on.
     "django_otp.middleware.OTPMiddleware",
+    # US-D1 · one audit row per /admin-api/* request. Placed AFTER authentication so
+    # request.user is resolved and the row can name the actor; it is a no-op on every other
+    # path.
+    "adminapi.audit.AdminApiAuditMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]

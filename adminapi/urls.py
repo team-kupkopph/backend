@@ -1,5 +1,6 @@
 from django.urls import path
 
+from adminapi.dashboard_views import DashboardView
 from adminapi.verifications_views import (
     ApproveView,
     NeedsInfoView,
@@ -24,6 +25,9 @@ urlpatterns = [
     path("auth/logout", StaffLogoutView.as_view()),
     path("auth/password-reset", StaffPasswordResetView.as_view()),
     path("auth/password-reset/confirm", StaffPasswordResetConfirmView.as_view()),
+
+    # US-D2 · every count the dashboard shows, in one request.
+    path("dashboard", DashboardView.as_view()),
 
     # US-C1/C2/C3 · the verification queue. This is the workflow that gates every shelter
     # going live, which is why it is the first domain surface the console gets.
