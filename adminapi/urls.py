@@ -7,6 +7,7 @@ from adminapi.members_views import (
     ReinstateView,
     SuspendView,
 )
+from adminapi.browser_views import ModelListView, ModelRowView, ModelRowsView
 from adminapi.staff_views import StaffDetailView, StaffListView, StaffResetTotpView
 from adminapi.shelters_views import (
     DonationQrQueueView,
@@ -91,4 +92,10 @@ urlpatterns = [
     path("staff", StaffListView.as_view()),
     path("staff/<int:user_id>", StaffDetailView.as_view()),
     path("staff/<int:user_id>/reset-totp", StaffResetTotpView.as_view()),
+
+    # US-V1 · the READ-ONLY model browser. Superadmin only. No write route exists here and
+    # none is stubbed — a test asserts it.
+    path("models", ModelListView.as_view()),
+    path("models/<str:key>", ModelRowsView.as_view()),
+    path("models/<str:key>/<str:pk>", ModelRowView.as_view()),
 ]
