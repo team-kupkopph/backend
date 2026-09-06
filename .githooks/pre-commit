@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Runs before every commit. Extend by appending; each check should exit non-zero
+# to block the commit, or exit 0 to allow it. See .githooks/purge-icon-cruft
+# for the shape.
+set -euo pipefail
+"$(dirname "$0")/purge-icon-cruft"

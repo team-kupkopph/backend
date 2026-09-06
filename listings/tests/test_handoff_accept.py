@@ -1,8 +1,8 @@
 import pytest
 from rest_framework.test import APIClient
+
 from accounts.factories import AccountFactory
-from listings.models import (AdoptionListing, AdoptionInquiry, AdoptionStage, AdoptionStageKey,
-                             StageState, Pet)
+from listings.models import AdoptionInquiry, AdoptionListing, AdoptionStage, AdoptionStageKey, Pet, StageState
 
 
 def _c(a):

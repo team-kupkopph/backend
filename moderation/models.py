@@ -40,7 +40,7 @@ class ModerationFlag(models.Model):
     reason = models.TextField()
     status = models.CharField(max_length=10, choices=FlagStatus.choices, default=FlagStatus.OPEN)
     reviewed_by = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True,
-                                    related_name="+")
+                                    related_name="+", db_column="reviewed_by")
     created_at = models.DateTimeField(auto_now_add=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
 

@@ -1,11 +1,15 @@
-import django, os
+import os
+
+import django
+
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
 from django.utils import timezone
+
 from accounts.models import Account
-from verifications.models import AccountCapability
 from listings.models import AdoptionListing
+from verifications.models import AccountCapability
 
 acc = Account.objects.filter(email="rescuer@demo.ph").first()
 if acc is None:

@@ -1,8 +1,16 @@
 from django.urls import path
 
-from listings.views import (CaseListView, CasePlaceView, InquiryStageView, ListingDetailView,
-                            ListingInquiriesView, ListingsView, MyInquiriesView, MyPetsView,
-                            PlacementDecisionView)
+from listings.views import (
+                            CaseListView,
+                            CasePlaceView,
+                            InquiryStageView,
+                            ListingDetailView,
+                            ListingInquiriesView,
+                            ListingsView,
+                            MyInquiriesView,
+                            MyPetsView,
+                            PlacementDecisionView,
+)
 
 urlpatterns = [
     path("listings", ListingsView.as_view()),

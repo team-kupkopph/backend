@@ -1,4 +1,5 @@
 import pytest
+from django.db import IntegrityError
 
 from accounts.models import Account
 
@@ -22,6 +23,6 @@ def test_create_account_is_email_identified_and_unverified_by_default():
 def test_email_is_case_insensitively_unique():
     Account.objects.create_account(account_type="personal", email="a@b.com",
                                    password="s3cretpass", display_name="A")
-    with pytest.raises(Exception):
+    with pytest.raises(IntegrityError):
         Account.objects.create_account(account_type="personal", email="A@B.COM",
                                        password="s3cretpass", display_name="A2")

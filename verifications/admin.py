@@ -10,14 +10,19 @@ from django.contrib.admin.utils import unquote
 from django.db import transaction
 from django.db.models import Case, IntegerField, Value, When
 from django.template.response import TemplateResponse
-from django.utils.html import format_html, format_html_join
+from django.utils.html import format_html_join
 
 from accounts.staff import reviewer_account
 from common.storage import signed_get_url
 from shelter.models import ShelterProfile
 from verifications.models import VerificationAccessLog, VerificationRequest
-from verifications.review import (ReviewError, approve_request, reject_request,
-                                  request_more_info, review_document)
+from verifications.review import (
+    ReviewError,
+    approve_request,
+    reject_request,
+    request_more_info,
+    review_document,
+)
 from verifications.rules import review_checklist
 
 

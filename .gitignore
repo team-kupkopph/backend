@@ -12,3 +12,9 @@ venv/
 
 # OS
 .DS_Store
+
+# US-Q1 · coverage output. The report is a CI artifact and a local scratch file, never a
+# committed number — the committed numbers are the thresholds in dev/coverage_gate.py.
+.coverage
+coverage.json
+htmlcov/

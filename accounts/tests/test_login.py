@@ -1,7 +1,7 @@
 import pytest
+from django.utils import timezone
 
 from accounts.factories import AccountFactory
-from django.utils import timezone
 
 
 @pytest.mark.django_db

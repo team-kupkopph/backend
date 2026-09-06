@@ -8,16 +8,31 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from accounts.models import Account
-from accounts.serializers import (AccountTokenRefreshSerializer, EmailSerializer, EmailVerifySerializer,
-                                  MeSettingsSerializer, MeUpdateSerializer, SignupSerializer, account_repr, me_repr)
+from accounts.models import Account, AccountStatus
+from accounts.serializers import (
+    AccountTokenRefreshSerializer,
+    EmailSerializer,
+    EmailVerifySerializer,
+    MeSettingsSerializer,
+    MeUpdateSerializer,
+    SignupSerializer,
+    account_repr,
+    me_repr,
+)
 from accounts.tokens import tokens_for
 from common import otp
 from common.otp import CodeExpired, CodeInvalid, CodeLocked, issue_code, verify_code
-from common.throttles import (LoginIdentifierThrottle, LoginIpThrottle,
-                              OtpResendHourThrottle, OtpResendMinuteThrottle,
-                              PasswordForgotIdentifierThrottle, PasswordForgotIpThrottle,
-                              SignupIpThrottle)
+from common.throttles import (
+    ExportRequestThrottle,
+    LoginIdentifierThrottle,
+    LoginIpThrottle,
+    OtpResendHourThrottle,
+    OtpResendIdentifierThrottle,
+    OtpResendMinuteThrottle,
+    PasswordForgotIdentifierThrottle,
+    PasswordForgotIpThrottle,
+    SignupIpThrottle,
+)
 
 
 class SignupView(APIView):
@@ -83,7 +98,8 @@ class EmailVerifyView(APIView):
 
 class EmailResendView(APIView):
     permission_classes = [AllowAny]
-    throttle_classes = [OtpResendMinuteThrottle, OtpResendHourThrottle]
+    throttle_classes = [OtpResendMinuteThrottle, OtpResendHourThrottle,
+                        OtpResendIdentifierThrottle]
 
     def post(self, request):
         s = EmailSerializer(data=request.data)
@@ -106,7 +122,11 @@ class LoginView(APIView):
         email = request.data.get("email", "")
         password = request.data.get("password", "")
         account = Account.objects.filter(email=email).first()
-        if account is None or not account.check_password(password):
+        # US-N1 · a deleted account is refused here, in the SAME branch and with the SAME
+        # body as a wrong password. A distinct code or message would turn deletion into an
+        # enumeration oracle — §12.1's whole point is that login reveals nothing.
+        if (account is None or account.status == AccountStatus.DELETED
+                or not account.check_password(password)):
             return Response({"error": {"code": "invalid_credentials",
                                        "message": "Email or password is incorrect"}}, status=401)
         if account.email_verified_at is None:
@@ -196,6 +216,29 @@ class MeView(APIView):
     def get(self, request):
         return Response(me_repr(request.user))
 
+    def delete(self, request):
+        """US-N1 · §12.6's erasure right. Soft delete + immediate session revocation;
+        the PII scrub follows after the grace window (accounts/purge.py, D-S7-1)."""
+        from accounts.lifecycle import open_commitments, soft_delete_account
+
+        if request.data.get("confirm") is not True:
+            return Response({"error": {"code": "confirmation_required",
+                                       "message": "Confirm to delete your account.",
+                                       "field": "confirm"}}, status=400)
+
+        blockers = open_commitments(request.user)
+        if blockers:
+            # Other people are relying on these — the refusal names every one of them so the
+            # screen can list what to close rather than dead-ending on "you have commitments".
+            return Response({"error": {
+                "code": "has_active_commitments",
+                "message": "Close these before deleting your account.",
+                "details": {"blockers": blockers},
+            }}, status=409)
+
+        soft_delete_account(request.user)
+        return Response(status=204)
+
     def patch(self, request):
         acc = request.user
         s = MeUpdateSerializer(data=request.data, partial=True)
@@ -210,20 +253,52 @@ class MeView(APIView):
 
 class MeSettingsView(APIView):
     permission_classes = [IsAuthenticated]
-    FIELDS = ["marketing_emails", "approximate_location", "masked_contact", "push_enabled"]
+    FIELDS = ["marketing_emails", "approximate_location", "masked_contact", "push_enabled",
+              "analytics_consent"]
+
+    def _repr(self, s):
+        body = {f: getattr(s, f) for f in self.FIELDS}
+        # Read-only alongside the flag: the client renders "off by default, you may withdraw",
+        # and the controller can show WHEN consent was given (§12.6).
+        body["analytics_consent_at"] = (s.analytics_consent_at.isoformat()
+                                        if s.analytics_consent_at else None)
+        return body
 
     def get(self, request):
-        s = request.user.settings
-        return Response({f: getattr(s, f) for f in self.FIELDS})
+        return Response(self._repr(request.user.settings))
 
     def patch(self, request):
         s = request.user.settings
         serializer = MeSettingsSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        for key, value in serializer.validated_data.items():
+        data = serializer.validated_data
+        # D-S7-3 · the stamp moves only on a real CHANGE of mind. Re-sending the same value
+        # is an idempotent PATCH, not a fresh act of consent, and must not restamp;
+        # withdrawing clears the stamp so the column never describes a lapsed consent.
+        if "analytics_consent" in data and data["analytics_consent"] != s.analytics_consent:
+            s.analytics_consent_at = timezone.now() if data["analytics_consent"] else None
+        for key, value in data.items():
             setattr(s, key, value)
         s.save()
-        return Response({f: getattr(s, f) for f in self.FIELDS})
+        return Response(self._repr(s))
+
+
+class MeExportView(APIView):
+    """US-N3 · GET /me/export — RA 10173 portability, synchronously (D-S7-2).
+
+    Returned as a download rather than a bare body so the mobile client can hand it to the
+    OS share sheet without inventing a filename. The contents rule lives in
+    `accounts/export.py`: the caller's data and nobody else's.
+    """
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ExportRequestThrottle]
+
+    def get(self, request):
+        from accounts.export import build_export, export_filename
+
+        response = Response(build_export(request.user))
+        response["Content-Disposition"] = f'attachment; filename="{export_filename()}"'
+        return response
 
 
 class MeLocationView(APIView):
@@ -289,8 +364,8 @@ class SocialAuthView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, provider):
-        from accounts.models import AccountIdentity
         from accounts import social
+        from accounts.models import AccountIdentity
         if provider not in ("google", "apple"):
             return Response({"error": {"code": "unsupported_provider",
                                        "message": "That sign-in provider isn't supported"}}, status=400)

@@ -110,7 +110,8 @@ class AdoptionListing(models.Model):
     no listing endpoint collects precise location this sprint)."""
 
     listing_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    posted_by = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="listings")
+    posted_by = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="listings",
+                                  db_column="posted_by_account_id")
     source_report = models.ForeignKey(StrayReport, on_delete=models.SET_NULL, null=True,
                                       blank=True, related_name="adoption_listings")
     adopted_by_account = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True,

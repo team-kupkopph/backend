@@ -6,8 +6,11 @@ from rest_framework.views import APIView
 from accounts.models import Address
 from shelter.models import DonationQr, ShelterProfile
 from shelter.permissions import IsShelter
-from shelter.serializers import (DonationQrUploadSerializer, ShelterProfileCreateSerializer,
-                                 ShelterProfilePatchSerializer)
+from shelter.serializers import (
+    DonationQrUploadSerializer,
+    ShelterProfileCreateSerializer,
+    ShelterProfilePatchSerializer,
+)
 from verifications.models import VerificationRequest
 
 

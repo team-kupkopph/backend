@@ -1,9 +1,11 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
+
 from accounts.factories import AccountFactory
 from devices.models import DeviceToken
-from notifications.service import notify
 from notifications import push as pushmod
+from notifications.service import notify
 
 
 @pytest.mark.django_db

@@ -12,7 +12,7 @@ from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
 from notifications.models import Notification
 from sagip.geo import coarsen_point
-from sagip.models import CaseStatusHistory, RescueCase, StrayReport
+from sagip.models import RescueCase, StrayReport
 from verifications.models import AccountCapability
 
 LAT, LNG = 14.6507, 121.1029  # Marikina

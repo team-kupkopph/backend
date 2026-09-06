@@ -1,8 +1,10 @@
 from rest_framework.exceptions import Throttled
 from rest_framework.views import exception_handler
 
+from common.observability import request_id_var
 
-def error_handler(exc, context):
+
+def _shape_error(exc, context):
     response = exception_handler(exc, context)
     if response is None:
         return response
@@ -38,4 +40,23 @@ def error_handler(exc, context):
         }
         return response
     response.data = {"error": {"code": code, "message": message}}
+    return response
+
+
+def error_handler(exc, context):
+    """The DRF exception handler: shape the envelope, then stamp the correlation id.
+
+    US-E2 · the id goes in the error the USER sees. "It failed around 3pm" is unactionable;
+    an id read back off the screen points support at the exact log lines. Stamped here, at
+    the single exit, because `_shape_error` has four returns and the fifth one someone adds
+    would otherwise forget.
+    """
+    return _stamp_request_id(_shape_error(exc, context))
+
+
+def _stamp_request_id(response):
+    if response is not None and isinstance(getattr(response, "data", None), dict):
+        error = response.data.get("error")
+        if isinstance(error, dict):
+            error["request_id"] = request_id_var.get()
     return response

@@ -1,7 +1,6 @@
 """Tier-derived required-doc rule (US-R4). One source of §3.5, imported by both the
 submit path (`_shelter_doc_error`) and the reviewer's missing-docs line."""
-from verifications.rules import (deferred_docs, missing_docs, required_doc_types,
-                                 review_checklist)
+from verifications.rules import deferred_docs, missing_docs, required_doc_types, review_checklist
 
 TIER1_FULL = ["gov_id", "proof_billing", "rescue_photos", "rescue_photos", "rescue_photos"]
 

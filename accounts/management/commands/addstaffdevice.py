@@ -29,7 +29,8 @@ class Command(BaseCommand):
         try:
             user = User.objects.get(username=username)
         except User.DoesNotExist:
-            raise CommandError(f"No such Django user: {username!r}. Run createstaff first.")
+            raise CommandError(
+                f"No such Django user: {username!r}. Run createstaff first.") from None
         if not user.is_staff:
             raise CommandError(f"{username!r} is not staff — createstaff sets is_staff=True.")
 

@@ -69,6 +69,19 @@ class Account(models.Model):
     sessions_revoked_at = models.DateTimeField(null=True, blank=True)  # logout-all / password reset set this; tokens with iat before it are rejected
     status = models.CharField(max_length=20, choices=AccountStatus.choices,
                               default=AccountStatus.ACTIVE)
+    # US-C1 · both columns have been in the documented DDL since the data-analyst review
+    # and in NO model or migration until now — table-level drift checking could not see
+    # it (the D-S5-1 blind spot; check-docs now compares columns too).
+    # last_active_at: retention/inactive-account policy input (§12.6). Never a login side
+    # effect that writes on every request — whoever starts using it decides the cadence.
+    last_active_at = models.DateTimeField(null=True, blank=True)
+    # deleted_at: opens the §12.7 soft-delete grace window. Moves in lockstep with
+    # status='deleted' — enforced below by the M5 CHECK, not by convention.
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    # anonymized_at: CLOSES that window (D-S7-1). NULL = never purged, i.e. either active or
+    # soft-deleted and still inside the grace period. Set once, by the purge sweep, which is
+    # what makes the sweep idempotent — it skips rows already stamped.
+    anonymized_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -79,6 +92,17 @@ class Account(models.Model):
 
     class Meta:
         db_table = "account"
+        constraints = [
+            # M5 (root DDL): a soft delete is two facts that must never disagree — a
+            # status of 'deleted' with no deleted_at has no grace window to expire, and a
+            # deleted_at on an active account would make the purge sweep eat a live user.
+            # Postgres enforces the pair; application code cannot set one without the other.
+            models.CheckConstraint(
+                condition=models.Q(deleted_at__isnull=False, status=AccountStatus.DELETED)
+                | models.Q(deleted_at__isnull=True) & ~models.Q(status=AccountStatus.DELETED),
+                name="chk_account_deleted_consistency",
+            ),
+        ]
 
     def set_password(self, raw):
         self.password_hash = make_password(raw)
@@ -96,8 +120,18 @@ class StaffProfile(models.Model):
     `contrib.auth.User` (web session), but a review decision is attributed to an
     `Account(account_type='admin')` via `verification_request.reviewed_by`. This 1:1 link
     is the join between the two identities, so `reviewed_by` can be stamped from the admin
-    request's `User`. It lives only in Django — like `auth_user` and the JWT blacklist
-    tables — and is deliberately NOT a domain table in `kupkop_mvp_schema.sql`."""
+    request's `User`.
+
+    The `auth.User` half lives only in Django, like `auth_user` and the JWT blacklist tables.
+    `staff_profile` itself does NOT: it is a documented domain table, `kupkop_mvp_schema.sql`
+    line 137. It has to be. `dev/check-docs.py::check_schema_vs_migrations` scans every
+    project migration for a `db_table` and errors on any that has no `CREATE TABLE` in the
+    schema SQL — code ahead of docs is an error by design — so `0006_staffprofile.py` would
+    fail the docs CI if this table were undocumented.
+
+    (Corrected 2026-09-06, Sprint 9 US-N1. This docstring previously claimed the opposite,
+    which is the comment someone would trust when deciding where to put the next staff
+    table — and following it would have turned the docs build red.)"""
 
     id = models.BigAutoField(primary_key=True)
     user = models.OneToOneField("auth.User", on_delete=models.CASCADE,
@@ -117,6 +151,15 @@ class AccountSettings(models.Model):
     approximate_location = models.BooleanField(default=True)
     masked_contact = models.BooleanField(default=True)
     push_enabled = models.BooleanField(default=True)
+    # D-S7-3 · opt-in consent for CLIENT-SIDE / behavioural analytics only. The
+    # server-authoritative aggregate events (common/analytics.py::emit, US-Y1) carry no
+    # account identifiers and keep flowing regardless — that is why §17's tooling note says
+    # they need no consent. Default false: silence is not consent under RA 10173.
+    analytics_consent = models.BooleanField(default=False)
+    # §12.6 puts the burden on the controller to DEMONSTRATE consent, which a bare boolean
+    # cannot do — it cannot say WHEN. Cleared on withdrawal so the column always describes
+    # the consent that is currently in force, never a lapsed one.
+    analytics_consent_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

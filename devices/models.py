@@ -1,6 +1,9 @@
 import uuid
+
 from django.db import models
+
 from accounts.models import Account
+
 
 class DeviceToken(models.Model):
     """US-P1 · a device's FCM token. Matches §7's device_token (fcm_token UNIQUE, the

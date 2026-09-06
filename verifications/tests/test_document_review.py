@@ -7,7 +7,7 @@ import pytest
 
 from accounts.factories import AccountFactory
 from verifications.models import VerificationDocument, VerificationRequest
-from verifications.review import (ReviewError, request_more_info, review_document)
+from verifications.review import ReviewError, request_more_info, review_document
 
 
 def _reviewer():

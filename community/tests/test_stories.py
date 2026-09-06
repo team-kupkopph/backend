@@ -42,6 +42,7 @@ def test_a_story_needs_at_least_one_photo(client):
 def test_story_type_auto_derives_from_a_linked_case(client):
     """A story citing a rescue case is a rescue story regardless of any passed type."""
     from django.contrib.gis.geos import Point
+
     from sagip.models import RescueCase, StrayReport
     rep = StrayReport.objects.create(species="dog", condition="injured",
                                      geom=Point(121.0, 14.6, srid=4326))

@@ -1,5 +1,6 @@
 import pytest
 from rest_framework.test import APIClient
+
 from accounts.factories import AccountFactory
 from devices.models import DeviceToken
 

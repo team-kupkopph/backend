@@ -1,10 +1,12 @@
-import pytest
 from datetime import timedelta
+
+import pytest
 from django.utils import timezone
 from rest_framework.test import APIClient
+
 from accounts.factories import AccountFactory
 from accounts.models import Address
-from volunteer.models import VolunteerShift, VolunteerSignup, SignupStatus, ShiftStatus
+from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 
 
 def _c(account):
@@ -82,7 +84,7 @@ def test_foreign_shelter_403_and_guest_401():
 def test_no_other_account_contact_leaks():
     import json
     shelter = AccountFactory(account_type="shelter"); vol = AccountFactory(account_type="personal")
-    noise = AccountFactory(account_type="personal", phone="+639175550000", email="noise@example.com")
+    _noise = AccountFactory(account_type="personal", phone="+639175550000", email="noise@example.com")
     su = _signup(shelter, vol, consent=False)
     dumped = json.dumps(_c(shelter).get(f"/api/v1/shelter/signups/{su.pk}/volunteer").json())
     assert "+639175550000" not in dumped and "noise@example.com" not in dumped

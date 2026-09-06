@@ -9,7 +9,6 @@ This sweep holds today by construction: no sagip view ever serializes reporter i
 fields (grep sagip/views.py — reporter_account_id/email/display_name never appear in a
 response body). These tests lock that property in as a regression guard, not a fix.
 """
-import uuid
 
 import pytest
 from django.contrib.gis.geos import Point
@@ -17,7 +16,7 @@ from django.utils import timezone
 
 from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
-from sagip.models import OfferStatus, ReportOffer, RescueCase, StrayReport
+from sagip.models import StrayReport
 from verifications.models import AccountCapability
 
 LAT, LNG = 14.6507, 121.1029  # Marikina

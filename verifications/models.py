@@ -59,7 +59,7 @@ class VerificationRequest(models.Model):
     status = models.CharField(max_length=20, choices=VerificationStatus.choices, default="pending")
     social_proof_url = models.TextField(blank=True)
     reviewed_by = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True,
-                                    related_name="+")
+                                    related_name="+", db_column="reviewed_by")
     submitted_at = models.DateTimeField(auto_now_add=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
@@ -95,10 +95,10 @@ class VerificationDocument(models.Model):
     # _at stamp who bounced a file and when; superseded_by links a rejected file to the
     # replacement inserted on resubmit (US-V3), keeping the rejected row for the audit trail.
     reviewed_by = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True,
-                                    related_name="+")
+                                    related_name="+", db_column="reviewed_by")
     reviewed_at = models.DateTimeField(null=True, blank=True)
     superseded_by = models.ForeignKey("self", on_delete=models.SET_NULL, null=True, blank=True,
-                                      related_name="+")
+                                      related_name="+", db_column="superseded_by")
     # US-SEC4 · set the moment purge_expired_documents nulls file_url (90 days after the
     # owning request's terminal decision, RA 10173 data-minimization). The row survives —
     # only the image goes — so this timestamp is the audit trail's "and here's when it
@@ -144,7 +144,7 @@ class VerificationAccessLog(models.Model):
     # captured so a view is never silently unattributed; viewer is the derived Account
     # when the staff bridge (US-R1) links one.
     viewer = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True,
-                               related_name="+")
+                               related_name="+", db_column="viewer_account_id")
     staff_username = models.CharField(max_length=150)
     viewed_at = models.DateTimeField(auto_now_add=True)
 

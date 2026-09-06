@@ -6,14 +6,13 @@ Meant to run beside `sagip`'s `run_sweeps` (same cron, separate command — the 
 domains don't share a scheduler dependency). No scheduler is embedded here, matching
 US-F0's decision (cron/command over Celery-beat for MVP).
 """
-from django.core.management.base import BaseCommand
-
+from common.management_base import SingletonCommand
 from verifications.purge import purge_expired_documents
 
 
-class Command(BaseCommand):
+class Command(SingletonCommand):
     help = "Delete and null file_url for verification documents past the retention window."
 
-    def handle(self, *args, **options):
+    def run(self, *args, **options):
         purged = purge_expired_documents()
         self.stdout.write(self.style.SUCCESS(f"purged {len(purged)} document(s)"))

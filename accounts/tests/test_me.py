@@ -1,8 +1,8 @@
 import pytest
+from django.utils import timezone
 
 from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
-from django.utils import timezone
 
 
 def _auth(client, account):

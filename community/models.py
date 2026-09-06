@@ -121,7 +121,8 @@ class AccountBadge(models.Model):
     """
 
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="badges")
-    badge = models.ForeignKey(Badge, on_delete=models.PROTECT, related_name="+")
+    badge = models.ForeignKey(Badge, on_delete=models.PROTECT, related_name="+",
+                              db_column="badge_code")
     earned_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

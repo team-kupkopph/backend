@@ -4,12 +4,18 @@
 resolutions, completions, decisions — that a log pipeline or the admin dashboard can aggregate.
 Deliberately narrow:
 
-  - NO account identifiers or PII in the payload. This MVP is aggregate-only because
-    `account_settings` has no analytics-consent column yet and §17 says honor consent per §12.6.
-  - Client-side events (session_start, tab_viewed, push_opened, …) and any per-user analytics
-    are DELIBERATELY ABSENT until Sprint 7 lands the consent column + settings UI. Do not add
-    them here before that — the whole point of keeping this server-side is that server outcomes
-    don't need per-user consent, while client/behavioural events do.
+  - NO account identifiers or PII in the payload. That is what lets these events flow with
+    no consent at all: §17's tooling note says server-authoritative outcomes need none
+    precisely because they carry nothing personal.
+  - Client-side events (session_start, tab_viewed, push_opened, …) are STILL absent, but the
+    reason has changed. Sprint 7 landed `account_settings.analytics_consent` (US-N3/N5), so
+    the consent gate now exists — what does not exist is a client analytics SDK, which
+    D-S7-3 deliberately left to Phase 2. Anything added here must stay server-side and
+    account-free; a per-user event belongs behind that consent flag, not in this module.
+
+Routing: since US-E2 these lines are formatted by `common/observability.py::JsonFormatter`
+and land on stdout as one JSON object per line, carrying `logger: "kupkop.analytics"` so a
+pipeline can select them by field.
 
 Fire-and-forget: `emit()` never raises. A logging failure must never break the request that
 produced the event (the `notifications/push.py::send_push` posture).

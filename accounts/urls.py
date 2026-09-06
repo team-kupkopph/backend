@@ -1,9 +1,23 @@
 from django.urls import path
 
-from accounts.views import (AccountTokenRefreshView, EmailResendView, EmailVerifyView, LoginView,
-                            LogoutAllView, LogoutView, MeLocationView, MePhoneVerifyView, MePhoneView,
-                            MeSettingsView, MeView, PasswordForgotView, PasswordResetView, SignupView,
-                            SocialAuthView)
+from accounts.views import (
+                            AccountTokenRefreshView,
+                            EmailResendView,
+                            EmailVerifyView,
+                            LoginView,
+                            LogoutAllView,
+                            LogoutView,
+                            MeExportView,
+                            MeLocationView,
+                            MePhoneVerifyView,
+                            MePhoneView,
+                            MeSettingsView,
+                            MeView,
+                            PasswordForgotView,
+                            PasswordResetView,
+                            SignupView,
+                            SocialAuthView,
+)
 
 urlpatterns = [
     path("auth/signup", SignupView.as_view()),
@@ -18,6 +32,7 @@ urlpatterns = [
     path("auth/social/<str:provider>", SocialAuthView.as_view()),
     path("me", MeView.as_view()),
     path("me/settings", MeSettingsView.as_view()),
+    path("me/export", MeExportView.as_view()),
     path("me/location", MeLocationView.as_view()),
     path("me/phone", MePhoneView.as_view()),
     path("me/phone/verify", MePhoneVerifyView.as_view()),

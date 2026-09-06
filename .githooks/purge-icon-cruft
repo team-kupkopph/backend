@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Purge zero-byte macOS Finder `Icon\r` files from the git directory.
+#
+# Cause: Google Drive's Mirror sync (team.kupkopph@gmail.com) re-creates the
+# custom-icon file inside every folder it touches, including `.git/`. Git then
+# treats an entry like `.git/refs/Icon\r` as a ref with a missing object and
+# `git fetch` / `git pull` fail with `bad object refs/Icon?`.
+#
+# Fix: delete the zero-byte matches, quietly. Never touch a non-zero file —
+# real refs, objects and reflogs are never zero-byte, which is what makes the
+# `-size 0` guard the whole safety story. See dev/HANDOFF.md's "Still-open
+# infra/ops items" note for the underlying issue.
+#
+# Runs fast (a few milliseconds on a stock .git dir) and stays silent on the
+# happy path — a hook that prints every time gets muted in a week.
+set -euo pipefail
+git_dir=$(git rev-parse --git-common-dir)
+n=$(find "$git_dir" -name 'Icon*' -type f -size 0 2>/dev/null | wc -l | tr -d ' ')
+if [ "$n" != "0" ]; then
+    find "$git_dir" -name 'Icon*' -type f -size 0 -delete 2>/dev/null
+    echo "  [icon-cruft] purged $n zero-byte Finder file(s) from $git_dir" >&2
+fi

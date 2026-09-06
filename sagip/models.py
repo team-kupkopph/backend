@@ -68,6 +68,11 @@ class StrayReport(models.Model):
     # Django model yet — kept as a nullable id column so the schema stays faithful.
     pet_id = models.UUIDField(null=True, blank=True)
     is_anonymous = models.BooleanField(default=False)
+    # US-O3 · set by the client at COMPOSE time so every retry of a queued report carries the
+    # same value. Scoped to the reporter by the constraint below, never globally unique — a
+    # global key would hand another person's report (precise coordinates included) to whoever
+    # replayed it. NULL is the normal case: a report filed online needs no key.
+    idempotency_key = models.CharField(max_length=64, null=True, blank=True)
     species = models.CharField(max_length=10, choices=Species.choices)
     condition = models.CharField(max_length=10, choices=StrayCondition.choices)
     notes = models.TextField(blank=True)
@@ -93,6 +98,16 @@ class StrayReport(models.Model):
 
     class Meta:
         db_table = "stray_report"
+        constraints = [
+            # US-O3 · exactly-once outbox submission. Enforced by the DATABASE, so two
+            # concurrent retries of the same queued report cannot both insert. Partial
+            # (idempotency_key IS NOT NULL) because most reports have no key and NULLs must
+            # stay distinct.
+            models.UniqueConstraint(
+                fields=["reporter_account", "idempotency_key"],
+                condition=models.Q(idempotency_key__isnull=False),
+                name="idx_stray_report_idempotency"),
+        ]
 
 
 class StrayReportPhoto(models.Model):

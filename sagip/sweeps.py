@@ -10,8 +10,15 @@ from django.utils import timezone
 
 from accounts.models import Account
 from notifications.service import notify
-from sagip.models import (CaseStatusHistory, OfferStatus, ReportOffer, RescueCase, StrayCondition,
-                          StrayReport, StrayStatus)
+from sagip.models import (
+    CaseStatusHistory,
+    OfferStatus,
+    ReportOffer,
+    RescueCase,
+    StrayCondition,
+    StrayReport,
+    StrayStatus,
+)
 from sagip.status import set_report_status
 
 # Condition -> hours a CLAIM may go without a status update before it's stalled (decision

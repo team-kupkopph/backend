@@ -2,7 +2,7 @@ import pytest
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
-from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
+from volunteer.models import SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.status import StatusError, set_signup_status
 
 

@@ -4,9 +4,16 @@ import pytest
 from django.db import IntegrityError, transaction
 
 from accounts.factories import AccountFactory
-from listings.models import (AdoptionInquiry, AdoptionListing, AdoptionStage,
-                             AdoptionStageHistory, AdoptionStageKey, Pet, PetPhoto,
-                             StageState)
+from listings.models import (
+    AdoptionInquiry,
+    AdoptionListing,
+    AdoptionStage,
+    AdoptionStageHistory,
+    AdoptionStageKey,
+    Pet,
+    PetPhoto,
+    StageState,
+)
 from listings.stages import StageError, set_stage_state
 
 

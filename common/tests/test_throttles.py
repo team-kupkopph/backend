@@ -160,3 +160,62 @@ def test_identifier_throttle_is_a_noop_with_no_identifier_in_the_body(client):
     will 400 the missing field regardless)."""
     res = client.post("/api/v1/auth/login", {"password": "wrong"}, content_type="application/json")
     assert res.status_code in (400, 401)  # never a throttle-related crash
+
+
+# ── OTP resend: the one throttle §15.3 names by name ────────────────────────────────
+# US-Q1's §15.3 audit found this endpoint had a configured throttle and NO test — the
+# only throttle in the app in that state, and the only one the spec calls out ("OTP
+# throttling & expiry"). Writing the missing tests is what surfaced the scoping hole
+# below; the audit's value was in the writing, not in the counting.
+@pytest.mark.django_db
+def test_otp_resend_trips_the_per_minute_throttle(client):
+    limit = _rate_count("otp_resend_min")
+    for _ in range(limit):
+        client.post("/api/v1/auth/email/resend", {"email": "someone@example.com"},
+                    content_type="application/json")
+    res = client.post("/api/v1/auth/email/resend", {"email": "someone@example.com"},
+                      content_type="application/json")
+    _assert_throttled_shape(res)
+
+
+@pytest.mark.django_db
+def test_otp_resend_is_throttled_per_email_not_only_per_ip(client):
+    """A rotating-IP caller must not be able to keep mailing codes at one address.
+
+    This is the exact hole `IdentifierThrottle`'s own docstring describes — "an attacker
+    rotating IPs still hammers one target account under IP-only throttling" — and until
+    US-Q1 the resend endpoint was the one public write path still IP-only, because it
+    predates those base classes and was never migrated onto them. The consequence is not
+    an account takeover: it is that anyone can use Kupkop to mail-bomb a stranger's inbox,
+    with our sending domain on every message.
+    """
+    AccountFactory(email="victim@example.com", email_verified_at=None)
+    limit = _rate_count("otp_resend_identifier")
+    for i in range(limit):
+        client.post("/api/v1/auth/email/resend", {"email": "victim@example.com"},
+                    content_type="application/json", REMOTE_ADDR=f"10.0.0.{i + 1}")
+    res = client.post("/api/v1/auth/email/resend", {"email": "victim@example.com"},
+                      content_type="application/json", REMOTE_ADDR="10.0.0.200")
+    _assert_throttled_shape(res)
+
+
+@pytest.mark.django_db
+def test_otp_resend_throttle_is_identical_for_a_real_and_an_unknown_email(client):
+    """§12.1 · the resend endpoint answers 202 either way; the throttle must not undo
+    that by behaving differently for an address that exists."""
+    AccountFactory(email="real2@example.com", email_verified_at=None)
+    limit = _rate_count("otp_resend_identifier")
+    seen = []
+    for n, email in enumerate(["real2@example.com", "nobody@example.com"]):
+        for i in range(limit):
+            client.post("/api/v1/auth/email/resend", {"email": email},
+                        content_type="application/json", REMOTE_ADDR=f"10.{n}.0.{i + 1}")
+        res = client.post("/api/v1/auth/email/resend", {"email": email},
+                          content_type="application/json", REMOTE_ADDR=f"10.{n}.0.200")
+        _assert_throttled_shape(res)
+        body = res.json()["error"]
+        # Everything except the correlation id, which US-E2 makes per-request on purpose
+        # and which therefore carries no information about the address.
+        body.pop("request_id", None)
+        seen.append(body)
+    assert seen[0] == seen[1]

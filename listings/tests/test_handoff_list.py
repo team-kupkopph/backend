@@ -1,8 +1,9 @@
 import pytest
 from rest_framework.test import APIClient
+
 from accounts.factories import AccountFactory
-from sagip.models import StrayReport, RescueCase, StrayStatus
 from listings.models import AdoptionListing
+from sagip.models import RescueCase, StrayReport, StrayStatus
 
 
 def _c(a):

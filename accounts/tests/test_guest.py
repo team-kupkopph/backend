@@ -11,8 +11,8 @@ def test_gated_write_without_token_is_auth_required_401(client):
 @pytest.mark.django_db
 def test_listings_public_returns_only_verified_poster_rows(client):
     from accounts.factories import AccountFactory
-    from verifications.models import AccountCapability
     from listings.models import AdoptionListing
+    from verifications.models import AccountCapability
     verified = AccountFactory(email="v@ex.com")
     AccountCapability.objects.create(account=verified, capability="rescuer", status="approved")
     unverified = AccountFactory(email="u@ex.com")

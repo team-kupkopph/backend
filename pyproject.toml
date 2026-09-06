@@ -1,0 +1,77 @@
+# US-C2 · ruff. Tech Spec §16.3 has said "On PR: pytest + ruff" since v0.1; ruff was never
+# actually installed, so that line described a pipeline nobody had. This config is the
+# smallest rule set that makes the claim true and catches real defects, chosen against the
+# code as it stands rather than against an ideal.
+#
+# WHAT IS DELIBERATELY NOT ENFORCED, and why — a launch-sprint linter that churns working
+# code buys nothing and gets muted:
+#
+#   E501 (line length, 1485 hits at ruff's default 88 / 91 at 100) — a formatting concern,
+#     and this project has no formatter. `line-length` below is set to what the code already
+#     does so the few genuine outliers stay visible without a reformat of every file.
+#   C408 (`dict(a=1)` over `{"a": 1}`, 17 hits) — all in test fixture builders where the
+#     keyword form reads better. A style preference, not a defect.
+#   RUF012 (mutable class default, 192 hits) — that is `list_display = (...)` and friends.
+#     Django's own idiom; the rule is noise against a Django codebase.
+#   DJ008 (model without `__str__`, 24 hits) — worth doing, worth doing deliberately, and
+#     not worth 24 diffs in the sprint that ships.
+[tool.ruff]
+target-version = "py312"
+# Matches the width the codebase already wraps to. Migrations are Django-generated and are
+# excluded rather than fought — nobody hand-edits them, and their long lines are machine output.
+line-length = 110
+extend-exclude = [".venv", "*/migrations/*"]
+
+[tool.ruff.lint]
+# E4/E7/E9 is ruff's default `E` subset: real errors, no line-length.
+# F  unused imports and names · I  import ordering · B  bugbear (it found two genuine bugs
+# on its first run) · UP  pyupgrade (already clean — zero hits, so it is free to keep clean).
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# E702 — the test suite deliberately writes compact setup lines (`a, b = X(); c = Y()`).
+#        All 64 hits are in tests; it is a readability choice there, not in app code.
+# B023 — "function does not bind loop variable", all inside the concurrency tests, where the
+#        threads are both started AND joined within the same loop iteration. The capture the
+#        rule warns about cannot happen there. It stays enforced everywhere else, because in
+#        ordinary code that pattern IS the bug.
+"**/tests/**" = ["E702", "B023"]
+# E402 — `seed.py` is a standalone Django script: it MUST call django.setup() before it can
+#        import any model, so imports after code is the required shape, not a lapse.
+"seed.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["accounts", "common", "community", "config", "devices", "listings",
+                     "moderation", "notifications", "sagip", "shelter", "verifications",
+                     "volunteer"]
+
+
+# US-Q1 · coverage. §15.4 asks for a trend plus "a hard gate on the welfare-critical packages
+# rather than a blanket global %", and this config is the "what is measured" half of that; the
+# per-package thresholds are enforced in dev/coverage_gate.py, because `--cov-fail-under` only
+# understands one number for the whole run.
+[tool.coverage.run]
+branch = true
+# Only the six welfare-critical packages of D-S7-6 plus the shared machinery they all route
+# through. Measuring the admin/moderation/shelter surfaces too would dilute the number that
+# the gate is actually about.
+source = ["accounts", "common", "community", "listings", "sagip", "verifications", "volunteer"]
+omit = [
+    # Django-generated; a migration's "coverage" measures whether a test happened to migrate
+    # past it, which is neither a signal nor actionable.
+    "*/migrations/*",
+    # Measuring the tests themselves inflates every package by its own test volume — the one
+    # number guaranteed to look good and mean nothing.
+    "*/tests/*",
+    "*/factories.py",
+    "*/apps.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

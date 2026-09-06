@@ -1,8 +1,12 @@
 from django.urls import path
 
-from verifications.views import (MeVerificationsView, PresignView,
-                                 ResubmitDocumentView, ShelterUpgradeView,
-                                 VerificationCreateView)
+from verifications.views import (
+                                 MeVerificationsView,
+                                 PresignView,
+                                 ResubmitDocumentView,
+                                 ShelterUpgradeView,
+                                 VerificationCreateView,
+)
 
 urlpatterns = [
     path("media/presign", PresignView.as_view()),

@@ -10,11 +10,10 @@ buzz a phone for — pushing it would cheapen push for a match or a pledge.
 
 D-S6-2: criteria are shift-agnostic — any completed Kawang-Gawa shift counts, not walks only.
 """
-from listings.models import AdoptionListing, ListingStatus
-from sagip.models import RescueCase
-
 from common.analytics import emit
+from listings.models import AdoptionListing, ListingStatus
 from notifications.service import notify
+from sagip.models import RescueCase
 
 from .models import AccountBadge, Badge, NeedPledge, PledgeStatus
 

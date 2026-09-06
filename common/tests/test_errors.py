@@ -34,5 +34,8 @@ def test_throttled_exception_carries_retry_after_in_details():
             "code": "throttled",
             "message": "Too many requests — try again shortly.",
             "details": {"retry_after": 42},
+            # US-E2 · every error envelope now carries the correlation id the user can quote.
+            # "-" outside a request, which is what this unit test is.
+            "request_id": "-",
         }
     }

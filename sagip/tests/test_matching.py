@@ -143,7 +143,7 @@ def test_confirm_resolves_both_reports_and_a_second_decision_is_409(client):
 @pytest.mark.django_db
 def test_dismiss_hides_the_match_without_resolving(client):
     a, b = AccountFactory(), AccountFactory()
-    lost = _report(ReportType.LOST, breed="aspin", lat=14.650, lng=121.100, reporter=a)
+    _lost = _report(ReportType.LOST, breed="aspin", lat=14.650, lng=121.100, reporter=a)
     found = _report(ReportType.FOUND, breed="aspin", lat=14.651, lng=121.101, reporter=b)
     m = run_matching(found)[0]
     res = client.post(f"/api/v1/reports/{found.pk}/matches/{m.pk}/dismiss", **_hdr(a))

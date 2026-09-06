@@ -1,7 +1,11 @@
 from django.urls import path
 
-from shelter.views import (DonationQrView, ShelterDashboardView, ShelterDonationQrPublicView,
-                           ShelterProfileView)
+from shelter.views import (
+                           DonationQrView,
+                           ShelterDashboardView,
+                           ShelterDonationQrPublicView,
+                           ShelterProfileView,
+)
 
 urlpatterns = [
     path("shelter/profile", ShelterProfileView.as_view()),

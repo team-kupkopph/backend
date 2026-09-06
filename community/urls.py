@@ -1,8 +1,17 @@
 from django.urls import path
 
-from community.views import (MeImpactView, MyPledgesView, NeedDetailView, NeedPledgesView,
-                             NeedReceivedView, PledgeCancelView, ShelterNeedsView, StoriesView,
-                             StoryDetailView, StoryReactionView)
+from community.views import (
+                             MeImpactView,
+                             MyPledgesView,
+                             NeedDetailView,
+                             NeedPledgesView,
+                             NeedReceivedView,
+                             PledgeCancelView,
+                             ShelterNeedsView,
+                             StoriesView,
+                             StoryDetailView,
+                             StoryReactionView,
+)
 
 urlpatterns = [
     path("me/impact", MeImpactView.as_view()),

@@ -6,14 +6,27 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Account, Address
+from accounts.models import Account, AccountStatus, Address
 from listings.fees import fee_cap_for
-from listings.models import (AdoptionInquiry, AdoptionListing, AdoptionListingPhoto,
-                             AdoptionStage, AdoptionStageKey, InquiryStatus, ListingStatus,
-                             Pet, PetPhoto, StageState)
+from listings.models import (
+    AdoptionInquiry,
+    AdoptionListing,
+    AdoptionListingPhoto,
+    AdoptionStage,
+    AdoptionStageKey,
+    InquiryStatus,
+    ListingStatus,
+    Pet,
+    PetPhoto,
+    StageState,
+)
 from listings.permissions import IsVerifiedMember
-from listings.serializers import (InquiryCreateSerializer, ListingCreateSerializer,
-                                  ListingPatchSerializer, StageUpdateSerializer)
+from listings.serializers import (
+    InquiryCreateSerializer,
+    ListingCreateSerializer,
+    ListingPatchSerializer,
+    StageUpdateSerializer,
+)
 from listings.stages import set_stage_state
 from listings.visibility import account_is_verified_rescuer, public_poster_q
 from notifications.service import notify
@@ -100,8 +113,10 @@ class ListingsView(APIView):
             qs = (AdoptionListing.objects.filter(status="available", posted_by=request.user)
                   .order_by("-created_at"))
             page_items, next_page = _paginate(qs, request)
-            return Response({"results": [_card(l) for l in page_items], "next": next_page})
+            return Response({"results": [_card(item) for item in page_items], "next": next_page})
+        # US-N1 · a deleted account's listings leave every public surface at once.
         qs = (AdoptionListing.objects.filter(status="available")
+              .exclude(posted_by__status=AccountStatus.DELETED)
               .filter(public_poster_q()).distinct().order_by("-created_at"))
         city = request.query_params.get("city")
         if city:
@@ -110,7 +125,7 @@ class ListingsView(APIView):
         if species:
             qs = qs.filter(species=species)
         page_items, next_page = _paginate(qs, request)
-        return Response({"results": [_card(l) for l in page_items], "next": next_page})
+        return Response({"results": [_card(item) for item in page_items], "next": next_page})
 
     def post(self, request):
         s = ListingCreateSerializer(data=request.data)

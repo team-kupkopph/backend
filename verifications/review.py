@@ -10,8 +10,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from notifications.service import notify
-from verifications.models import (AccountCapability, VerificationStatus,
-                                  VerificationType)
+from verifications.models import AccountCapability, VerificationStatus, VerificationType
 
 
 class ReviewError(Exception):

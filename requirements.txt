@@ -7,10 +7,15 @@ cffi==2.1.0
 certifi==2026.7.22
 charset_normalizer==3.5.1
 cryptography==50.0.0
-Django==5.1.15
+# US-K3 · security upgrades, 2026-09-04. Django 5.1.15 carried SEVEN advisories
+# (PYSEC-2026-3717, CVE-2026-48587/6873/8404/48588/53877/53878); 5.2 is the current LTS line.
+Django==5.2.17
 django-otp==1.7.0
-djangorestframework==3.15.2
-djangorestframework-simplejwt==5.3.1
+djangorestframework==3.17.2   # CVE-2026-73228, CVE-2026-73229
+# PYSEC-2026-1305. ⚠️ 5.5's TokenRefreshSerializer added a get_user_model() lookup keyed on
+# SIMPLE_JWT["USER_ID_FIELD"] — see the comment in config/settings.py for why that setting had
+# to go with this bump.
+djangorestframework-simplejwt==5.5.1
 factory_boy==3.3.3
 Faker==40.36.0
 idna==3.19
@@ -31,13 +36,26 @@ PyJWT==2.13.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 PyYAML==6.0.3
+# ⚠️ KNOWN, ACCEPTED: PYSEC-2026-1845 is fixed in pytest 9, which pytest-django 4.12 does not
+# support yet. pytest is a dev-only test runner and is not installed in the deployed image, so
+# the advisory has no production exposure. Revisit when pytest-django supports pytest 9.
 pytest==8.4.2
 pytest-django==4.12.0
+# US-Q1 · §15.4 "coverage tracked as a trend, with a hard gate on the welfare-critical
+# packages". Config in pyproject.toml; the per-package gate is dev/coverage_gate.py.
+pytest-cov==7.1.0
+coverage==7.16.0
 requests==2.34.2
 responses==0.26.2
+# US-C2 · the linter §16.3 has claimed CI runs since v0.1. Config in pyproject.toml.
+ruff==0.16.6
+# US-K3 · §12.4 "Dependabot + pip-audit in CI; patch known CVEs". Dev/CI tool.
+pip-audit==2.9.0
+# US-K1 · §12.4 "strict CORS allowlist".
+django-cors-headers==4.9.0
 s3transfer==0.19.2
 six==1.17.0
-sqlparse==0.5.5
+sqlparse==0.6.0               # PYSEC-2026-3696/3697/3698/3699, CVE-2026-84305
 typing_extensions==4.16.0
 urllib3==2.7.0
 Werkzeug==3.1.8

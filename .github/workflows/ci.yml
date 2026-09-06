@@ -4,6 +4,17 @@ on:
   push:
     branches: ['**']
   pull_request:
+  # US-C2 · manual trigger, so US-E3's release rehearsal can run the pipeline on demand
+  # rather than pushing a throwaway commit to provoke it.
+  workflow_dispatch:
+    inputs:
+      smoke_url:
+        description: >-
+          US-E3 · base URL of a DEPLOYED backend to smoke-test after the suite
+          (e.g. https://api.kupkop.ph). Leave blank to skip — there is no deployed
+          environment yet, so blank is the honest default rather than a failing job.
+        required: false
+        default: ''
 
 concurrency:
   group: backend-${{ github.ref }}
@@ -36,6 +47,13 @@ jobs:
       PGPORT: '5432'
       PGUSER: postgres
       PGPASSWORD: postgres
+      # US-K1 · CI is a development environment and says so. Since DEBUG now defaults OFF,
+      # settings would otherwise refuse to import here for want of a real SECRET_KEY and
+      # ALLOWED_HOSTS — which is the fail-fast doing its job, not a problem to work around.
+      # The production posture is asserted by config/tests/test_deploy_readiness.py, which
+      # runs Django's own `check --deploy` against simulated production settings, so nothing
+      # is lost by running the suite in dev mode.
+      DJANGO_DEBUG: '1'
 
     steps:
       - uses: actions/checkout@v4
@@ -56,11 +74,65 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # §16.3 says "On PR: pytest + ruff". Runs before the tests: a lint failure is the
+      # cheapest possible answer, and waiting on a PostGIS suite to hear it wastes a minute
+      # every time. Config (and every deliberate exemption) lives in pyproject.toml.
+      - name: Lint
+        run: ruff check .
+
+      # US-K3 · §12.4 "Dependabot + pip-audit in CI; patch known CVEs".
+      #
+      # This FAILS the build on any known advisory, which is only a reasonable gate because
+      # the tree is currently clean: the 2026-09-04 baseline found 16 advisories across 5
+      # packages (7 in Django alone) and they were fixed rather than accepted. The one
+      # deliberate exception is spelled out with its reasoning in requirements.txt and
+      # passed here explicitly, so an accepted risk is a visible line in a diff rather than
+      # a silently-ignored report.
+      #
+      # PYSEC-2026-1845 · pytest 8.4.2. Fixed in pytest 9, which pytest-django 4.12 does not
+      # support. pytest is a test runner and is not installed in the deployed image.
+      - name: Dependency audit
+        run: pip-audit --ignore-vuln PYSEC-2026-1845
+
       # Catches a model edited without a migration — the drift that makes a green suite
       # lie about what the database will actually look like.
       - name: Migrations are up to date
         run: python manage.py makemigrations --check --dry-run
 
       # pytest-django creates kupkop_test (settings TEST.NAME) on the service container.
+      # US-Q1 · --cov measures the seven packages named in pyproject's [tool.coverage.run];
+      # the JSON report is what dev/coverage_gate.py reads in the next step. No
+      # --cov-fail-under here on purpose: it can only express one number for the whole run,
+      # which is precisely the blanket global % that §15.4 says not to use.
       - name: Tests
-        run: python -m pytest -q
+        run: python -m pytest -q --cov --cov-report=term --cov-report=json:coverage.json
+
+      # Fails the build when a welfare-critical package drops below its ratchet, and writes
+      # the per-package table to the run's own summary page — §15.4 asks for the trend to be
+      # tracked, not just computed. Runs on failure too (`always()` would swallow a genuine
+      # test failure, so it is gated on the suite having passed but not on this job's status
+      # beyond that): if the suite is red the coverage number is meaningless anyway.
+      - name: Coverage gate
+        run: python dev/coverage_gate.py coverage.json --summary "$GITHUB_STEP_SUMMARY"
+
+      # Keeps the raw report for the trend: the summary shows this run, the artifact lets a
+      # reviewer diff against the last one.
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-json
+          path: coverage.json
+          if-no-files-found: ignore
+
+      # US-E3 · §16.6's "staging smoke suite green". Runs ONLY when a URL is supplied,
+      # because a job that fails for want of an environment teaches everyone to ignore a
+      # red pipeline — which is a worse outcome than not having the check.
+      #
+      # This proves things pytest structurally cannot: that THIS DEPLOYMENT has DEBUG off,
+      # emits §12.4's headers through whatever proxy sits in front of it, has a reachable
+      # cache backend (so throttling is real and not silently disabled), and does not leak
+      # a precise coordinate on the public map.
+      - name: Post-deploy smoke suite
+        if: inputs.smoke_url != ''
+        run: python dev/smoke.py "${{ inputs.smoke_url }}"

@@ -1,9 +1,11 @@
-import pytest
 from datetime import timedelta
+
+import pytest
 from django.utils import timezone
 from rest_framework.test import APIClient
+
 from accounts.factories import AccountFactory  # same factory the other volunteer tests use
-from volunteer.models import VolunteerShift, VolunteerSignup, SignupStatus, ShiftStatus
+from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 
 URL = "/api/v1/me/signups"
 
@@ -59,7 +61,7 @@ def test_was_late_true_only_inside_cutoff():
     shelter = AccountFactory(account_type="shelter"); vol = AccountFactory(account_type="personal")
     now = timezone.now()
     s = _shift(shelter, starts_at=now + timedelta(hours=6), ends_at=now + timedelta(hours=8))
-    su = VolunteerSignup.objects.create(shift=s, volunteer_account=vol, status=SignupStatus.CANCELLED, cancelled_at=now)
+    _su = VolunteerSignup.objects.create(shift=s, volunteer_account=vol, status=SignupStatus.CANCELLED, cancelled_at=now)
     item = _auth(vol).get(URL).json()["history"][0]
     assert item["was_late"] is True  # cancelled 6h out, inside the 12h cutoff
 

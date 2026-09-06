@@ -5,7 +5,7 @@ from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken as SimpleRefreshToken
 
-from accounts.models import Account, AccountType
+from accounts.models import Account
 
 # Canonical signup/reset password rule (dev/onboarding-validation.md §signup): min 8 chars,
 # at least one number. This is the ONLY enforcement — the AUTH_PASSWORD_VALIDATORS in settings
@@ -80,6 +80,10 @@ class MeSettingsSerializer(serializers.Serializer):
     approximate_location = serializers.BooleanField(required=False)
     masked_contact = serializers.BooleanField(required=False)
     push_enabled = serializers.BooleanField(required=False)
+    # D-S7-3 · analytics_consent_at is NOT accepted from the client: the timestamp is the
+    # controller's record of when consent was given, so the server stamps it. A client that
+    # could set it could backdate its own consent.
+    analytics_consent = serializers.BooleanField(required=False)
 
 
 class EmailVerifySerializer(serializers.Serializer):

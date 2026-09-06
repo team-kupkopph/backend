@@ -1,0 +1,20 @@
+# US-K3 · §12.4 "Dependabot + pip-audit /npm audit in CI; patch known CVEs".
+#
+# Security updates only. A weekly PR for every version bump would drown a small team and get
+# muted; a PR when something is KNOWN VULNERABLE is always worth reading. The CI audit step
+# is the backstop that fails the build if one of these goes unmerged.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, security]
+
+  # Keeps the Actions themselves current (checkout, setup-python) — a stale, compromised
+  # action runs with the workflow's own permissions.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

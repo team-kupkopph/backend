@@ -13,8 +13,12 @@ from notifications.service import notify
 from shelter.permissions import IsShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.reliability import reliability_for, reliability_for_many
-from volunteer.serializers import (AttendanceSerializer, ShiftCreateSerializer,
-                                   ShiftPatchSerializer, SignupCreateSerializer)
+from volunteer.serializers import (
+    AttendanceSerializer,
+    ShiftCreateSerializer,
+    ShiftPatchSerializer,
+    SignupCreateSerializer,
+)
 from volunteer.status import set_signup_status
 
 PAGE_SIZE = 20

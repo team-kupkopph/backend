@@ -35,7 +35,7 @@ def issue_code(account, *, channel, purpose):
         account=account, channel=channel, purpose=purpose, code_hash=_hash(code),
         max_attempts=settings.OTP_MAX_ATTEMPTS, expires_at=timezone.now() + ttl,
     )
-    get_sender().send(channel=channel, to=account.email if channel == "email" else account.phone,
+    get_sender().send(channel=channel, to=account.email if channel == "email" else account.phone, purpose=purpose,
                       code=code)
     return code
 

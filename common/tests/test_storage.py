@@ -1,4 +1,3 @@
-import pytest
 
 from common.storage import SIGNED_URL_TTL, signed_get_url
 

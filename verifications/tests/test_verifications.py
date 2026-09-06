@@ -1,8 +1,8 @@
 import pytest
+from django.utils import timezone
 
 from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
-from django.utils import timezone
 
 
 def _hdr(acc):
@@ -19,7 +19,7 @@ def test_submit_verified_member_creates_request_doc_capability_and_persists_cons
     }, content_type="application/json", **_hdr(acc))
     assert res.status_code == 201
     assert res.json()["status"] == "pending"
-    from verifications.models import VerificationRequest, AccountCapability
+    from verifications.models import AccountCapability, VerificationRequest
     vr = VerificationRequest.objects.get(account=acc, type="rescuer")
     assert vr.consent_at is not None and vr.consent_version == "2026-08-01"
     assert vr.documents.filter(doc_type="gov_id").exists()

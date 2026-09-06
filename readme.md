@@ -249,6 +249,23 @@ TEST_DATABASE_NAME=kupkop_test
 
 ---
 
+## Icon-cruft hook (opt-in, one line)
+
+Google Drive's Mirror sync (`team.kupkopph@gmail.com`) periodically re-creates zero-byte
+macOS Finder `Icon\r` files inside `.git/`, and git then fails `fetch`/`pull` with
+`bad object refs/Icon?`. The repo carries `.githooks/purge-icon-cruft` and a `pre-commit`
+that calls it — the `-size 0` guard makes it safe (no real ref, object or reflog is ever
+zero-byte). Enable it in your clone with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Silent on the happy path; prints one line when it actually purges something so the
+recurrence rate stays observable. See `../dev/HANDOFF.md` for the underlying issue.
+
+---
+
 ## Gotchas & conventions
 
 - **Python 3.12, not 3.14.** The pins don't build cleanly on 3.14; always create the venv with 3.12.
@@ -265,21 +282,35 @@ TEST_DATABASE_NAME=kupkop_test
 
 ## Scheduled tasks
 
-Two management commands must run on a schedule in production. A ready-to-install crontab is at [`deploy/cron.d/kupkop`](./deploy/cron.d/kupkop).
+Four management commands must run on a schedule in production. A ready-to-install crontab is at [`deploy/cron.d/kupkop`](./deploy/cron.d/kupkop).
 
 | Command | Frequency | Purpose |
 |---|---|---|
-| `run_sweeps` | Every hour | Stray escalation, stalled claim expiry, offer expiry, shift reminders (US-F0/E1/E2/N2/V7) |
-| `purge_expired_documents` | Nightly 02:00 UTC | RA 10173 data minimization — null `file_url` 90 days after a terminal verification decision (US-SEC4) |
+| `run_sweeps` | Every hour | Stray escalation, stalled claim expiry, offer expiry, shift reminders, badges (US-F0/E1/E2/N2/V7/B1) |
+| `run_matching_sweep` | Nightly 18:20 UTC · 02:20 PHT | §11.4's lost↔found **safety net** — re-score still-open reports so a near miss gets another look (US-L2) |
+| `purge_expired_documents` | Nightly 18:50 UTC · 02:50 PHT | RA 10173 data minimization — null `file_url` 90 days after a terminal verification decision (US-SEC4) |
+| `purge_deleted_accounts` | Nightly 19:20 UTC · 03:20 PHT | RA 10173 erasure — anonymize soft-deleted accounts in place once the 30-day grace window closes (US-N2, §12.7) |
 
 Quick-start (development):
 
 ```bash
 .venv/bin/python manage.py run_sweeps
+.venv/bin/python manage.py run_matching_sweep
 .venv/bin/python manage.py purge_expired_documents
+.venv/bin/python manage.py purge_deleted_accounts
 ```
 
-The sweep framework uses plain cron (decision US-F0: no Celery-beat for MVP). Both commands are idempotent — safe to run more frequently than scheduled during testing.
+The sweep framework uses plain cron (decision US-F0: no Celery-beat for MVP). Every command is idempotent — safe to run more often than scheduled during testing.
+
+⚠️ **All four refuse to run twice at once** (US-Q2 follow-up). Each subclasses `SingletonCommand` (`common/management_base.py`) and takes a Postgres advisory lock named after itself; if the previous run is still going, the next logs a skip and exits 0. It is a database lock rather than `flock` because §16.1 runs 1–2 Fargate tasks, and a file lock guards one host while *looking* in the crontab exactly as though it guards both.
+
+⚠️ `run_matching_sweep` is **§11.4's safety net, not the matcher.** A lost/found report is scanned synchronously when it is filed, so nobody's reunion waits on this job — which is why it can be nightly. It was inside `run_sweeps` (hourly, 24× what §11.4 asks) until US-Q2 measured it at **11.5 minutes over 50,000 reports**: 11.5 minutes of database load every hour, competing with the reads §13.1 budgets. A sweep belongs in `run_sweeps` only if a one-hour delay would hurt someone.
+
+⚠️ **Nightly slots are stated in PHT as well as UTC, and asserted in local time.** The crontab is UTC and the userbase is UTC+8, and for three sprints both `purge_*` entries were commented *"low-traffic window"* while running at 10:00 and 10:30 PHT — mid-morning. The arithmetic in those comments was right and the conclusion was not, which is not something a comment can catch. `common/tests/test_crontab.py` converts each nightly hour to PHT and requires 01:00–04:59 (and validates the fields are legal cron, after an ordered string-replace once produced a minute of `350` — cron rejects the whole file for that, silently disabling every job in it).
+
+⚠️ **Re-timing never shortens a retention promise.** Both purges select `<= now - N days`, so a later slot means data is held slightly *longer* than its 90-day or 30-day window, never a minute less. That property is what makes the schedule a performance decision rather than a privacy one — and it is why the grace window a user was promised (and whatever the privacy policy states) cannot be changed by moving a cron line.
+
+⚠️ The two `purge_*` commands are **irreversible** and deliberately live outside `run_sweeps`: retention deletion should be schedulable, and auditable, independently of the routine hourly sweeps.
 
 ---
 
@@ -292,8 +323,16 @@ These are intentional for the Sprint-1 slice — implemented as clean stubs or s
   on the developer-program credentials (sprint-0 S0-05/S0-06), not on code** — the mobile side has a
   matching seam. ⚠️ Apple sign-in is an App Store 4.8 requirement. (Facebook is Phase 2 — it can omit
   email, which the endpoint rejects with `400 email_required`.)
-- **Real email/SMS delivery** — swap `common.senders.ConsoleSender` for a provider behind the same
-  `Sender` interface.
+- **Real email delivery** — the code seam is done (`common.senders.SesEmailSender`, Amazon SES via
+  boto3). Set `EMAIL_PROVIDER=ses`, `EMAIL_FROM=<verified identity>`, `AWS_SES_REGION=<region>` in
+  the deployed env; unset in dev keeps the `ConsoleSender` and its `[DEV OTP]` stdout print. Owner
+  actions still needed: open the AWS account, verify a sending identity (an address for a smoke
+  test, then the sending domain with DKIM), and request production access — SES starts in a
+  *sandbox* that only mails verified recipients, so every real signup fails until that ticket is
+  approved. §16.6 gate 3.
+- **Real SMS delivery** — still `ConsoleSender`; waits on the Semaphore/Movider account named in
+  §16.6 gate 3. `SesEmailSender` deliberately delegates `channel="sms"` to the fallback so a mixed
+  configuration doesn't ship SMS OTPs through email.
 - **Object storage** — `POST /media/presign` returns a placeholder; wire access-restricted S3.
 - **PostGIS** — `address.geom` is modeled as nullable text; reconcile to a real `geography(Point)` in
   Sprint 2, when `stray_report` (Sagip) needs real proximity queries.

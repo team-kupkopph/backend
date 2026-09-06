@@ -3,19 +3,38 @@
 The `quantity_received` math and the `open -> fulfilled` flip are never done here — they go
 through `community/needs.py::apply_received` under a row lock (D-S6-7).
 """
+from django.db.models import Count
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.models import AccountStatus
 from common.analytics import emit
+from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCreateThrottle
 from notifications.service import notify
 from shelter.permissions import IsShelter
 
 from .badges import impact_counts
-from .models import AccountBadge, NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
+from .models import (
+    AccountBadge,
+    NeedPledge,
+    NeedStatus,
+    PledgeStatus,
+    ShelterNeed,
+    StoryPhoto,
+    StoryPost,
+    StoryReaction,
+    StoryStatus,
+    StoryType,
+)
 from .needs import NeedError, apply_received
-from .serializers import (NeedCreateSerializer, NeedPatchSerializer, PledgeCreateSerializer,
-                          ReceivedSerializer)
+from .serializers import (
+    NeedCreateSerializer,
+    NeedPatchSerializer,
+    PledgeCreateSerializer,
+    ReceivedSerializer,
+    StoryCreateSerializer,
+)
 
 PAGE_SIZE = 20
 
@@ -35,6 +54,11 @@ class ShelterNeedsView(APIView):
 
     def get_permissions(self):
         return [IsShelter()] if self.request.method == "POST" else [AllowAny()]
+
+    def get_throttles(self):
+        # US-K2 · the WRITE is rate-limited; the public read is not. A class-level
+        # throttle_classes would have quietly rationed the feed everyone browses.
+        return [NeedCreateThrottle()] if self.request.method == "POST" else []
 
     def get(self, request, account_id):
         qs = ShelterNeed.objects.filter(shelter_account_id=account_id)
@@ -84,6 +108,9 @@ class NeedPledgesView(APIView):
 
     def get_permissions(self):
         return [IsShelter()] if self.request.method == "GET" else [IsAuthenticated()]
+
+    def get_throttles(self):
+        return [PledgeCreateThrottle()] if self.request.method == "POST" else []
 
     def get(self, request, need_id):
         need = ShelterNeed.objects.filter(pk=need_id).first()
@@ -197,10 +224,6 @@ class MeImpactView(APIView):
 
 
 # --- US-T1 · success stories ---------------------------------------------------
-from django.db.models import Count
-
-from .models import StoryPost, StoryPhoto, StoryReaction, StoryStatus, StoryType
-from .serializers import StoryCreateSerializer
 
 
 def _author_city(account):
@@ -228,8 +251,14 @@ class StoriesView(APIView):
     def get_permissions(self):
         return [IsAuthenticated()] if self.request.method == "POST" else [AllowAny()]
 
+    def get_throttles(self):
+        return [StoryCreateThrottle()] if self.request.method == "POST" else []
+
     def get(self, request):
+        # US-N1 · the feed drops a deleted author's stories (the rows survive for the
+        # welfare record; the public surface does not show them).
         qs = (StoryPost.objects.filter(status=StoryStatus.PUBLISHED)
+              .exclude(author_account__status=AccountStatus.DELETED)
               .select_related("author_account")
               .prefetch_related("photos", "author_account__addresses")
               .annotate(_rcount=Count("reactions")).order_by("-created_at"))

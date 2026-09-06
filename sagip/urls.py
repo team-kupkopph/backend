@@ -1,9 +1,20 @@
 from django.urls import path
 
-from sagip.views import (CaseDetailView, CaseStatusView, MyOffersView, MyReportsView,
-                         MyRescuesView, ReportClaimView, ReportDetailView, ReportMatchDecisionView,
-                         ReportMatchesView, ReportOffersView, ReportOfferWithdrawView,
-                         RescueMapView, ReportsCreateView)
+from sagip.views import (
+                         CaseDetailView,
+                         CaseStatusView,
+                         MyOffersView,
+                         MyReportsView,
+                         MyRescuesView,
+                         ReportClaimView,
+                         ReportDetailView,
+                         ReportMatchDecisionView,
+                         ReportMatchesView,
+                         ReportOffersView,
+                         ReportOfferWithdrawView,
+                         ReportsCreateView,
+                         RescueMapView,
+)
 
 urlpatterns = [
     path("reports", ReportsCreateView.as_view()),

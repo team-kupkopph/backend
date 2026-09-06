@@ -7,10 +7,58 @@
 MAILTO=""
 SHELL=/bin/bash
 
-# Hourly sweeps: stray escalation, stalled claims, expired offers, shift reminders (US-F0/E1/E2/N2/V7)
+# ⚠️ OVERLAP IS GUARDED IN THE CODE, NOT HERE (US-Q2 follow-up). Every command below is a
+# `SingletonCommand` (common/management_base.py) and takes a Postgres advisory lock named
+# after itself: if a previous run is still going, the new one logs a skip and exits 0.
+# Deliberately NOT `flock` on these lines — §16.1 runs 1-2 Fargate tasks and a file lock
+# guards one host's filesystem, so it would protect nothing the day a second task exists,
+# while looking in this file exactly as though it does. `common/tests/test_scheduled_
+# commands_are_guarded.py` parses THIS FILE and fails if a line here invokes a command that
+# is not guarded.
+#
+# Why it matters for the first entry: US-Q2 measured `sweep_matches` at 11.5 minutes over
+# 50,000 reports (37x the time for 10x the data). That fits an hourly slot today with ~5x
+# of margin and stops fitting after the next 10x of growth.
+
+# Hourly sweeps: stray escalation, stalled claims, expired offers, shift reminders, badges
+# (US-F0/E1/E2/N2/V7/B1). Everything here is time-sensitive to welfare — a sweep belongs on
+# this line only if a one-hour delay would hurt someone. Matching does not qualify (above).
 0 * * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py run_sweeps >> /var/log/kupkop/sweeps.log 2>&1
+
+# §11.4's NIGHTLY lost<->found matching safety net (US-Q2 follow-up).
+# Split out of run_sweeps, where it had been running hourly — 24x what §11.4 asks. It is the
+# SAFETY NET, not the matcher: a lost/found report is scanned synchronously when it is filed
+# (sagip/views.py), so nobody's reunion waits on this. What it adds is a re-score of still-open
+# reports, catching a pair that was a near miss before somebody added a breed.
+# ⚠️ US-Q2 measured it at 11.5 minutes over 50,000 reports (37x the time for 10x the data), so
+# it is also the one scheduled job heavy enough for its slot to matter.
+#
+# 18:20 UTC = 02:20 PHT — the actual overnight trough for a Metro Manila userbase.
+#
+# ⚠️ ALL THREE NIGHTLY SLOTS ARE ASSERTED IN LOCAL TIME by common/tests/test_crontab.py, which
+# converts each hour to PHT and requires 01:00-04:59. That test exists because for three
+# sprints the two purge entries below were commented "low-traffic window" while running at
+# 10:00 and 10:30 PHT. The UTC+8 arithmetic in those comments was correct and the conclusion
+# was not — which a comment cannot catch, because the comment was the thing that was wrong.
+20 18 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py run_matching_sweep >> /var/log/kupkop/sweeps.log 2>&1
 
 # Nightly document retention purge — RA 10173 data minimization (US-SEC4)
 # Nulls file_url + deletes the backing object 90 days after a terminal verification decision.
-# 02:00 UTC = 10:00 PHT; low-traffic window.
-0 2 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_expired_documents >> /var/log/kupkop/purge.log 2>&1
+# 18:50 UTC = 02:50 PHT (was 02:00 UTC = 10:00 PHT, mid-morning despite the old comment).
+# ⚠️ Retention is UNAFFECTED and can only lengthen: the sweep selects
+# `verification__reviewed_at <= now - DOCUMENT_RETENTION_DAYS`, so a later slot means a
+# document is held slightly longer than 90 days, never a minute less.
+50 18 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_expired_documents >> /var/log/kupkop/purge.log 2>&1
+
+# Nightly account purge — RA 10173 erasure (§12.7, US-N2)
+# Anonymizes soft-deleted accounts in place once the 30-day grace window closes: the PII is
+# scrubbed, the welfare record (rescues, adoptions, shifts) survives attached to the same row.
+# Its own entry rather than part of run_sweeps because it is IRREVERSIBLE — a change to sweep
+# cadence must never quietly change how fast personal data is destroyed.
+# 19:20 UTC = 03:20 PHT; after the document purge, keeping the original 30-minute spacing so
+# the two never contend for the same instant (was 02:30 UTC = 10:30 PHT).
+# ⚠️ The 30-day grace window is UNAFFECTED and can only lengthen: the sweep selects
+# `deleted_at <= now - ACCOUNT_PURGE_GRACE_DAYS`, so a later slot means an account is
+# anonymised slightly after its 30 days, never before. The window a user was promised — and
+# whatever the privacy policy ends up stating — is never shortened by a schedule change.
+20 19 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_deleted_accounts >> /var/log/kupkop/purge.log 2>&1

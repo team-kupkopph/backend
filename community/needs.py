@@ -7,7 +7,7 @@ so no view touches the columns directly.
 """
 from django.db import transaction
 
-from .models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
+from .models import NeedStatus, PledgeStatus, ShelterNeed
 
 
 class NeedError(ValueError):

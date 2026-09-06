@@ -94,7 +94,7 @@ def test_a_single_pass_can_cross_both_thresholds_and_fires_both_notifications():
 
 @pytest.mark.django_db
 def test_idempotent_second_pass_does_not_renotify():
-    r = _report(condition="injured", city="Marikina",
+    _r = _report(condition="injured", city="Marikina",
                created_at=NOW - timezone.timedelta(hours=3))
     rescuer = _verified_rescuer_in("Marikina")
     escalate_reports(now=NOW)
@@ -116,7 +116,7 @@ def test_halts_the_instant_a_report_is_claimed():
 
 @pytest.mark.django_db
 def test_level1_notifies_verified_rescuers_in_the_same_city_only():
-    r = _report(condition="injured", city="Marikina",
+    _r = _report(condition="injured", city="Marikina",
                created_at=NOW - timezone.timedelta(hours=3))
     same_city = _verified_rescuer_in("Marikina")
     other_city = _verified_rescuer_in("Pasig")
@@ -141,7 +141,7 @@ def test_level1_with_no_resolved_city_still_advances_but_notifies_no_one():
 
 @pytest.mark.django_db
 def test_level2_notifies_only_approved_escalation_partner_shelters():
-    r = _report(condition="injured", city="Marikina",
+    _r = _report(condition="injured", city="Marikina",
                created_at=NOW - timezone.timedelta(hours=5))
     partner = _escalation_partner_shelter()
     non_partner = AccountFactory(account_type="shelter")

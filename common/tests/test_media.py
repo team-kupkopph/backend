@@ -7,8 +7,16 @@ import pytest
 from PIL import Image
 from PIL.ExifTags import Base as ExifTag
 
-from common.media import (DOC_CONTENT_TYPES, IMAGE_CONTENT_TYPES, MAX_DOC_BYTES,
-                          MAX_IMAGE_BYTES, PUBLIC, RESTRICTED, policy_for, strip_exif)
+from common.media import (
+    DOC_CONTENT_TYPES,
+    IMAGE_CONTENT_TYPES,
+    MAX_DOC_BYTES,
+    MAX_IMAGE_BYTES,
+    PUBLIC,
+    RESTRICTED,
+    policy_for,
+    strip_exif,
+)
 
 
 def _jpeg_with_gps_exif():
@@ -83,3 +91,44 @@ def test_strip_exif_round_trips_other_image_formats(content_type, fmt):
     image.save(out, format=fmt)
     stripped = strip_exif(out.getvalue(), content_type)
     assert Image.open(io.BytesIO(stripped)).format == fmt
+
+
+def test_every_purpose_the_mobile_client_asks_for_is_registered():
+    """US-E5 · regression: `story_photo` was missing from PURPOSES.
+
+    `StoryComposeScreen` presigns with `purpose: "story_photo"`, the view answered
+    `422 purpose_unknown`, and a story requires at least one photo — so posting a story,
+    shipped in Sprint 6, could not succeed at all. Nothing caught it because the Sprint 6
+    device walk exercised the story FEED and reactions, never the composer's upload.
+
+    This list is the mobile client's actual callers (`grep 'media/presign' mobile_app/src`).
+    Adding a presign call on the client without adding its purpose here is the same bug
+    again, so the list is asserted rather than assumed.
+    """
+    from common.media import PURPOSES
+
+    called_by_the_app = {
+        "stray_photo",           # ReportStrayScreen
+        "listing_photo",         # ListingFormScreen
+        "rescue_outcome_photo",  # RescueUpdateScreen
+        "donation_qr",           # DonationQrScreen
+        "verification_doc",      # MemberVerify / ShelterVerify / ShelterVerifyNgo / VerifyResubmit
+        "story_photo",           # StoryComposeScreen
+    }
+    missing = called_by_the_app - set(PURPOSES)
+    assert not missing, f"purposes the app requests but the server rejects: {sorted(missing)}"
+
+
+@pytest.mark.django_db
+def test_a_story_photo_can_actually_be_presigned(client):
+    from accounts.factories import AccountFactory
+    from accounts.tokens import tokens_for
+
+    account = AccountFactory()
+    res = client.post("/api/v1/media/presign",
+                      {"purpose": "story_photo", "content_type": "image/jpeg"},
+                      content_type="application/json",
+                      HTTP_AUTHORIZATION=f"Bearer {tokens_for(account)['access']}")
+
+    assert res.status_code == 200, res.json()
+    assert "upload_url" in res.json() and "file_url" in res.json()

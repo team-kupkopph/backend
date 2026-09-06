@@ -1,8 +1,8 @@
 import pytest
+from django.utils import timezone
 
 from accounts.factories import AccountFactory
 from accounts.models import Account, AccountIdentity
-from django.utils import timezone
 
 
 @pytest.fixture

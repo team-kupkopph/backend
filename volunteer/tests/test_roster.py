@@ -1,9 +1,11 @@
-import pytest
 from datetime import timedelta
+
+import pytest
 from django.utils import timezone
 from rest_framework.test import APIClient
+
 from accounts.factories import AccountFactory
-from volunteer.models import VolunteerShift, VolunteerSignup, SignupStatus, ShiftStatus
+from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 
 
 def _c(account):

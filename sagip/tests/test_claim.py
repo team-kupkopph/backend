@@ -15,8 +15,7 @@ from django.utils import timezone
 from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
 from notifications.models import Notification
-from sagip.models import (CaseStatusHistory, OfferStatus, OfferType, ReportOffer, RescueCase,
-                          StrayReport)
+from sagip.models import CaseStatusHistory, OfferStatus, OfferType, ReportOffer, RescueCase, StrayReport
 from verifications.models import AccountCapability, VerificationRequest
 
 

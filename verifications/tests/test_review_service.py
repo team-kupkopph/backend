@@ -1,7 +1,7 @@
 import pytest
 
 from accounts.factories import AccountFactory
-from verifications.models import (AccountCapability, VerificationRequest)
+from verifications.models import AccountCapability, VerificationRequest
 from verifications.review import ReviewError, approve_request, reject_request
 
 

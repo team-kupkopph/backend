@@ -1,7 +1,6 @@
 from rest_framework import serializers
 
-from sagip.models import (OfferType, ReportType, Sex, SizeCategory, Species, StrayCondition,
-                          StrayStatus)
+from sagip.models import OfferType, ReportType, Sex, SizeCategory, Species, StrayCondition, StrayStatus
 
 
 class PhotoSerializer(serializers.Serializer):
@@ -25,6 +24,9 @@ class ReportCreateSerializer(serializers.Serializer):
                                   allow_blank=True)
     pet_id = serializers.UUIDField(required=False, allow_null=True)
     is_anonymous = serializers.BooleanField(required=False, default=False)
+    # US-O3 · optional. Present only when the client queued this report offline; a report
+    # filed online never needs one, so requiring it would break every existing caller.
+    idempotency_key = serializers.CharField(required=False, allow_blank=False, max_length=64)
     # The one precise-GPS surface in the app (decision 11) — a real point, validated to
     # earth-plausible ranges. geom is NOT NULL, so both are required.
     lat = serializers.FloatField(min_value=-90, max_value=90)
