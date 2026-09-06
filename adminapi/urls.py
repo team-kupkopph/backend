@@ -7,6 +7,7 @@ from adminapi.members_views import (
     ReinstateView,
     SuspendView,
 )
+from adminapi.staff_views import StaffDetailView, StaffListView, StaffResetTotpView
 from adminapi.shelters_views import (
     DonationQrQueueView,
     ShelterDetailView,
@@ -29,6 +30,8 @@ from adminapi.verifications_views import (
     VerificationQueueView,
 )
 from adminapi.views import (
+    StaffConfirmTotpView,
+    StaffEnrolTotpView,
     StaffLoginView,
     StaffLogoutView,
     StaffPasswordResetConfirmView,
@@ -41,6 +44,9 @@ from adminapi.views import (
 urlpatterns = [
     path("auth/login", StaffLoginView.as_view()),
     path("auth/verify-otp", StaffVerifyOtpView.as_view()),
+    # US-T1 · first-run enrolment. Without these a newly created staffer can never sign in.
+    path("auth/enrol-totp", StaffEnrolTotpView.as_view()),
+    path("auth/confirm-totp", StaffConfirmTotpView.as_view()),
     path("auth/refresh", StaffRefreshView.as_view()),
     path("auth/logout", StaffLogoutView.as_view()),
     path("auth/password-reset", StaffPasswordResetView.as_view()),
@@ -79,4 +85,10 @@ urlpatterns = [
     path("donation-qrs", DonationQrQueueView.as_view()),
     path("donation-qrs/<uuid:donation_qr_id>/verify", VerifyQrView.as_view()),
     path("donation-qrs/<uuid:donation_qr_id>/unverify", UnverifyQrView.as_view()),
+
+    # US-T1 · team and roles. Superadmin only. Replaces the auth.User / auth.Group /
+    # TOTP-device model admins — three of the five registrations US-X1 checks.
+    path("staff", StaffListView.as_view()),
+    path("staff/<int:user_id>", StaffDetailView.as_view()),
+    path("staff/<int:user_id>/reset-totp", StaffResetTotpView.as_view()),
 ]
