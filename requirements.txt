@@ -50,7 +50,7 @@ responses==0.26.2
 # US-C2 · the linter §16.3 has claimed CI runs since v0.1. Config in pyproject.toml.
 ruff==0.16.6
 # US-K3 · §12.4 "Dependabot + pip-audit in CI; patch known CVEs". Dev/CI tool.
-pip-audit==2.9.0
+pip-audit==2.10.1
 # US-K1 · §12.4 "strict CORS allowlist".
 django-cors-headers==4.9.0
 s3transfer==0.19.2
