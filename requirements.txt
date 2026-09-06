@@ -24,7 +24,7 @@ jmespath==1.1.0
 # moto[s3] and its own deps below · US-D2 · mocks S3 for the presigned-upload/EXIF-strip
 # tests only (no live bucket needed for this slice) — not imported by any runtime code path.
 moto==5.2.3
-packaging==26.2
+packaging==26.3
 Pillow==12.3.0
 pluggy==1.6.0
 psycopg==3.2.13
