@@ -7,6 +7,7 @@ from adminapi.members_views import (
     ReinstateView,
     SuspendView,
 )
+from adminapi.audit_views import AuditLogView
 from adminapi.browser_views import ModelListView, ModelRowView, ModelRowsView
 from adminapi.staff_views import StaffDetailView, StaffListView, StaffResetTotpView
 from adminapi.shelters_views import (
@@ -95,6 +96,9 @@ urlpatterns = [
 
     # US-V1 · the READ-ONLY model browser. Superadmin only. No write route exists here and
     # none is stubbed — a test asserts it.
+    # US-W3 · the audit log, filterable. Superadmin only.
+    path("audit", AuditLogView.as_view()),
+
     path("models", ModelListView.as_view()),
     path("models/<str:key>", ModelRowsView.as_view()),
     path("models/<str:key>/<str:pk>", ModelRowView.as_view()),
