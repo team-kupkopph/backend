@@ -1,6 +1,12 @@
 from django.urls import path
 
 from adminapi.dashboard_views import DashboardView
+from adminapi.members_views import (
+    MemberDetailView,
+    MemberQueueView,
+    ReinstateView,
+    SuspendView,
+)
 from adminapi.moderation_views import (
     FlagActionView,
     FlagDetailView,
@@ -51,4 +57,10 @@ urlpatterns = [
     path("flags/<uuid:flag_id>/review", FlagReviewView.as_view()),
     path("flags/<uuid:flag_id>/action", FlagActionView.as_view()),
     path("flags/<uuid:flag_id>/dismiss", FlagDismissView.as_view()),
+
+    # US-E1/E2 · members.
+    path("members", MemberQueueView.as_view()),
+    path("members/<uuid:account_id>", MemberDetailView.as_view()),
+    path("members/<uuid:account_id>/suspend", SuspendView.as_view()),
+    path("members/<uuid:account_id>/reinstate", ReinstateView.as_view()),
 ]
