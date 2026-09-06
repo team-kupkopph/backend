@@ -1,5 +1,12 @@
 from django.urls import path
 
+from adminapi.verifications_views import (
+    ApproveView,
+    NeedsInfoView,
+    RejectView,
+    VerificationDetailView,
+    VerificationQueueView,
+)
 from adminapi.views import (
     StaffLoginView,
     StaffLogoutView,
@@ -17,4 +24,12 @@ urlpatterns = [
     path("auth/logout", StaffLogoutView.as_view()),
     path("auth/password-reset", StaffPasswordResetView.as_view()),
     path("auth/password-reset/confirm", StaffPasswordResetConfirmView.as_view()),
+
+    # US-C1/C2/C3 · the verification queue. This is the workflow that gates every shelter
+    # going live, which is why it is the first domain surface the console gets.
+    path("verifications", VerificationQueueView.as_view()),
+    path("verifications/<uuid:verification_id>", VerificationDetailView.as_view()),
+    path("verifications/<uuid:verification_id>/approve", ApproveView.as_view()),
+    path("verifications/<uuid:verification_id>/reject", RejectView.as_view()),
+    path("verifications/<uuid:verification_id>/needs-info", NeedsInfoView.as_view()),
 ]
