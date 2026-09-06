@@ -39,7 +39,7 @@ PyYAML==6.0.3
 # ⚠️ KNOWN, ACCEPTED: PYSEC-2026-1845 is fixed in pytest 9, which pytest-django 4.12 does not
 # support yet. pytest is a dev-only test runner and is not installed in the deployed image, so
 # the advisory has no production exposure. Revisit when pytest-django supports pytest 9.
-pytest==8.4.2
+pytest==9.1.1
 pytest-django==4.12.0
 # US-Q1 · §15.4 "coverage tracked as a trend, with a hard gate on the welfare-critical
 # packages". Config in pyproject.toml; the per-package gate is dev/coverage_gate.py.
