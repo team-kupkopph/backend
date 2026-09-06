@@ -11,7 +11,12 @@ from moderation.actions import resolve_flag
 from moderation.models import FlagStatus, ModerationFlag
 
 
-@admin.register(ModerationFlag)
+# ⚠️ UNREGISTERED by US-X2 (2026-09-06). Replaced by the console: /moderation
+# (Sprint 10 US-M1–M3). The class is KEPT, not deleted — it is the cheapest possible rollback,
+# and reverting the US-X2 commit restores this admin exactly as it was.
+# Re-registering it would put a second writer on the same rows, with none of the
+# console's audit-log or access-log coverage.
+# @admin.register(ModerationFlag)
 class ModerationFlagAdmin(admin.ModelAdmin):
     list_display = ("target_type", "target_id", "reporter", "reason", "status", "created_at")
     list_filter = ("status", "target_type")

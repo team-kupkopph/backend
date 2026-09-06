@@ -159,3 +159,50 @@ def test_opening_a_request_writes_an_access_log_row(client, auth, staffer):
 def test_missing_request_is_404(client, auth):
     import uuid
     assert client.get(f"/admin-api/verifications/{uuid.uuid4()}", **auth).status_code == 404
+
+
+# -- ported from the admin tests US-X2 removed --------------------------------------------
+@pytest.mark.django_db
+def test_a_document_url_always_comes_from_the_signing_seam(client, auth, monkeypatch):
+    """Ported from verifications/tests/test_admin_documents.py, which US-X2 deleted along with
+    the surface it tested. The stored `file_url` is an object reference, never something a
+    browser should be handed directly — every render must go through `signed_get_url` so the
+    URL is short-lived and the bucket stays private."""
+    calls = []
+
+    def fake_sign(file_url, **kw):
+        calls.append((file_url, kw))
+        return f"https://signed.example/{file_url}?exp=300"
+
+    monkeypatch.setattr("adminapi.serializers.signed_get_url", fake_sign)
+    vr = make_request(docs=["gov_id"])
+    body = client.get(f"/admin-api/verifications/{vr.verification_id}", **auth).json()
+
+    assert calls, "the signing seam was bypassed"
+    assert calls[0][1]["expires_in"] == 300, "document URLs must be short-lived"
+    assert body["documents"][0]["file_url"].startswith("https://signed.example/")
+    assert body["documents"][0]["file_url"] != "s3://x/gov_id.jpg", "raw reference leaked"
+
+
+@pytest.mark.django_db
+def test_each_detail_view_writes_its_own_access_log_row(client, auth):
+    """Ported from verifications/tests/test_access_log.py. One row per view, not one per
+    request — 'who saw this ID, and when' needs every occasion, not the first."""
+    from verifications.models import VerificationAccessLog
+    vr = make_request(docs=["gov_id"])
+    VerificationAccessLog.objects.all().delete()
+
+    for _ in range(3):
+        client.get(f"/admin-api/verifications/{vr.verification_id}", **auth)
+    assert VerificationAccessLog.objects.filter(verification=vr).count() == 3
+
+
+@pytest.mark.django_db
+def test_listing_the_queue_writes_no_access_log_row(client, auth):
+    """Also ported: the queue shows no documents, so logging a view there would bury the rows
+    that record an actual ID being looked at."""
+    from verifications.models import VerificationAccessLog
+    make_request(docs=["gov_id"])
+    VerificationAccessLog.objects.all().delete()
+    client.get("/admin-api/verifications", **auth)
+    assert VerificationAccessLog.objects.count() == 0

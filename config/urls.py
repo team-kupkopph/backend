@@ -1,4 +1,15 @@
-from django.contrib import admin
+# US-X2 (2026-09-06) · the Django admin route is GONE. Platform ops runs on the console
+# (repo `admin_console`) against /admin-api/*; /admin/ now 404s.
+#
+# ⚠️ `django.contrib.admin` REMAINS in INSTALLED_APPS. Removing the app would drop
+# django_admin_log and the admin's own migrations — a schema change nobody asked for and a
+# messy revert. Removing the ROUTE removes the surface, which is the whole requirement.
+#
+# ⚠️ The OTPAdminSite class swap in accounts/apps.py also remains. It is inert with no route,
+# and taking it out in the same change would couple two unrelated risks.
+#
+# ROLLBACK IS THIS ONE COMMIT: reverting it restores the admin exactly as it was, because the
+# three ModelAdmin classes were kept (unregistered) rather than deleted.
 from django.http import JsonResponse
 from django.urls import include, path
 
@@ -8,7 +19,6 @@ def health(_request):
 
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
     path("api/v1/health", health),
     path("api/v1/", include("accounts.urls")),
     path("api/v1/", include("verifications.urls")),

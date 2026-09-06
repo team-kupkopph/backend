@@ -148,3 +148,20 @@ def test_reviewed_is_not_terminal(client, auth):
     client.post(f"/admin-api/flags/{flag.flag_id}/review", {}, content_type="application/json", **auth)
     assert client.post(f"/admin-api/flags/{flag.flag_id}/action", {},
                        content_type="application/json", **auth).status_code == 200
+
+
+@pytest.mark.django_db
+def test_dismissing_a_story_flag_leaves_the_story_published(client, auth):
+    """Ported from moderation/tests/test_admin_queue.py, which US-X2 deleted.
+
+    The negative of the hiding rule, and the more dangerous direction: a dismissal that hid
+    the story would silently punish a post whose flag was found baseless.
+    """
+    story = StoryPost.objects.create(author_account=AccountFactory(), story_type="adoption",
+                                     caption="a fine post")
+    flag = make_flag(target_type="story", target_id=story.story_id)
+
+    client.post(f"/admin-api/flags/{flag.flag_id}/dismiss", {},
+                content_type="application/json", **auth)
+    story.refresh_from_db()
+    assert story.status == StoryStatus.PUBLISHED

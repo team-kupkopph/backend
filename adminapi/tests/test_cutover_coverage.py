@@ -1,4 +1,9 @@
-"""US-X1 · prove the console replaces the Django admin, before US-X2 switches it off.
+"""US-X1/X2 · the cutover, and what keeps holding after it.
+
+⚠️ POST-CUTOVER (2026-09-06). US-X2 removed `path("admin/", admin.site.urls)`, so the three
+domain ModelAdmins are unregistered and the registry now holds only third-party entries. The
+checks below changed meaning with it — deliberately, and each says how — rather than being
+loosened until they passed again.
 
 ⚠️ THIS TEST DERIVES THE REGISTRY AT RUNTIME. It does not read the table in
 `dev/sprint-10-stories.md`, and it must never be changed to.
@@ -46,14 +51,33 @@ NOT_REPLACED = {
 }
 
 
+def test_the_admin_route_is_gone():
+    """US-X2, asserted directly. This is the cutover."""
+    from django.urls import get_resolver
+
+    prefixes = {str(getattr(p, "pattern", "")) for p in get_resolver().url_patterns}
+    assert prefixes, "the URLconf scan found nothing — broken, not clean"
+    assert "admin/" not in prefixes, "the Django admin route is back"
+
+
+def test_contrib_admin_is_still_installed():
+    """⚠️ Removing the APP would drop django_admin_log and the admin's own migrations — a
+    schema change nobody asked for. US-X2 removes the ROUTE only, and this pins that."""
+    from django.conf import settings
+
+    assert "django.contrib.admin" in settings.INSTALLED_APPS
+
+
 def test_the_registry_scan_found_something():
     """⚠️ A zero here must never read as 'everything is replaced'.
 
-    This is the assertion that separates 'the console covers the admin' from 'the
-    introspection broke and returned an empty set'.
+    Threshold lowered from 6 to 2 by US-X2, because the three domain admins are now
+    unregistered — NOT because the check was failing. `django.contrib.auth` always registers
+    User and Group, so an empty registry still means the introspection broke rather than that
+    everything is covered.
     """
     found = registered()
-    assert len(found) >= 6, f"expected the admin to have registrations, found {found}"
+    assert len(found) >= 2, f"expected contrib registrations at minimum, found {found}"
 
 
 def test_every_registered_model_has_a_decision():
@@ -67,16 +91,26 @@ def test_every_registered_model_has_a_decision():
     )
 
 
-def test_the_maps_do_not_describe_models_that_are_gone():
-    """Ratchet the other way: a stale entry would keep passing the check above while quietly
-    exempting whatever later takes that name."""
-    known = registered()
-    stale = (set(CONSOLE_REPLACEMENT) | set(NOT_REPLACED)) - known
-    assert not stale, f"map(s) name unregistered model(s): {sorted(stale)}"
+def test_the_replacement_map_is_kept_as_the_historical_record():
+    """⚠️ This test INVERTED at cutover, and that is the honest change rather than deleting it.
+
+    Before US-X2 it asserted no map entry named an unregistered model — a stale entry would
+    have quietly exempted whatever later took that name. After US-X2 the three domain models
+    are unregistered BY DESIGN, so that assertion would now fail for the right reason.
+
+    What still matters is that the record of what replaced what survives, and that the entries
+    for the models we actually retired are still there to be read.
+    """
+    for model in ("verifications.VerificationRequest", "moderation.ModerationFlag",
+                  "shelter.DonationQr"):
+        assert model in CONSOLE_REPLACEMENT, f"{model}'s replacement record was lost"
+        route, story = CONSOLE_REPLACEMENT[model]
+        assert route.startswith("/") and story, f"{model} has an incomplete record"
 
 
 def test_the_buckets_balance():
-    """converted + not-replaced === total. Nothing may fall out of both."""
+    """converted + not-replaced === total, for whatever is registered NOW. Still the guard
+    against a new registration falling out of every bucket."""
     found = registered()
     replaced = len(found & set(CONSOLE_REPLACEMENT))
     excused = len(found & set(NOT_REPLACED))

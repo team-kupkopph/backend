@@ -26,7 +26,12 @@ from verifications.review import (
 from verifications.rules import review_checklist
 
 
-@admin.register(VerificationRequest)
+# ⚠️ UNREGISTERED by US-X2 (2026-09-06). Replaced by the console: /verifications
+# (Sprint 9 US-C1–C4). The class is KEPT, not deleted — it is the cheapest possible rollback,
+# and reverting the US-X2 commit restores this admin exactly as it was.
+# Re-registering it would put a second writer on the same rows, with none of the
+# console's audit-log or access-log coverage.
+# @admin.register(VerificationRequest)
 class VerificationRequestAdmin(admin.ModelAdmin):
     list_display = ("applicant", "type", "tier", "submitted_at", "status")
     list_filter = ("status", "type")
