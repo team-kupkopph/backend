@@ -120,8 +120,18 @@ class StaffProfile(models.Model):
     `contrib.auth.User` (web session), but a review decision is attributed to an
     `Account(account_type='admin')` via `verification_request.reviewed_by`. This 1:1 link
     is the join between the two identities, so `reviewed_by` can be stamped from the admin
-    request's `User`. It lives only in Django — like `auth_user` and the JWT blacklist
-    tables — and is deliberately NOT a domain table in `kupkop_mvp_schema.sql`."""
+    request's `User`.
+
+    The `auth.User` half lives only in Django, like `auth_user` and the JWT blacklist tables.
+    `staff_profile` itself does NOT: it is a documented domain table, `kupkop_mvp_schema.sql`
+    line 137. It has to be. `dev/check-docs.py::check_schema_vs_migrations` scans every
+    project migration for a `db_table` and errors on any that has no `CREATE TABLE` in the
+    schema SQL — code ahead of docs is an error by design — so `0006_staffprofile.py` would
+    fail the docs CI if this table were undocumented.
+
+    (Corrected 2026-09-06, Sprint 9 US-N1. This docstring previously claimed the opposite,
+    which is the comment someone would trust when deciding where to put the next staff
+    table — and following it would have turned the docs build red.)"""
 
     id = models.BigAutoField(primary_key=True)
     user = models.OneToOneField("auth.User", on_delete=models.CASCADE,
