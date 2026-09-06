@@ -1,6 +1,13 @@
 from django.urls import path
 
 from adminapi.dashboard_views import DashboardView
+from adminapi.moderation_views import (
+    FlagActionView,
+    FlagDetailView,
+    FlagDismissView,
+    FlagQueueView,
+    FlagReviewView,
+)
 from adminapi.verifications_views import (
     ApproveView,
     NeedsInfoView,
@@ -36,4 +43,12 @@ urlpatterns = [
     path("verifications/<uuid:verification_id>/approve", ApproveView.as_view()),
     path("verifications/<uuid:verification_id>/reject", RejectView.as_view()),
     path("verifications/<uuid:verification_id>/needs-info", NeedsInfoView.as_view()),
+
+    # US-M1/M2 · the moderation queue. Required before cutover: ModerationFlag is one of the
+    # three registered model admins US-X1 demands a console route for.
+    path("flags", FlagQueueView.as_view()),
+    path("flags/<uuid:flag_id>", FlagDetailView.as_view()),
+    path("flags/<uuid:flag_id>/review", FlagReviewView.as_view()),
+    path("flags/<uuid:flag_id>/action", FlagActionView.as_view()),
+    path("flags/<uuid:flag_id>/dismiss", FlagDismissView.as_view()),
 ]
