@@ -20,4 +20,10 @@ urlpatterns = [
     path("api/v1/", include("volunteer.urls")),
     path("api/v1/", include("devices.urls")),
     path("api/v1/", include("community.urls")),
+    # US-B1 · the platform-ops console. Mounted at its own prefix, NOT under /api/v1/,
+    # because it is a different audience on a different identity: /api/v1/* authenticates an
+    # Account (mobile JWT), /admin-api/* authenticates a Django staff User bridged to an
+    # admin Account. Sharing a prefix would make it far too easy for a route to end up on the
+    # wrong side of that line.
+    path("admin-api/", include("adminapi.urls")),
 ]

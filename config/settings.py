@@ -88,6 +88,9 @@ INSTALLED_APPS = [
     "notifications",
     "sagip",
     "moderation",
+    # US-B1 · the platform-ops console's /admin-api/* surface. Staff auth only for now;
+    # the domain endpoints (Track C/M) land beside it.
+    "adminapi",
     "volunteer",
     "devices",
     "community",
@@ -167,6 +170,11 @@ REST_FRAMEWORK = {
         "otp_resend_min": "1/min", "otp_resend_hour": "5/hour",
         "otp_resend_identifier": "5/hour",
         "login_ip": "20/hour", "login_identifier": "10/hour",
+        # US-B1 · the console's own login pair. Tighter than the app's: the staff surface
+        # has a handful of legitimate users, so a generous rate buys an attacker more than
+        # it buys the team.
+        "staff_login_ip": "10/hour", "staff_login_identifier": "5/hour",
+        "staff_otp_ip": "20/hour",
         "signup_ip": "10/hour",
         "password_forgot_ip": "20/hour", "password_forgot_identifier": "10/hour",
         "report_create": "20/day", "offer_create": "20/hour",
