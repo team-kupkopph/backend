@@ -7,6 +7,13 @@ from adminapi.members_views import (
     ReinstateView,
     SuspendView,
 )
+from adminapi.shelters_views import (
+    DonationQrQueueView,
+    ShelterDetailView,
+    ShelterQueueView,
+    UnverifyQrView,
+    VerifyQrView,
+)
 from adminapi.moderation_views import (
     FlagActionView,
     FlagDetailView,
@@ -63,4 +70,13 @@ urlpatterns = [
     path("members/<uuid:account_id>", MemberDetailView.as_view()),
     path("members/<uuid:account_id>/suspend", SuspendView.as_view()),
     path("members/<uuid:account_id>/reinstate", ReinstateView.as_view()),
+
+    # US-S1 · shelters.
+    path("shelters", ShelterQueueView.as_view()),
+    path("shelters/<uuid:shelter_profile_id>", ShelterDetailView.as_view()),
+
+    # US-Q1 · donation QRs.
+    path("donation-qrs", DonationQrQueueView.as_view()),
+    path("donation-qrs/<uuid:donation_qr_id>/verify", VerifyQrView.as_view()),
+    path("donation-qrs/<uuid:donation_qr_id>/unverify", UnverifyQrView.as_view()),
 ]
