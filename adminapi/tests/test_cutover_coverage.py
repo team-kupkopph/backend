@@ -118,6 +118,37 @@ def test_every_claimed_console_route_actually_exists():
     assert not missing, "\n    ".join(missing)
 
 
+def test_per_document_rejection_exists_outside_the_admin():
+    """⚠️ The SECOND behaviour that lived only in the surface US-X2 deletes.
+
+    `verifications/admin.py::needs_info` rejected individual documents with their own reasons
+    (US-R6) and then bounced the request. The console's needs-info did only the second half,
+    so switching the admin off would have removed the only way to tell an applicant WHICH file
+    to replace — while a registry check reported `VerificationRequest` as fully covered.
+
+    Found by reading the admin's write paths before the switch-off, not by any automated
+    check. That is the argument for doing so again next time.
+    """
+    import inspect
+
+    from adminapi import verifications_views
+
+    cls = verifications_views.VerificationDecisionView
+    assert hasattr(cls, "_reject_documents"), "the per-document rejection helper is gone"
+
+    # ⚠️ The helper EXISTING is not the property — it has to be CALLED from the decision path.
+    # A first version of this test asserted only that the symbol was present, and a mutation
+    # that deleted the call site sailed straight through it. Assert the wiring.
+    post_source = inspect.getsource(cls.post)
+    assert "_reject_documents(" in post_source, (
+        "per-document rejection is defined but never called — US-R6 parity is gone in practice"
+    )
+
+    # The behavioural proof lives in test_verification_decisions.py
+    # (test_needs_info_can_reject_individual_documents); this is the cutover-audit marker that
+    # says WHY it must keep passing.
+
+
 def test_the_story_hiding_behaviour_survives_the_admin():
     """⚠️ Model coverage is NOT behaviour coverage, and this is the case that proved it.
 

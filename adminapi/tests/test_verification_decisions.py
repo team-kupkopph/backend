@@ -1,4 +1,6 @@
 """US-C3 · decisions delegate to verifications/review.py, and are decided exactly once."""
+import itertools
+
 import pytest
 
 from accounts.factories import AccountFactory
@@ -12,8 +14,14 @@ def auth(client, staffer):
     return {"HTTP_AUTHORIZATION": f"Bearer {full_signin(client, staffer)['access']}"}
 
 
+_seq = itertools.count()
+
+
 def make_request(vtype="shelter_org", status="pending"):
-    account = AccountFactory(display_name="Alonzo Rescue", email="alonzo@ex.com")
+    # Unique per call: `email` is UNIQUE on account, and a test that creates two requests
+    # would otherwise fail on an IntegrityError that says nothing about what it was testing.
+    n = next(_seq)
+    account = AccountFactory(display_name=f"Alonzo Rescue {n}", email=f"alonzo{n}@ex.com")
     return VerificationRequest.objects.create(account=account, type=vtype, status=status)
 
 
@@ -146,3 +154,77 @@ def test_a_decision_needs_a_staff_token(client):
     res = client.post(f"/admin-api/verifications/{vr.verification_id}/approve",
                       {}, content_type="application/json")
     assert res.status_code in (401, 403)
+
+
+# -- US-R6 parity · per-document rejection (found while auditing US-X2) --------------------
+@pytest.mark.django_db
+def test_needs_info_can_reject_individual_documents(client, auth, staffer):
+    """⚠️ The capability the Django admin had and the console did not.
+
+    US-R6 exists so a reviewer bounces ONE photo instead of the whole set, and the applicant's
+    resubmit loop needs to know which file failed. Switching the admin off without this would
+    have deleted the only way to do it.
+    """
+    from verifications.models import VerificationDocument
+    vr = make_request()
+    good = VerificationDocument.objects.create(verification=vr, doc_type="gov_id",
+                                               file_url="s3://a.jpg")
+    bad = VerificationDocument.objects.create(verification=vr, doc_type="proof_billing",
+                                              file_url="s3://b.jpg")
+
+    res = post(client, vr, "needs-info", auth,
+               notes="One file needs replacing.",
+               documents=[{"document_id": str(bad.document_id), "note": "Illegible."}])
+    assert res.status_code == 200
+
+    bad.refresh_from_db()
+    good.refresh_from_db()
+    assert bad.status == "rejected" and bad.review_note == "Illegible."
+    assert bad.reviewed_by_id == staffer.admin_account.account_id
+    assert good.status == "pending", "an unnamed document must not be touched"
+    vr.refresh_from_db()
+    assert vr.status == "needs_info"
+
+
+@pytest.mark.django_db
+def test_a_missing_per_file_reason_refuses_the_WHOLE_bounce(client, auth):
+    """Atomic with the request bounce: half-applied is the state the applicant must never see."""
+    from verifications.models import VerificationDocument
+    vr = make_request()
+    doc = VerificationDocument.objects.create(verification=vr, doc_type="gov_id",
+                                              file_url="s3://a.jpg")
+
+    res = post(client, vr, "needs-info", auth, notes="Please fix.",
+               documents=[{"document_id": str(doc.document_id), "note": "   "}])
+    assert res.status_code == 422
+
+    doc.refresh_from_db()
+    vr.refresh_from_db()
+    assert doc.status == "pending", "the document rejection must have rolled back"
+    assert vr.status == "pending", "the bounce must have rolled back too"
+
+
+@pytest.mark.django_db
+def test_a_document_from_another_request_cannot_be_rejected(client, auth):
+    """The endpoint is scoped to its own request — otherwise it is an oracle for, and a lever
+    on, another applicant's files."""
+    from verifications.models import VerificationDocument
+    mine = make_request()
+    theirs = make_request()
+    other_doc = VerificationDocument.objects.create(verification=theirs, doc_type="gov_id",
+                                                   file_url="s3://x.jpg")
+
+    res = post(client, mine, "needs-info", auth, notes="hi",
+               documents=[{"document_id": str(other_doc.document_id), "note": "nope"}])
+    assert res.status_code == 422
+    other_doc.refresh_from_db()
+    assert other_doc.status == "pending"
+
+
+@pytest.mark.django_db
+def test_needs_info_without_documents_still_works(client, auth):
+    """The common case — bounce the request without singling out a file."""
+    vr = make_request()
+    assert post(client, vr, "needs-info", auth, notes="Send a clearer ID.").status_code == 200
+    vr.refresh_from_db()
+    assert vr.status == "needs_info"
