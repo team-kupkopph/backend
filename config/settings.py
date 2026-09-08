@@ -227,6 +227,7 @@ OTP_TTL_MINUTES = 5
 #   EMAIL_PROVIDER=ses             → SesEmailSender; requires EMAIL_FROM + AWS_SES_REGION,
 #                                    else settings refuse to load (loud fail on partial
 #                                    config, same stance as SECRET_KEY when DEBUG is off).
+#   EMAIL_PROVIDER=resend          → ResendSender; requires EMAIL_FROM + RESEND_API_KEY.
 #
 # ⚠️ Owner actions this code cannot do: opening an AWS account, verifying `EMAIL_FROM`
 # with SES, and requesting production access (SES starts in a sandbox that only mails
@@ -234,6 +235,10 @@ OTP_TTL_MINUTES = 5
 EMAIL_PROVIDER = os.environ.get("EMAIL_PROVIDER", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "")
 AWS_SES_REGION = os.environ.get("AWS_SES_REGION", "")
+# EMAIL_PROVIDER=resend · the API-key path, chosen 2026-09-08 so OTP mail could go live
+# without SES's sandbox-exit ticket. Read from the environment like every other secret and
+# never logged — see `ResendSender` for the assertion that the key cannot reach a log line.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 OTP_MAX_ATTEMPTS = 5
 # Version of the Terms/Privacy text a signup consents to (RA 10173 — recorded on
 # account.terms_consent_version). Bump whenever the user-facing terms change, so an

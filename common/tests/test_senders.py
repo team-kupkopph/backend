@@ -12,9 +12,12 @@ falls back to the ConsoleSender when no provider is set. So:
 SES sandbox restrictions — all owner actions. The code assumes production access already
 exists, and fails gracefully when it doesn't (an SES error must not 500 a signup).
 """
+import json
+import logging
 from unittest.mock import Mock, patch
 
 import pytest
+import responses as responses_lib
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
@@ -141,3 +144,124 @@ def test_get_sender_is_a_function_not_a_singleton():
     # to a real provider without a process restart) — a common `override_settings` gotcha.
     # The current file re-picks per call; this test preserves that.
     assert senders.get_sender.__name__ == "get_sender"
+
+
+# ── Resend · the API-key provider (chosen 2026-09-08) ────────────────────────────────
+#
+# WHY A SECOND PROVIDER AT ALL. SES is cheaper and already coded, but it cannot send to an
+# unverified address until AWS approves a sandbox-exit ticket — a 24h+ human review that can
+# be refused. Resend needs only an API key, so OTP mail can go live the day the key exists.
+# SesEmailSender stays; this is an alternative behind the same seam, not a replacement.
+RESEND_URL = "https://api.resend.com/emails"
+RESEND_CFG = dict(EMAIL_PROVIDER="resend", EMAIL_FROM="noreply@kupkop.ph",
+                  RESEND_API_KEY="re_test_key_do_not_use")
+
+
+@override_settings(**RESEND_CFG)
+def test_resend_is_selected_when_configured():
+    from common.senders import ResendSender
+    assert isinstance(get_sender(), ResendSender)
+
+
+@override_settings(EMAIL_PROVIDER="resend", EMAIL_FROM="", RESEND_API_KEY="re_x")
+def test_resend_without_a_from_address_refuses_to_start():
+    with pytest.raises(ImproperlyConfigured, match="EMAIL_FROM"):
+        get_sender()
+
+
+@override_settings(EMAIL_PROVIDER="resend", EMAIL_FROM="noreply@kupkop.ph", RESEND_API_KEY="")
+def test_resend_without_an_api_key_refuses_to_start():
+    # Same fail-fast stance as the SES pair: a deploy that mails nobody because one env var
+    # is missing must be found at boot, not by a user who never got their code.
+    with pytest.raises(ImproperlyConfigured, match="RESEND_API_KEY"):
+        get_sender()
+
+
+@responses_lib.activate
+@override_settings(**RESEND_CFG)
+def test_resend_posts_the_shape_the_api_documents():
+    from common.senders import ResendSender
+    responses_lib.add(responses_lib.POST, RESEND_URL, json={"id": "abc"}, status=200)
+
+    ResendSender().send(channel="email", to="ana@example.ph", code="123456", purpose="signup")
+
+    assert len(responses_lib.calls) == 1
+    req = responses_lib.calls[0].request
+    body = json.loads(req.body)
+    assert body["from"] == "noreply@kupkop.ph"
+    assert body["to"] == ["ana@example.ph"]
+    assert "Verify your Kupkop PH account" == body["subject"]
+    assert req.headers["Authorization"] == "Bearer re_test_key_do_not_use"
+
+
+@responses_lib.activate
+@override_settings(**RESEND_CFG)
+def test_the_resend_body_carries_the_code_and_stays_plain_text():
+    from common.senders import ResendSender
+    responses_lib.add(responses_lib.POST, RESEND_URL, json={"id": "abc"}, status=200)
+    ResendSender().send(channel="email", to="ana@example.ph", code="654321", purpose="signup")
+    body = json.loads(responses_lib.calls[0].request.body)
+    assert "654321" in body["text"]
+    # compose_otp_email documents why OTP mail is plain text (spam filters, no tracking
+    # pixel on a one-time code). Sending `html` here would quietly undo that decision.
+    assert "html" not in body
+
+
+@responses_lib.activate
+@override_settings(**RESEND_CFG)
+def test_a_resend_outage_falls_back_and_never_raises(caplog):
+    from common.senders import ResendSender
+    responses_lib.add(responses_lib.POST, RESEND_URL, json={"message": "boom"}, status=500)
+    # A signup MUST NOT 500 because the mail provider is down — the OTP row is already
+    # persisted, so the user can resend.
+    ResendSender().send(channel="email", to="ana@example.ph", code="123456", purpose="signup")
+    assert "resend_send_failed" in caplog.text
+
+
+@responses_lib.activate
+@override_settings(**RESEND_CFG)
+def test_the_api_key_never_reaches_a_log_line(caplog):
+    """§12.6 · read access to logs must not become the ability to send mail as Kupkop.
+
+    The failure path logs the exception, and a naive `exc_info` on a requests error can carry
+    the full request — headers included — into the log.
+    """
+    from common.senders import ResendSender
+    responses_lib.add(responses_lib.POST, RESEND_URL, json={"message": "boom"}, status=500)
+    with caplog.at_level(logging.DEBUG):
+        ResendSender().send(channel="email", to="ana@example.ph", code="1", purpose="signup")
+    assert "re_test_key_do_not_use" not in caplog.text
+
+
+@responses_lib.activate
+@override_settings(**RESEND_CFG)
+def test_the_resend_log_line_never_carries_the_code(caplog):
+    from common.senders import ResendSender
+    responses_lib.add(responses_lib.POST, RESEND_URL, json={"id": "abc"}, status=200)
+    with caplog.at_level(logging.DEBUG):
+        ResendSender().send(channel="email", to="ana@example.ph", code="987654",
+                            purpose="signup")
+    assert "987654" not in caplog.text
+
+
+@responses_lib.activate
+@override_settings(**RESEND_CFG)
+def test_resend_sms_is_not_sent_as_email_it_delegates(caplog):
+    from common.senders import ResendSender
+    responses_lib.add(responses_lib.POST, RESEND_URL, json={"id": "abc"}, status=200)
+    ResendSender().send(channel="sms", to="+639170000123", code="123456", purpose="signup")
+    # No SMS gateway exists yet; mailing an SMS code to a phone number reaches nobody.
+    assert len(responses_lib.calls) == 0
+
+
+@override_settings(**RESEND_CFG)
+def test_the_request_sets_a_timeout():
+    """A `requests.post` with no timeout blocks the worker thread forever if Resend hangs.
+
+    Asserted by inspecting the call rather than by hanging the suite for real.
+    """
+    from common.senders import ResendSender
+    with patch.object(senders.requests, "post") as post:
+        post.return_value = Mock(status_code=200, ok=True)
+        ResendSender().send(channel="email", to="a@b.ph", code="1", purpose="signup")
+    assert post.call_args.kwargs.get("timeout"), "no timeout — a hung provider hangs the worker"
