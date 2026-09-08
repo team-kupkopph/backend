@@ -44,9 +44,7 @@ class SignupView(APIView):
         if not serializer.is_valid():
             email_errors = serializer.errors.get("email")
             if email_errors and getattr(email_errors[0], "code", None) == "email_taken":
-                return Response(
-                    {"error": {"code": "email_taken", "message": "Email already in use",
-                               "field": "email"}}, status=status.HTTP_409_CONFLICT)
+                return self._email_conflict(request.data.get("email", ""))
             return Response({"error": {"code": "invalid", "message": "Invalid input",
                                        "details": serializer.errors}}, status=status.HTTP_400_BAD_REQUEST)
         data = serializer.validated_data
@@ -56,12 +54,30 @@ class SignupView(APIView):
                 password=data["password"], display_name=data["display_name"],
                 terms_consent_version=data.get("consent_version") or None)
         except IntegrityError:
-            return Response(
-                {"error": {"code": "email_taken", "message": "Email already in use",
-                           "field": "email"}}, status=status.HTTP_409_CONFLICT)
+            return self._email_conflict(data["email"])
         otp.issue_code(account, channel="email", purpose="signup")
         return Response({"account_id": str(account.account_id), "email": account.email,
                          "next": "verify_email"}, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _email_conflict(email):
+        """The address already has an account. If that account is the person's own
+        unverified signup (they backed out of the OTP screen and came round again),
+        re-arm the code and tell the client to resume verification — mirroring
+        LoginView's unverified branch — rather than dead-ending them on "already
+        registered" with nowhere to go. A verified (or deleted) account keeps the
+        generic `email_taken`: §12.1 lets signup reveal existence and nothing more."""
+        account = Account.objects.filter(email=email).first()
+        if (account is not None and account.status != AccountStatus.DELETED
+                and account.email_verified_at is None):
+            otp.issue_code(account, channel="email", purpose="signup")
+            return Response(
+                {"error": {"code": "email_unverified",
+                           "message": "Verify your email", "field": "email"}},
+                status=status.HTTP_409_CONFLICT)
+        return Response(
+            {"error": {"code": "email_taken", "message": "Email already in use",
+                       "field": "email"}}, status=status.HTTP_409_CONFLICT)
 
 
 def _otp_error_response(exc):
