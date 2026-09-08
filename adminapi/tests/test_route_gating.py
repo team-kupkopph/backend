@@ -17,6 +17,11 @@ from adminapi.tests.conftest import full_signin
 PUBLIC = {
     "admin-api/auth/login",
     "admin-api/auth/verify-otp",
+    # US-T1 · first-run enrolment. Password-gated inside the view (start_enrolment
+    # re-authenticates), and the device it creates is UNCONFIRMED, so it satisfies no second
+    # factor until a code proves it.
+    "admin-api/auth/enrol-totp",
+    "admin-api/auth/confirm-totp",
     "admin-api/auth/refresh",
     "admin-api/auth/password-reset",
     "admin-api/auth/password-reset/confirm",

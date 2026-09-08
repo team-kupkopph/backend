@@ -20,11 +20,13 @@ from verifications.models import (
     VerificationStatus,
     VerificationType,
 )
+from verifications.models import VerificationDocument
 from verifications.review import (
     ReviewError,
     approve_request,
     reject_request,
     request_more_info,
+    review_document,
 )
 
 # A decision can only be made from these. Anything else has already been decided, and a second
@@ -134,6 +136,16 @@ class VerificationDecisionView(StaffView):
                 elif self.action == "reject":
                     reject_request(vr, reviewer, notes)
                 else:
+                    # ⚠️ PER-DOCUMENT REJECTION (US-R6), inside the same transaction as the
+                    # bounce. This is the half the console was missing: the Django admin's
+                    # needs_info action rejected individual files with their own reasons and
+                    # then bounced the request, and without it a reviewer can only reject the
+                    # whole set. The applicant's resubmit loop needs to know WHICH file failed.
+                    #
+                    # Atomic with the bounce on purpose: a per-file reason missing means the
+                    # WHOLE thing is refused rather than half-applied, so the applicant never
+                    # sees a partial, confusing state.
+                    self._reject_documents(vr, reviewer, request.data.get("documents") or [])
                     request_more_info(vr, reviewer, notes)
         except ReviewError as exc:
             # A rejection or needs-info with no reason. The applicant is shown this text, so an
@@ -142,6 +154,23 @@ class VerificationDecisionView(StaffView):
 
         vr.refresh_from_db()
         return Response(detail(vr))
+
+
+    @staticmethod
+    def _reject_documents(vr, reviewer, entries):
+        """Reject the named documents with their own reasons. Raises ReviewError on a missing
+        reason, which the caller turns into a 422 and which rolls the transaction back."""
+        for entry in entries:
+            doc_id = (entry or {}).get("document_id")
+            if not doc_id:
+                continue
+            doc = VerificationDocument.objects.filter(
+                document_id=doc_id, verification=vr).first()
+            if doc is None:
+                # Scoped to THIS request — a document id from another applicant's request must
+                # not be reviewable through this endpoint.
+                raise ReviewError("That document does not belong to this request.")
+            review_document(doc, reviewer, "rejected", (entry.get("note") or "").strip())
 
 
 class ApproveView(VerificationDecisionView):

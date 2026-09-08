@@ -93,21 +93,31 @@ def test_staffer_without_a_staff_profile_is_refused_a_token(client, unbridged_st
 
 
 @pytest.mark.django_db
-def test_staffer_without_a_confirmed_device_cannot_start(client, db):
+def test_staffer_without_a_device_is_offered_enrolment_but_NO_token(client, db):
+    """Changed deliberately by US-T1: this used to 403 `totp_not_enrolled`, which was a dead
+    end — a newly created staffer could never sign in. It now returns an enrolment challenge.
+
+    ⚠️ The security property is unchanged and is what this test guards: no token is issued.
+    A correct password still reaches nothing on its own."""
     user = User.objects.create_user(username="nodev@kupkopph.com", email="nodev@kupkopph.com",
                                     password=PASSWORD, is_staff=True)
     res = login(client, user.username)
-    assert res.status_code == 403 and res.json()["error"]["code"] == "totp_not_enrolled"
+    assert res.status_code == 200
+    body = res.json()
+    assert body["enrolment_required"] is True
+    assert "access" not in body and "refresh" not in body
 
 
 @pytest.mark.django_db
 def test_an_unconfirmed_device_does_not_count(client, db):
-    """An interrupted enrolment must not stand in for a second factor."""
+    """An interrupted enrolment must not stand in for a second factor — the staffer is sent
+    back to enrolment, and still gets no token."""
     user = User.objects.create_user(username="half@kupkopph.com", email="half@kupkopph.com",
                                     password=PASSWORD, is_staff=True)
     TOTPDevice.objects.create(user=user, name="default", confirmed=False)
-    res = login(client, user.username)
-    assert res.status_code == 403 and res.json()["error"]["code"] == "totp_not_enrolled"
+    body = login(client, user.username).json()
+    assert body["enrolment_required"] is True
+    assert "access" not in body
 
 
 @pytest.mark.django_db

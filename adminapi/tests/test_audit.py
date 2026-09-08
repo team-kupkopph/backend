@@ -88,11 +88,20 @@ def test_non_admin_api_paths_are_not_recorded(client, db):
 
 @pytest.mark.django_db
 def test_the_model_exposes_no_update_or_delete_path(client, auth):
-    """Append-only by construction. Asserting the ABSENCE of a route is the only way to keep
-    it absent — a log that can be edited proves nothing."""
+    """Append-only by construction. Asserting the ABSENCE of a write path is the only way to
+    keep it absent — a log that can be edited proves nothing.
+
+    ⚠️ This originally asserted that NO route mentioned "audit" at all, which was too broad:
+    it banned reading the log as well as writing it, and US-W3 legitimately added a read view.
+    The property that matters is the absence of a write METHOD, so that is what is checked."""
     import adminapi.urls as urls
-    paths = [str(p.pattern) for p in urls.urlpatterns]
-    assert not any("audit" in p for p in paths), f"an audit-mutating route appeared: {paths}"
+
+    audit_routes = [p for p in urls.urlpatterns if "audit" in str(p.pattern)]
+    assert audit_routes, "the scan found no audit route — broken, not clean"
+    for route in audit_routes:
+        cls = route.callback.cls
+        for verb in ("post", "put", "patch", "delete"):
+            assert not hasattr(cls, verb), f"{cls.__name__} exposes {verb.upper()} on the audit log"
 
 
 @pytest.mark.django_db

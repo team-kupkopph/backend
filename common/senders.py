@@ -18,6 +18,7 @@ operator sees a warning per attempt.
 """
 import logging
 
+import requests
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
@@ -93,6 +94,68 @@ class SesEmailSender(Sender):
             self._fallback.send(channel=channel, to=to, code=code, purpose=purpose)
 
 
+class ResendSender(Sender):
+    """Resend over its HTTP API, with the ConsoleSender as fallback for anything it can't ship.
+
+    Chosen 2026-09-08 alongside SES rather than instead of it. SES is cheaper and already
+    written, but it cannot mail an unverified address until AWS approves a sandbox-exit
+    ticket — a 24h+ human review that can be refused, during which every real signup fails.
+    Resend needs only an API key, so OTP delivery can start the day the key exists. Both
+    live behind `get_sender()`; switching is one env var.
+
+    The key comes from `settings.RESEND_API_KEY` (env-sourced) and is used in exactly one
+    place — the Authorization header. It is never logged, never echoed into an exception
+    message, and never returned. `test_the_api_key_never_reaches_a_log_line` holds that line:
+    §12.6's point is that read access to logs must not become the ability to send mail as
+    Kupkop.
+    """
+
+    ENDPOINT = "https://api.resend.com/emails"
+    # A provider that accepts the connection and then hangs would otherwise block the worker
+    # thread for the OS default — effectively forever under load. Signup is a foreground
+    # request; 10s is already longer than a user will wait.
+    TIMEOUT_SECONDS = 10
+
+    def __init__(self, fallback: Sender | None = None):
+        self._fallback = fallback or ConsoleSender()
+
+    def send(self, *, channel, to, code, purpose):
+        # Same reasoning as SesEmailSender: this provider is email-only, and no SMS gateway
+        # exists yet. Posting an SMS code here would mail a phone number and reach nobody.
+        if channel != "email":
+            return self._fallback.send(channel=channel, to=to, code=code, purpose=purpose)
+
+        masked = (to or "")[:2] + "***"
+        subject, body = compose_otp_email(purpose, code)
+        try:
+            response = requests.post(
+                self.ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {settings.RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                # No `html` key, deliberately — compose_otp_email documents why OTP mail is
+                # plain text (fewer spam filters on a bare 6-digit code, and no tracking
+                # pixel, which most HTML mail SDKs add by default).
+                json={"from": settings.EMAIL_FROM, "to": [to],
+                      "subject": subject, "text": body},
+                timeout=self.TIMEOUT_SECONDS,
+            )
+            if not response.ok:
+                # Deliberately NOT `raise_for_status()` + `exc_info`: a requests exception
+                # carries the PreparedRequest, whose headers hold the API key. Status plus
+                # the provider's own message is everything an operator needs.
+                raise RuntimeError(f"resend responded {response.status_code}")
+            logger.info("OTP via email to %s (sent via Resend)", masked)
+        except Exception as exc:
+            # A signup MUST NOT 500 because the mail provider is down or rate-limiting us.
+            # The OTP row is already persisted by issue_code, so the user can resend.
+            # `str(exc)` only — never the exception object's request, never exc_info.
+            logger.warning({"event": "resend_send_failed", "to": masked,
+                            "purpose": purpose, "detail": str(exc)[:200]})
+            self._fallback.send(channel=channel, to=to, code=code, purpose=purpose)
+
+
 def get_sender() -> Sender:
     """Pick a sender based on config, per-call (never a module-level singleton).
 
@@ -113,5 +176,15 @@ def get_sender() -> Sender:
             raise ImproperlyConfigured(
                 "EMAIL_PROVIDER=ses requires AWS_SES_REGION (the region SES is enabled in).")
         return SesEmailSender()
+    if provider == "resend":
+        # Same fail-fast stance as the SES branch above, for the same reason.
+        if not settings.EMAIL_FROM:
+            raise ImproperlyConfigured(
+                "EMAIL_PROVIDER=resend requires EMAIL_FROM (a verified sending identity).")
+        if not settings.RESEND_API_KEY:
+            raise ImproperlyConfigured(
+                "EMAIL_PROVIDER=resend requires RESEND_API_KEY.")
+        return ResendSender()
     raise ImproperlyConfigured(
-        f"EMAIL_PROVIDER={provider!r} is not recognized. Known: ses (or unset for dev).")
+        f"EMAIL_PROVIDER={provider!r} is not recognized. "
+        "Known: ses, resend (or unset for dev).")

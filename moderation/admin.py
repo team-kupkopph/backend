@@ -7,10 +7,16 @@ from django.db.models import Case, IntegerField, Value, When
 from django.utils import timezone
 
 from accounts.staff import reviewer_account
-from moderation.models import FlagStatus, FlagTarget, ModerationFlag
+from moderation.actions import resolve_flag
+from moderation.models import FlagStatus, ModerationFlag
 
 
-@admin.register(ModerationFlag)
+# ⚠️ UNREGISTERED by US-X2 (2026-09-06). Replaced by the console: /moderation
+# (Sprint 10 US-M1–M3). The class is KEPT, not deleted — it is the cheapest possible rollback,
+# and reverting the US-X2 commit restores this admin exactly as it was.
+# Re-registering it would put a second writer on the same rows, with none of the
+# console's audit-log or access-log coverage.
+# @admin.register(ModerationFlag)
 class ModerationFlagAdmin(admin.ModelAdmin):
     list_display = ("target_type", "target_id", "reporter", "reason", "status", "created_at")
     list_filter = ("status", "target_type")
@@ -40,19 +46,16 @@ class ModerationFlagAdmin(admin.ModelAdmin):
                 "Your admin login isn't linked to a reviewer account — decision not "
                 "recorded. Run `manage.py createstaff` to link it.", level=messages.ERROR)
             return
-        hidden = 0
-        if status == FlagStatus.ACTIONED:
-            # US-T3 / D-S6-4 · actioning a story flag HIDES the story (status='hidden') — the
-            # lever, not deletion: the row and its photos survive, the feed just excludes it, and
-            # the author still sees a hidden state. The flag stays as the audit trail. Capture ids
-            # before the status update (the queryset is re-evaluated after .update()).
-            story_ids = list(queryset.filter(target_type=FlagTarget.STORY)
-                             .values_list("target_id", flat=True))
-            if story_ids:
-                from community.models import StoryPost, StoryStatus
-                hidden = StoryPost.objects.filter(pk__in=story_ids).update(
-                    status=StoryStatus.HIDDEN)
-        n = queryset.update(status=status, reviewed_by=reviewer, reviewed_at=timezone.now())
+        # ⚠️ Delegates to moderation/actions.py rather than implementing the transition here.
+        # US-T3's story-hiding used to live in this method only — and Sprint 10 US-X2 deletes
+        # this admin. Behaviour that lives in the surface being removed goes with it, and
+        # nobody notices until a story flag is actioned somewhere else and the story stays
+        # visible. One writer, invoked by both surfaces.
+        n = hidden = 0
+        for flag in queryset:
+            _, effects = resolve_flag(flag, reviewer, status)
+            n += 1
+            hidden += 1 if effects.get("story_hidden") else 0
         note = f"{n} flag(s) marked {status}."
         if hidden:
             note += f" {hidden} story(ies) hidden."

@@ -151,3 +151,65 @@ def verify_totp(user, code: str) -> None:
         # django_otp refuses a code it has already accepted (`last_t`) and counts failures on
         # the device row, so this covers replay and brute force without extra machinery.
         raise StaffAuthError("invalid_code")
+
+
+# --------------------------------------------------------------------------------------
+# First-run TOTP enrolment (US-T1)
+# --------------------------------------------------------------------------------------
+#
+# ⚠️ A new staffer has no device, and US-B1 refuses to sign in without one — correctly, since
+# a phished password alone must never reach government IDs. That leaves a real hole: without
+# an enrolment path a newly created staffer can never sign in at all, and a superadmin cannot
+# fix it for them because the secret has to reach THEIR authenticator, not the superadmin's.
+#
+# So enrolment is gated behind the password, uses a separate challenge, and the device is not
+# confirmed — and therefore does not satisfy `verified_totp_device` — until the staffer proves
+# they can read a code from it. An interrupted enrolment leaves an unconfirmed device that
+# counts for nothing.
+_ENROL_SALT = "adminapi.staff-totp-enrolment"
+
+
+def start_enrolment(email: str, password: str):
+    """Password-authenticated, for a staffer who has no confirmed device yet."""
+    user = authenticate(username=email, password=password)
+    if user is None or not user.is_active or not user.is_staff:
+        raise StaffAuthError("invalid_credentials")
+    if verified_totp_device(user) is not None:
+        # Already enrolled — enrolling again would let anyone with the password silently
+        # replace the second factor, which defeats it entirely.
+        raise StaffAuthError("already_enrolled", status=409)
+    return user, signing.dumps({"uid": user.id}, salt=_ENROL_SALT)
+
+
+def provision_device(challenge: str):
+    """Create (or reuse) the unconfirmed device and return its provisioning URI."""
+    try:
+        data = signing.loads(challenge, salt=_ENROL_SALT,
+                             max_age=int(CHALLENGE_LIFETIME.total_seconds()))
+    except signing.SignatureExpired:
+        raise StaffAuthError("challenge_expired")
+    except signing.BadSignature:
+        raise StaffAuthError("invalid_challenge")
+
+    from django.contrib.auth.models import User
+    user = User.objects.filter(id=data["uid"], is_active=True, is_staff=True).first()
+    if user is None:
+        raise StaffAuthError("invalid_challenge")
+
+    device = TOTPDevice.objects.filter(user=user, confirmed=False).first()
+    if device is None:
+        device = TOTPDevice.objects.create(user=user, name="default", confirmed=False)
+    # config_url carries the shared secret. It is returned once, over the authenticated
+    # enrolment call only, and never logged — the audit middleware's detail allow-list has no
+    # field that could capture it.
+    return user, device
+
+
+def confirm_enrolment(challenge: str, code: str):
+    """Confirm the device by proving a code, then the staffer can sign in normally."""
+    user, device = provision_device(challenge)
+    if not device.verify_token(code):
+        raise StaffAuthError("invalid_code")
+    device.confirmed = True
+    device.save(update_fields=["confirmed"])
+    return user

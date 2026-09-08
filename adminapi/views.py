@@ -20,6 +20,9 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from adminapi.auth import (
     STAFF_REFRESH_LIFETIME,
     StaffAuthError,
+    confirm_enrolment,
+    provision_device,
+    start_enrolment,
     issue_challenge,
     resolve_challenge,
     start_login,
@@ -46,11 +49,50 @@ class StaffLoginView(APIView):
     throttle_classes = [StaffLoginIpThrottle, StaffLoginIdentifierThrottle]
 
     def post(self, request):
+        email, password = request.data.get("email", ""), request.data.get("password", "")
         try:
-            user = start_login(request.data.get("email", ""), request.data.get("password", ""))
+            user = start_login(email, password)
+        except StaffAuthError as exc:
+            if exc.code != "totp_not_enrolled":
+                return _error(exc)
+            # ⚠️ Not a dead end. The password was correct and the staffer simply has no device
+            # yet, so hand them an enrolment challenge rather than a 403 they cannot act on.
+            _, challenge = start_enrolment(email, password)
+            return Response({"enrolment_required": True, "challenge": challenge})
+        return Response({"otp_required": True, "challenge": issue_challenge(user)})
+
+
+class StaffEnrolTotpView(APIView):
+    """Return the provisioning URI for a staffer's first authenticator (US-T1)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [StaffOtpIpThrottle]
+
+    def post(self, request):
+        try:
+            user, device = provision_device(request.data.get("challenge", ""))
         except StaffAuthError as exc:
             return _error(exc)
-        return Response({"otp_required": True, "challenge": issue_challenge(user)})
+        # The secret leaves the server exactly here, once, to the staffer who just proved the
+        # password. It is never stored client-side and never enters the audit log.
+        return Response({"provisioning_uri": device.config_url, "email": user.email})
+
+
+class StaffConfirmTotpView(APIView):
+    """Confirm the new device by proving a code from it, then sign in."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [StaffOtpIpThrottle]
+
+    def post(self, request):
+        try:
+            user = confirm_enrolment(request.data.get("challenge", ""),
+                                     str(request.data.get("code", "")))
+            return Response(tokens_for_staff(user))
+        except StaffAuthError as exc:
+            return _error(exc)
 
 
 class StaffVerifyOtpView(APIView):

@@ -11,6 +11,9 @@ from django_otp.admin import OTPAdminSite
 from django_otp.plugins.otp_totp.models import TOTPDevice
 
 
+# ⚠️ US-X2 removed the /admin/ route, so the two tests that drove it over HTTP are gone.
+# This one stays: the OTPAdminSite swap is deliberately LEFT IN PLACE (inert without a route),
+# and if the route is ever restored it must come back gated rather than open.
 def test_admin_site_is_otp_gated():
     # The class-swap in AccountsConfig.ready() has already run by test collection time
     # (app registry setup happens once, at Django startup) — assert the effect, not the
@@ -18,20 +21,6 @@ def test_admin_site_is_otp_gated():
     assert isinstance(admin.site, OTPAdminSite)
 
 
-@pytest.mark.django_db
-def test_staff_without_a_verified_device_is_redirected_to_login(client, django_user_model):
-    user = django_user_model.objects.create_superuser("rev", "rev@kupkop.ph", "pw")
-    client.force_login(user)  # is_staff/is_superuser True, but no OTP device verified
-    res = client.get("/admin/")
-    assert res.status_code == 302
-    assert "/admin/login/" in res.headers["Location"]
-
-
-@pytest.mark.django_db
-def test_staff_with_a_verified_device_reaches_admin(admin_client):
-    # admin_client is the project's own conftest override — OTP-verified by construction.
-    res = admin_client.get("/admin/")
-    assert res.status_code == 200
 
 
 @pytest.mark.django_db
