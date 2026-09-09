@@ -95,6 +95,12 @@ class EmailSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
 
+class PasswordCodeCheckSerializer(serializers.Serializer):
+    """Deliberately has no `new_password`. Asking for one is the bug this endpoint fixes."""
+    email = serializers.EmailField()
+    code = serializers.CharField()
+
+
 class PasswordResetSerializer(serializers.Serializer):
     email = serializers.EmailField()
     code = serializers.CharField()

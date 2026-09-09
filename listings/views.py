@@ -1,12 +1,14 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account, AccountStatus, Address
+from common.cities import city_variants
 from listings.fees import fee_cap_for
 from listings.models import (
     AdoptionInquiry,
@@ -120,7 +122,15 @@ class ListingsView(APIView):
               .filter(public_poster_q()).distinct().order_by("-created_at"))
         city = request.query_params.get("city")
         if city:
-            qs = qs.filter(city=city)
+            # ⚠️ Not `city=city`. The listing form is free text while the mobile picker has a
+            # fixed vocabulary, so an exact match dropped every "Marikina" row for a viewer
+            # whose city reads "Marikina City" — see common/cities.py.
+            variants = city_variants(city)
+            if variants:
+                match = Q()
+                for variant in variants:
+                    match |= Q(city__iexact=variant)
+                qs = qs.filter(match)
         species = request.query_params.get("species")
         if species:
             qs = qs.filter(species=species)
