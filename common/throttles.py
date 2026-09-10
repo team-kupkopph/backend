@@ -47,6 +47,14 @@ class PasswordForgotIpThrottle(IpThrottle):
     scope = "password_forgot_ip"
 
 
+class PasswordCodeCheckIpThrottle(IpThrottle):
+    scope = "password_code_check_ip"
+
+
+class PasswordCodeCheckIdentifierThrottle(IdentifierThrottle):
+    scope = "password_code_check_identifier"
+
+
 class PasswordForgotIdentifierThrottle(IdentifierThrottle):
     scope = "password_forgot_identifier"
 

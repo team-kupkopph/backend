@@ -22,14 +22,60 @@ def test_signup_creates_account_settings_and_code_but_no_tokens(client):
 
 @pytest.mark.django_db
 def test_signup_duplicate_email_returns_409(client, django_user_model):
+    from django.utils import timezone
+
     from accounts.factories import AccountFactory
-    AccountFactory(email="dupe@example.com")
+    AccountFactory(email="dupe@example.com", email_verified_at=timezone.now())
     res = client.post("/api/v1/auth/signup", {
         "account_type": "personal", "display_name": "X",
         "email": "DUPE@example.com", "password": "s3cretpass",
     }, content_type="application/json")
     assert res.status_code == 409
     assert res.json()["error"]["code"] == "email_taken"
+
+
+@pytest.mark.django_db
+def test_signup_with_own_unverified_email_resumes_verification(client):
+    """Back out of the OTP screen, submit signup again: the account already exists but is
+    the person's own and unverified. Dead-ending with `email_taken` strands them — there is
+    no way back into verification. Mirror login's unverified branch instead: re-issue the
+    signup code and signal the client to resume, not to go log in."""
+    from accounts.factories import AccountFactory
+    from verifications.models import VerificationCode
+
+    acc = AccountFactory(email="resume@example.com")  # unverified
+    assert not VerificationCode.objects.filter(account=acc).exists()
+
+    res = client.post("/api/v1/auth/signup", {
+        "account_type": "personal", "display_name": "Resume Me",
+        "email": "RESUME@example.com", "password": "s3cretpass",
+    }, content_type="application/json")
+
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "email_unverified"
+    assert VerificationCode.objects.filter(account=acc, purpose="signup").exists()
+
+
+@pytest.mark.django_db
+def test_signup_with_an_already_verified_email_still_says_taken(client):
+    """A verified account is someone who finished signing up — possibly a different person.
+    That case keeps the generic `email_taken` (§12.1 lets signup reveal existence, nothing
+    more) and no code is issued."""
+    from django.utils import timezone
+
+    from accounts.factories import AccountFactory
+    from verifications.models import VerificationCode
+
+    acc = AccountFactory(email="done@example.com", email_verified_at=timezone.now())
+
+    res = client.post("/api/v1/auth/signup", {
+        "account_type": "personal", "display_name": "X",
+        "email": "done@example.com", "password": "s3cretpass",
+    }, content_type="application/json")
+
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "email_taken"
+    assert not VerificationCode.objects.filter(account=acc).exists()
 
 
 @pytest.mark.django_db
