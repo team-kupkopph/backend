@@ -1,22 +1,46 @@
 #!/usr/bin/env bash
-# Purge zero-byte macOS Finder `Icon\r` files from the git directory.
+# Purge macOS Finder droppings from the git directory.
 #
-# Cause: Google Drive's Mirror sync (team.kupkopph@gmail.com) re-creates the
-# custom-icon file inside every folder it touches, including `.git/`. Git then
-# treats an entry like `.git/refs/Icon\r` as a ref with a missing object and
-# `git fetch` / `git pull` fail with `bad object refs/Icon?`.
+# Cause: Google Drive's Mirror sync (team.kupkopph@gmail.com) writes Finder
+# metadata into every folder it touches, including `.git/`. Git then reads those
+# files as refs, and `git fetch` / `git pull` fail.
 #
-# Fix: delete the zero-byte matches, quietly. Never touch a non-zero file —
-# real refs, objects and reflogs are never zero-byte, which is what makes the
-# `-size 0` guard the whole safety story. See dev/HANDOFF.md's "Still-open
-# infra/ops items" note for the underlying issue.
+# TWO SHAPES, and they need different safety arguments:
 #
-# Runs fast (a few milliseconds on a stock .git dir) and stays silent on the
-# happy path — a hook that prints every time gets muted in a week.
+#   1. `Icon\r` — the custom-folder-icon file. ZERO BYTES, so `-size 0` is the
+#      whole safety story: a real ref, object or reflog is never zero-byte.
+#      Seen as `bad object refs/Icon?`.
+#
+#   2. `.DS_Store` — Finder's per-folder view settings. NOT zero-byte (6 KB is
+#      typical), so the size guard cannot be used here. It is safe for a
+#      different and stronger reason: git forbids a ref-name component that
+#      begins with `.` (git-check-ref-format), and object files are two hex
+#      characters of directory plus 38 of name. So NOTHING git creates can ever
+#      be called `.DS_Store`. Anything with that name inside `.git/` is Finder's.
+#
+#      ⚠️ ADDED 2026-09-10, AFTER IT BROKE `git fetch` AND THE HOOK DID NOT
+#      CATCH IT. `refs/.DS_Store` produced `badRefName: invalid refname format`
+#      and had to be cleared by hand mid-session. The hook had run — and
+#      cleared 120 Icon files on the same commit — while the file that actually
+#      broke the fetch sat one directory away, outside its pattern.
+#
+# Fix the ROOT CAUSE by moving the repo out of Drive's Mirror scope; this only
+# treats the symptom at commit time. See dev/HANDOFF.md's "Still-open infra/ops
+# items". Silent on the happy path — a hook that prints every time gets muted.
 set -euo pipefail
 git_dir=$(git rev-parse --git-common-dir)
-n=$(find "$git_dir" -name 'Icon*' -type f -size 0 2>/dev/null | wc -l | tr -d ' ')
-if [ "$n" != "0" ]; then
-    find "$git_dir" -name 'Icon*' -type f -size 0 -delete 2>/dev/null
-    echo "  [icon-cruft] purged $n zero-byte Finder file(s) from $git_dir" >&2
+
+icons=$(find "$git_dir" -name 'Icon*' -type f -size 0 2>/dev/null | wc -l | tr -d ' ')
+if [ "$icons" != "0" ]; then
+    find "$git_dir" -name 'Icon*' -type f -size 0 -delete 2>/dev/null || true
+fi
+
+dsstore=$(find "$git_dir" -name '.DS_Store' -type f 2>/dev/null | wc -l | tr -d ' ')
+if [ "$dsstore" != "0" ]; then
+    find "$git_dir" -name '.DS_Store' -type f -delete 2>/dev/null || true
+fi
+
+total=$(( icons + dsstore ))
+if [ "$total" != "0" ]; then
+    echo "  [icon-cruft] purged $total Finder file(s) from $git_dir (Icon: $icons, .DS_Store: $dsstore)" >&2
 fi
