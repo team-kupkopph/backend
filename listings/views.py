@@ -75,12 +75,32 @@ def _pet_fields(listing):
             "temperament": listing.temperament or None}
 
 
-def _card(listing):
+def _card(listing, poster=None):
     photo = listing.photos.filter(is_primary=True).first() or listing.photos.first()
-    return {"listing_id": str(listing.listing_id), "pet": _pet_fields(listing),
+    card = {"listing_id": str(listing.listing_id), "pet": _pet_fields(listing),
             "city": listing.city, "status": listing.status,
             "adoption_fee": str(listing.adoption_fee),
             "photo_url": photo.url if photo else None}
+    # The list card carries the poster too, so the Adopt deck can show who is offering the
+    # animal without a detail fetch per card. Passed in from `_poster_infos` (bulk), never
+    # looked up here — a page of 20 cards must not cost 40 queries.
+    if poster is not None:
+        card["poster"] = poster
+    return card
+
+
+def _poster_infos(accounts):
+    """`_poster_info` for a page of listings in two queries instead of two per card."""
+    ids = {a.pk for a in accounts}
+    profiles = {p.account_id: p for p in ShelterProfile.objects.filter(account_id__in=ids)}
+    addrs = {a.account_id: a for a in Address.objects.filter(account_id__in=ids, is_primary=True)}
+    out = {}
+    for account in accounts:
+        profile, addr = profiles.get(account.pk), addrs.get(account.pk)
+        out[account.pk] = {"account_id": str(account.pk),
+                           "name": profile.org_name if profile else account.display_name,
+                           "is_shelter": profile is not None, "city": addr.city if addr else None}
+    return out
 
 
 def _poster_info(account):
@@ -111,13 +131,15 @@ class ListingsView(APIView):
                 return Response({"error": {"code": "auth_required",
                                            "message": "Log in first"}}, status=401)
             qs = (AdoptionListing.objects.filter(status="available", posted_by=request.user)
-                  .order_by("-created_at"))
+                  .select_related("posted_by").order_by("-created_at"))
             page_items, next_page = _paginate(qs, request)
-            return Response({"results": [_card(item) for item in page_items], "next": next_page})
+            posters = _poster_infos({item.posted_by for item in page_items})
+            return Response({"results": [_card(item, posters[item.posted_by_id]) for item in page_items],
+                             "next": next_page})
         # US-N1 · a deleted account's listings leave every public surface at once.
         qs = (AdoptionListing.objects.filter(status="available")
               .exclude(posted_by__status=AccountStatus.DELETED)
-              .filter(public_poster_q()).distinct().order_by("-created_at"))
+              .filter(public_poster_q()).select_related("posted_by").distinct().order_by("-created_at"))
         city = request.query_params.get("city")
         if city:
             qs = qs.filter(city=city)
@@ -125,7 +147,9 @@ class ListingsView(APIView):
         if species:
             qs = qs.filter(species=species)
         page_items, next_page = _paginate(qs, request)
-        return Response({"results": [_card(item) for item in page_items], "next": next_page})
+        posters = _poster_infos({item.posted_by for item in page_items})
+        return Response({"results": [_card(item, posters[item.posted_by_id]) for item in page_items],
+                         "next": next_page})
 
     def post(self, request):
         s = ListingCreateSerializer(data=request.data)
@@ -319,6 +343,13 @@ class ListingInquiriesView(APIView):
         return Response({"inquiry_id": str(inquiry.pk), "status": inquiry.status}, status=201)
 
 
+def _stage_json(key, stage):
+    if stage is None or stage.state == StageState.NOT_STARTED:
+        return {"stage_key": key, "state": StageState.NOT_STARTED, "updated_at": None, "note": None}
+    return {"stage_key": key, "state": stage.state,
+            "updated_at": stage.updated_at.isoformat(), "note": stage.note or None}
+
+
 class MyInquiriesView(APIView):
     """GET /me/inquiries — US-A4. The adopter's own inquiries, with each stage's state,
     so "both sides see the same state" is literal: this is the same data the poster's
@@ -331,14 +362,17 @@ class MyInquiriesView(APIView):
         page_items, next_page = _paginate(qs, request)
         results = []
         for inquiry in page_items:
-            stages = {s.stage_key: s.state for s in inquiry.stages.all()}
+            stages = {s.stage_key: s for s in inquiry.stages.all()}
             results.append({
                 "inquiry_id": str(inquiry.pk),
                 "listing": {"listing_id": str(inquiry.listing_id), "name": inquiry.listing.name,
                            "species": inquiry.listing.species},
                 "status": inquiry.status,
-                "stages": [{"stage_key": key, "state": stages.get(key, StageState.NOT_STARTED)}
-                          for key in AdoptionStageKey],
+                # All six rows exist from the inquiry's first second, so a row's `updated_at`
+                # is only a date the ladder should show once the stage has MOVED — for a
+                # `not_started` stage it is the creation time, and is sent as null. `note`
+                # is null when empty for the same reason: absent, not "".
+                "stages": [_stage_json(key, stages.get(key)) for key in AdoptionStageKey],
             })
         return Response({"results": results, "next": next_page})
 

@@ -43,6 +43,11 @@ def test_list_card_includes_pet_fields_photo_and_fee(client):
     assert card["pet"]["walkable"] is True
     assert card["adoption_fee"] == "300.00"
     assert card["photo_url"] == "https://example.invalid/primary"  # primary wins
+    # The card names its poster, the same shape the detail returns, so the Adopt deck can show
+    # who is offering the animal without a detail fetch per card.
+    assert card["poster"]["account_id"] == str(member.pk)
+    assert card["poster"]["is_shelter"] is False
+    assert card["poster"]["name"] == member.display_name
 
 
 @pytest.mark.django_db
