@@ -154,6 +154,13 @@ def test_my_inquiries_lists_only_my_own_with_stage_states(client):
     stage_states = {s["stage_key"]: s["state"] for s in row["stages"]}
     assert stage_states["inquiry"] == "done"
     assert len(row["stages"]) == 6
+    # The ladder shows WHEN a stage moved. All six rows exist from the first second, so a
+    # not_started stage's row time is its creation time and is sent as null — only a stage
+    # that has moved carries a date.
+    by_key = {s["stage_key"]: s for s in row["stages"]}
+    assert "T" in by_key["inquiry"]["updated_at"]
+    assert by_key["home_check"]["updated_at"] is None
+    assert by_key["home_check"]["note"] is None
 
 
 @pytest.mark.django_db
