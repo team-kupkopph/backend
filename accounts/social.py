@@ -19,9 +19,10 @@ How Google is checked, and why each step is there:
      sets `email_verified_at` on the provider's word, sending no code of our own. So the
      provider's word has to actually say "verified".
 
-Returns {"sub", "email"} — all the view consumes. Raises SocialTokenInvalid for anything that
-does not check out (the view turns it into a 401), SocialNotConfigured when there is nothing
-to check against (503).
+Returns {"sub", "email"} plus "name" when the provider sent one (Google's `name` claim; the
+view uses it as the display_name of a NEW account and never overwrites an existing one).
+Raises SocialTokenInvalid for anything that does not check out (the view turns it into a
+401), SocialNotConfigured when there is nothing to check against (503).
 """
 from django.conf import settings
 
@@ -58,11 +59,15 @@ def _verify_google(id_token):
         raise SocialTokenInvalid("audience")
     if not claims.get("email_verified"):
         raise SocialTokenInvalid("email_unverified")
-    return {"sub": claims["sub"], "email": claims["email"]}
+    out = {"sub": claims["sub"], "email": claims["email"]}
+    if claims.get("name"):
+        out["name"] = claims["name"]
+    return out
 
 
 def verify_token(provider, id_token):
-    """Return the provider's claims, at minimum {"sub", "email"}. Tests monkeypatch either
+    """Return the provider's claims, at minimum {"sub", "email"}, plus "name" when the
+    provider shared one. Tests monkeypatch either
     this or google-auth's `verify_oauth2_token` beneath it."""
     if provider == "google":
         return _verify_google(id_token)

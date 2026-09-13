@@ -100,3 +100,62 @@ def test_view_signs_in_with_a_verified_google_token(client, google_claims):
     assert body["is_new"] is True
     assert body["account"]["email"] == "new.google@example.com"
     assert body["account"]["email_verified_at"] is not None   # the provider's word, no OTP
+
+
+# --- `name` claim → display_name -------------------------------------------------------
+# Google's id_token carries `name` (and given_name / family_name). A new account should be
+# called what the person is called, not the local part of their email; an existing account
+# keeps whatever it already has.
+
+
+def test_google_name_claim_is_returned(google_claims):
+    google_claims(_claims(name="Ana Reyes"))
+    assert social.verify_token("google", "tok")["name"] == "Ana Reyes"
+
+
+def test_google_without_name_claim_returns_no_name(google_claims):
+    google_claims(_claims())
+    assert social.verify_token("google", "tok").get("name") is None
+
+
+def _social(client, **over):
+    return client.post("/api/v1/auth/social/google", {"id_token": "tok"},
+                      content_type="application/json")
+
+
+@pytest.mark.django_db
+def test_new_account_takes_display_name_from_provider(client, google_claims):
+    google_claims(_claims(sub="g-1", email="ana.reyes@example.com", name="Ana Reyes"))
+    res = _social(client)
+    assert res.status_code == 200
+    assert res.json()["is_new"] is True
+    assert res.json()["account"]["display_name"] == "Ana Reyes"
+
+
+@pytest.mark.django_db
+def test_new_account_display_name_is_truncated_to_model_limit(client, google_claims):
+    from accounts.models import Account
+    limit = Account._meta.get_field("display_name").max_length
+    google_claims(_claims(sub="g-2", email="long@example.com", name="N" * (limit + 50)))
+    res = _social(client)
+    assert res.status_code == 200
+    assert res.json()["account"]["display_name"] == "N" * limit
+
+
+@pytest.mark.django_db
+def test_new_account_falls_back_to_email_local_part_without_name(client, google_claims):
+    google_claims(_claims(sub="g-3", email="no.name@example.com"))
+    res = _social(client)
+    assert res.status_code == 200
+    assert res.json()["account"]["display_name"] == "no.name"
+
+
+@pytest.mark.django_db
+def test_existing_account_display_name_is_not_overwritten(client, google_claims):
+    google_claims(_claims(sub="g-4", email="keep@example.com", name="First Name"))
+    assert _social(client).json()["account"]["display_name"] == "First Name"
+    google_claims(_claims(sub="g-4", email="keep@example.com", name="Renamed At Google"))
+    res = _social(client)
+    assert res.status_code == 200
+    assert res.json()["is_new"] is False
+    assert res.json()["account"]["display_name"] == "First Name"

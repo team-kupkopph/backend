@@ -397,9 +397,13 @@ class SocialAuthView(APIView):
                 at = request.data.get("account_type", "personal")
                 if at not in ("personal", "shelter"):
                     at = "personal"
+                # The provider's `name` claim, if it sent one, else the email's local part.
+                # Only on creation — a later sign-in never renames an existing account.
+                limit = Account._meta.get_field("display_name").max_length
+                display_name = (claims.get("name") or email.split("@")[0])[:limit]
                 account = Account.objects.create_account(
                     account_type=at,
-                    email=email, display_name=email.split("@")[0], password=None)
+                    email=email, display_name=display_name, password=None)
                 account.email_verified_at = timezone.now()
                 account.save(update_fields=["email_verified_at"])
                 is_new = True
