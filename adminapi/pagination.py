@@ -8,6 +8,7 @@ insertions cannot make a row disappear from the page after it.
 import base64
 import json
 
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 
 PAGE_SIZE = 25
@@ -45,14 +46,25 @@ def paginate(queryset, cursor_value, key_fields, page_size=PAGE_SIZE):
 
         (a, b) > (x, y)  ==  a > x  OR  (a = x AND b > y)
     """
-    if cursor_value is not None:
+    # ⚠️ The cursor is client input. `decode_cursor` already turns undecodable bytes into
+    # "start from the top" and says why; the same has to hold for a cursor that decodes to
+    # the wrong SHAPE (not a list, or not one value per key field) or to values the fields
+    # refuse (`submitted_at__gt="garbage"` is rejected by Django at `.filter()` time, not at
+    # query time). Before this guard each of those was a 500 on the queue endpoint.
+    if isinstance(cursor_value, list) and len(cursor_value) == len(key_fields):
         predicate = Q()
         for i, field in enumerate(key_fields):
             clause = Q(**{f"{field}__gt": cursor_value[i]})
             for earlier, value in zip(key_fields[:i], cursor_value[:i], strict=True):
                 clause &= Q(**{earlier: value})
             predicate |= clause
-        queryset = queryset.filter(predicate)
+        try:
+            queryset = queryset.filter(predicate)
+        except (ValidationError, ValueError, TypeError):
+            # DateTimeField raises ValidationError, IntegerField ValueError, and a value of
+            # the wrong Python type TypeError; all three mean "not a position in this
+            # ordering", and the answer is the first page, not an error.
+            pass
 
     rows = list(queryset[: page_size + 1])
     has_more = len(rows) > page_size
