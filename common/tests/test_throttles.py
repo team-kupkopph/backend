@@ -242,3 +242,66 @@ def test_otp_resend_throttle_is_identical_for_a_real_and_an_unknown_email(client
         body.pop("request_id", None)
         seen.append(body)
     assert seen[0] == seen[1]
+
+
+# ── Malformed identifiers never 500 (test-plan-auth S-N11/S-N12) ─────────────────────
+# `IdentifierThrottle.get_cache_key` runs BEFORE the serializer, on the raw body. A
+# non-string `email` (an int, a `{"$ne": null}` probe) or a non-object body used to raise
+# AttributeError there — a 500 on four public endpoints from a malformed request.
+_IDENTIFIER_ENDPOINTS = [
+    "/api/v1/auth/login",
+    "/api/v1/auth/password/forgot",
+    "/api/v1/auth/password/code/check",
+    "/api/v1/auth/email/resend",
+]
+
+_MALFORMED_BODIES = [
+    pytest.param({"email": 123, "password": "x", "code": "1"}, id="int-email"),
+    pytest.param({"email": {"$ne": None}, "password": "x", "code": "1"}, id="dict-email"),
+    pytest.param({"email": ["a@example.com"], "password": "x", "code": "1"}, id="list-email"),
+    pytest.param(["a@example.com"], id="list-body"),
+    # Pre-encoded so the test client sends a JSON string, not an unparseable raw body.
+    pytest.param('"a@example.com"', id="string-body"),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("path", _IDENTIFIER_ENDPOINTS)
+@pytest.mark.parametrize("body", _MALFORMED_BODIES)
+def test_malformed_identifier_is_a_client_error_never_a_500(client, path, body):
+    res = client.post(path, body, content_type="application/json")
+    assert res.status_code in (400, 401), (res.status_code, res.content)
+    assert res.json()["error"]["code"] in ("invalid", "invalid_credentials")
+
+
+@pytest.mark.django_db
+def test_login_answers_400_invalid_for_a_non_object_body(client):
+    res = client.post("/api/v1/auth/login", ["a@example.com"], content_type="application/json")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "invalid"
+
+
+@pytest.mark.django_db
+def test_login_answers_401_for_a_non_string_email(client):
+    res = client.post("/api/v1/auth/login", {"email": 123, "password": "x"},
+                      content_type="application/json")
+    assert res.status_code == 401
+    assert res.json()["error"]["code"] == "invalid_credentials"
+
+
+@pytest.mark.django_db
+def test_non_string_identifier_does_not_consume_a_throttle_bucket(client):
+    """A non-string identifier means "no identifier" — the identifier throttle must not
+    apply (the per-IP sibling still does), exactly as the class docstring promises."""
+    from common.throttles import LoginIdentifierThrottle
+
+    class _Req:
+        def __init__(self, data):
+            self.data = data
+
+    t = LoginIdentifierThrottle()
+    assert t.get_cache_key(_Req({"email": 123}), None) is None
+    assert t.get_cache_key(_Req({"email": {"$ne": None}}), None) is None
+    assert t.get_cache_key(_Req(["a@example.com"]), None) is None
+    assert t.get_cache_key(_Req({"email": " A@Example.com "}), None) == \
+        t.get_cache_key(_Req({"email": "a@example.com"}), None)

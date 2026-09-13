@@ -137,6 +137,12 @@ class LoginView(APIView):
     throttle_classes = [LoginIpThrottle, LoginIdentifierThrottle]
 
     def post(self, request):
+        # No serializer here (a 400 naming the missing field would be a different answer
+        # for "no email" vs "wrong email"), so the object-ness check the serializer would
+        # have done is ours: a JSON array or string body is a 400, not a 500.
+        if not isinstance(request.data, dict):
+            return Response({"error": {"code": "invalid",
+                                       "message": "Invalid input"}}, status=400)
         email = request.data.get("email", "")
         password = request.data.get("password", "")
         account = Account.objects.filter(email=email).first()
