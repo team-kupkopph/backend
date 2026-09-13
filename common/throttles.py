@@ -25,7 +25,16 @@ class IdentifierThrottle(SimpleRateThrottle):
     field = "email"
 
     def get_cache_key(self, request, view):
-        identifier = (request.data.get(self.field) or "").strip().lower()
+        # This runs BEFORE the serializer, on the raw body — so a list body, or a non-string
+        # `email` (an int, a `{"$ne": null}` probe), reaches here unvalidated. Anything that
+        # isn't a string is "no identifier": the per-IP sibling still applies, and the view's
+        # own validation answers 400/401. Coercing with str() instead would let a probe pick
+        # its own bucket, and crashing here was a 500 on four public endpoints.
+        data = request.data
+        identifier = data.get(self.field) if isinstance(data, dict) else None
+        if not isinstance(identifier, str):
+            return None
+        identifier = identifier.strip().lower()
         if not identifier:
             return None
         return self.cache_format % {"scope": self.scope, "ident": identifier}
