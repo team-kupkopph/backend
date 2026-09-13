@@ -2,9 +2,12 @@
 (read from settings, not hardcoded) so a rate change in config/settings.py is caught
 here rather than silently drifting from what's tested.
 """
+import time
+
 import pytest
 from django.conf import settings
 from django.contrib.gis.geos import Point
+from rest_framework.throttling import SimpleRateThrottle
 
 from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
@@ -18,6 +21,22 @@ def _rate_count(scope):
 
 def _hdr(acc):
     return {"HTTP_AUTHORIZATION": f"Bearer {tokens_for(acc)['access']}"}
+
+
+@pytest.fixture
+def frozen_throttle_clock(monkeypatch):
+    """Pin the throttles' clock for a test that compares two `retry_after` values.
+
+    `retry_after` is `window - (now - first_hit)`, read off DRF's `SimpleRateThrottle.timer`
+    (its designed hook for exactly this). Left on the wall clock, the two sides of a
+    real-vs-fake comparison are computed at different instants, and anything that makes the
+    real side slower — the password hasher, or an OTP sender that actually reaches the
+    provider when a key is in the local .env — can carry it across a second boundary:
+    3599 != 3600, a failure that says nothing about enumeration. Frozen, both sides see
+    the same instant and the comparison is exact.
+    """
+    frozen_at = time.time()
+    monkeypatch.setattr(SimpleRateThrottle, "timer", staticmethod(lambda: frozen_at))
 
 
 def _assert_throttled_shape(res):
@@ -200,9 +219,13 @@ def test_otp_resend_is_throttled_per_email_not_only_per_ip(client):
 
 
 @pytest.mark.django_db
-def test_otp_resend_throttle_is_identical_for_a_real_and_an_unknown_email(client):
+def test_otp_resend_throttle_is_identical_for_a_real_and_an_unknown_email(client, frozen_throttle_clock):
     """§12.1 · the resend endpoint answers 202 either way; the throttle must not undo
-    that by behaving differently for an address that exists."""
+    that by behaving differently for an address that exists.
+
+    The whole body is compared, `retry_after` included — a different window per address
+    would be enumeration too — so the clock is frozen (see the fixture) to keep that
+    comparison about the address and not about how long the two loops took."""
     AccountFactory(email="real2@example.com", email_verified_at=None)
     limit = _rate_count("otp_resend_identifier")
     seen = []
