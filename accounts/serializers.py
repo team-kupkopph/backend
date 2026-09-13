@@ -64,7 +64,14 @@ def me_repr(account):
     if profile is not None:
         vr = account.verifications.filter(type="shelter_org").order_by("-submitted_at").first()
         shelter = {"tier": profile.tier, "verification_status": vr.status if vr else None}
+    # The GATE, served — not re-derived by the client. `shelter.verification_status` above is
+    # the LATEST request (what a dashboard displays: pending / needs_info / rejected), while
+    # whether this account's listings are SHOWN is "any approved" (decision 16, public_poster_q).
+    # A tier-1 shelter mid-upgrade has both at once; two mobile screens read the latest as the
+    # gate and told an approved shelter its listings would not appear. One predicate, one place.
+    from listings.visibility import account_is_verified_rescuer
     return {**account_repr(account), "capabilities": caps, "shelter": shelter,
+            "is_verified_rescuer": account_is_verified_rescuer(account),
             "settings": {"marketing_emails": s.marketing_emails,
                          "approximate_location": s.approximate_location,
                          "masked_contact": s.masked_contact, "push_enabled": s.push_enabled}}
