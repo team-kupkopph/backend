@@ -75,6 +75,10 @@ def anonymize_account(account, now=None):
     # A postal address is PII with no welfare value once the person is gone — unlike a
     # rescue outcome, nothing downstream is made incomplete by removing it.
     Address.objects.filter(account=account).delete()
+    # Same reasoning for the Adopt deck's saved / hidden listings: a preference is about the
+    # person, and no animal's record depends on it.
+    from listings.models import ListingPreference
+    ListingPreference.objects.filter(account=account).delete()
 
     return account
 

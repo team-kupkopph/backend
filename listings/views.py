@@ -15,9 +15,11 @@ from listings.models import (
     AdoptionStage,
     AdoptionStageKey,
     InquiryStatus,
+    ListingPreference,
     ListingStatus,
     Pet,
     PetPhoto,
+    PreferenceKind,
     StageState,
 )
 from listings.permissions import IsVerifiedMember
@@ -456,3 +458,46 @@ class PlacementDecisionView(APIView):
             from common.analytics import emit
             emit("inquiry_decided", outcome="declined")
             return Response(status=200)
+
+
+class ShortlistView(APIView):
+    """GET /me/shortlist — the adopter's saved and hidden listing ids, newest first. Ids only:
+    the deck intersects them with the feed it already fetched, and a listing that has since
+    gone is simply not in the feed. (The rows themselves go with the listing — CASCADE.)"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        rows = (ListingPreference.objects.filter(account=request.user)
+                .order_by("-updated_at").values_list("listing_id", "kind"))
+        out = {"saved": [], "hidden": []}
+        for listing_id, kind in rows:
+            out[kind].append(str(listing_id))
+        return Response(out)
+
+
+class ShortlistItemView(APIView):
+    """PUT /me/shortlist/{listing_id} {"kind": "saved"|"hidden"} · DELETE /me/shortlist/{listing_id}.
+
+    Both idempotent, on purpose: the client writes optimistically and retries after a dead
+    spot, so a repeated PUT must land on the same row and a repeated DELETE must be a 204,
+    not a 404. PUT with the other kind replaces the row — a save after a hide is one row,
+    which is the deck's own rule. The only gate is that the listing exists: a preference is
+    not a read of the listing, and refusing a hide on a listing the caller cannot see would
+    say that it exists."""
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, listing_id):
+        kind = request.data.get("kind")
+        if kind not in PreferenceKind.values:
+            return Response({"error": {"code": "invalid", "message": "kind must be saved or hidden"}},
+                            status=422)
+        if not AdoptionListing.objects.filter(pk=listing_id).exists():
+            return Response({"error": {"code": "not_found", "message": "No such listing"}}, status=404)
+        row, _ = ListingPreference.objects.update_or_create(
+            account=request.user, listing_id=listing_id, defaults={"kind": kind})
+        return Response({"listing_id": str(listing_id), "kind": row.kind,
+                         "updated_at": row.updated_at.isoformat()})
+
+    def delete(self, request, listing_id):
+        ListingPreference.objects.filter(account=request.user, listing_id=listing_id).delete()
+        return Response(status=204)
