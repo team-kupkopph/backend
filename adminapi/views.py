@@ -18,13 +18,12 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from adminapi.auth import (
-    STAFF_REFRESH_LIFETIME,
     StaffAuthError,
     confirm_enrolment,
-    provision_device,
-    start_enrolment,
     issue_challenge,
+    provision_device,
     resolve_challenge,
+    start_enrolment,
     start_login,
     tokens_for_staff,
     verify_totp,

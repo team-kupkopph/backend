@@ -1,7 +1,7 @@
 import pytest
 from django.contrib.auth.models import User
-from django_otp.plugins.otp_totp.models import TOTPDevice
 from django_otp.oath import TOTP
+from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from accounts.models import Account, StaffProfile
 

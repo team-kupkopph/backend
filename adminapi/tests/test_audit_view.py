@@ -2,7 +2,6 @@
 import pytest
 from django.contrib.auth.models import Group
 
-from adminapi.models import AdminAuditLog
 from adminapi.tests.conftest import full_signin, login
 
 

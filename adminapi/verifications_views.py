@@ -16,11 +16,11 @@ from adminapi.permissions import IsStaffJWT, StaffJWTAuthentication, admin_accou
 from adminapi.serializers import detail, queue_row
 from verifications.models import (
     VerificationAccessLog,
+    VerificationDocument,
     VerificationRequest,
     VerificationStatus,
     VerificationType,
 )
-from verifications.models import VerificationDocument
 from verifications.review import (
     ReviewError,
     approve_request,

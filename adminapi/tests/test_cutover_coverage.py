@@ -193,7 +193,8 @@ def test_the_story_hiding_behaviour_survives_the_admin():
     """
     import inspect
 
-    from moderation import actions, admin as moderation_admin
+    from moderation import actions
+    from moderation import admin as moderation_admin
 
     assert hasattr(actions, "resolve_flag"), "the shared decision service is gone"
     assert "StoryStatus.HIDDEN" in inspect.getsource(actions.resolve_flag), (

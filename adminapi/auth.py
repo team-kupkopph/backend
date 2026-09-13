@@ -18,6 +18,7 @@ rows are reused unchanged; only the admin-site gate is replaced.
 from datetime import timedelta
 
 from django.contrib.auth import authenticate
+from django.core import signing
 from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -121,8 +122,6 @@ def tokens_for_staff(user):
 #
 # If a shared cache (Redis) is ever configured, make the challenge one-shot here too and
 # delete this note.
-from django.core import signing
-
 _CHALLENGE_SALT = "adminapi.staff-login-challenge"
 
 
@@ -135,10 +134,13 @@ def resolve_challenge(challenge: str):
     try:
         data = signing.loads(challenge, salt=_CHALLENGE_SALT,
                              max_age=int(CHALLENGE_LIFETIME.total_seconds()))
-    except signing.SignatureExpired:
-        raise StaffAuthError("challenge_expired")
+    except signing.SignatureExpired as err:
+        # Chained: `SignatureExpired` reports how stale the challenge was, which is the one
+        # fact worth having when a lifetime or clock-skew problem is being chased in logs.
+        raise StaffAuthError("challenge_expired") from err
     except signing.BadSignature:
-        raise StaffAuthError("invalid_challenge")
+        # Not chained: a bad signature is a bad signature, and the translation is the point.
+        raise StaffAuthError("invalid_challenge") from None
     return data["uid"]
 
 
@@ -186,10 +188,13 @@ def provision_device(challenge: str):
     try:
         data = signing.loads(challenge, salt=_ENROL_SALT,
                              max_age=int(CHALLENGE_LIFETIME.total_seconds()))
-    except signing.SignatureExpired:
-        raise StaffAuthError("challenge_expired")
+    except signing.SignatureExpired as err:
+        # Chained: `SignatureExpired` reports how stale the challenge was, which is the one
+        # fact worth having when a lifetime or clock-skew problem is being chased in logs.
+        raise StaffAuthError("challenge_expired") from err
     except signing.BadSignature:
-        raise StaffAuthError("invalid_challenge")
+        # Not chained: a bad signature is a bad signature, and the translation is the point.
+        raise StaffAuthError("invalid_challenge") from None
 
     from django.contrib.auth.models import User
     user = User.objects.filter(id=data["uid"], is_active=True, is_staff=True).first()

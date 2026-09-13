@@ -15,7 +15,7 @@ from django.utils.html import format_html_join
 from accounts.staff import reviewer_account
 from common.storage import signed_get_url
 from shelter.models import ShelterProfile
-from verifications.models import VerificationAccessLog, VerificationRequest
+from verifications.models import VerificationAccessLog
 from verifications.review import (
     ReviewError,
     approve_request,

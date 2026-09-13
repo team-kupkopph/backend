@@ -4,7 +4,6 @@ from django.db.models import Exists, OuterRef, Q
 from rest_framework.response import Response
 
 from adminapi.pagination import decode_cursor, paginate
-from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
 from listings.models import AdoptionListing
 from shelter.models import DonationQr, ShelterProfile, ShelterTier

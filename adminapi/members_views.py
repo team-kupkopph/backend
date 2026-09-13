@@ -6,7 +6,6 @@ from rest_framework.response import Response
 
 from accounts.models import Account, AccountStatus, AccountType
 from adminapi.pagination import decode_cursor, paginate
-from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
 from moderation.models import ModerationFlag
 from verifications.models import AccountCapability, VerificationRequest
