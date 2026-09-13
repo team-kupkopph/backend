@@ -73,9 +73,11 @@ def test_social_admin_account_type_is_ignored(client, fake_verify):
 
 
 @pytest.mark.django_db
-def test_unwired_provider_returns_clean_503_not_500(client):
-    """The verification seam is deliberately unimplemented (blocked on S0-05/S0-06). It must
-    fail as a typed 503 the client can explain, never as an opaque 500."""
+def test_unwired_provider_returns_clean_503_not_500(client, settings):
+    """A provider with nothing to verify against must fail as a typed 503 the client can
+    explain, never as an opaque 500. Google is wired (S0-06), so unconfigure it here rather
+    than depend on the .env — a real GOOGLE_OAUTH_CLIENT_IDS would turn this into a 401."""
+    settings.GOOGLE_OAUTH_CLIENT_IDS = []
     res = client.post("/api/v1/auth/social/google", {"id_token": "x"},
                       content_type="application/json")
     assert res.status_code == 503
