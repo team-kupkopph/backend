@@ -66,6 +66,14 @@ omit = [
     "*/factories.py",
     "*/apps.py",
     "*/__init__.py",
+    # US-X2 (2026-09-06) took the /admin/ route away — it 404s, and adminapi/tests/
+    # test_admin_route_gone.py holds it there. The ModelAdmin classes were KEPT, unregistered,
+    # because reverting that one commit is the documented rollback. So an `admin.py` here is
+    # code no request can reach and no test should exercise; measuring it only pulled
+    # `verifications` from 96.55 to 78.72 the day its admin tests were (rightly) deleted —
+    # unseen for a week because the Lint step failed first. If the admin is ever re-registered,
+    # remove this line in the same commit.
+    "*/admin.py",
 ]
 
 [tool.coverage.report]
