@@ -46,9 +46,9 @@ from django.conf import settings  # noqa: E402
 from django.utils import timezone  # noqa: E402
 
 from accounts.models import Account  # noqa: E402
-from shelter.models import ShelterProfile  # noqa: E402
-from volunteer.models import VolunteerShift  # noqa: E402
+from shelter.models import OrgType, ShelterProfile, ShelterTier  # noqa: E402
 from verifications.models import AccountCapability  # noqa: E402
+from volunteer.models import VolunteerShift  # noqa: E402
 
 OWNER = "e2e.owner@kupkop.invalid"
 SHELTER = "e2e.shelter@kupkop.invalid"
@@ -93,8 +93,15 @@ def main():
         owner.save(update_fields=["phone", "phone_verified_at"])
 
     shelter, shelter_pw = ensure(SHELTER, "shelter", "E2E shelter")
-    ShelterProfile.objects.get_or_create(
-        account=shelter, defaults={"org_name": "E2E Test Shelter", "tier": 1})
+    # update_or_create, not get_or_create: an earlier version wrote `tier=1`, which the ORM
+    # accepts but nothing tier-aware recognises (`/me` served "1" to a mobile `ShelterTier`
+    # of community_rescue | registered_ngo), and get_or_create would have left that row as
+    # it was. The tier and org_type are re-asserted on every run so the profile is always
+    # one `full_clean()` accepts.
+    ShelterProfile.objects.update_or_create(
+        account=shelter,
+        defaults={"org_name": "E2E Test Shelter", "org_type": OrgType.SHELTER,
+                  "tier": ShelterTier.COMMUNITY_RESCUE})
 
     # An OPEN shift in the future, because 30-volunteer-signup browses for one and there is
     # nothing to sign up for otherwise. The flow failing on an empty list is technically
