@@ -64,7 +64,9 @@ def test_unknown_email_and_wrong_password_are_indistinguishable(client, staffer)
     assert unknown.status_code == wrong.status_code == 401
     # `request_id` differs per request by design (observability) and carries no information
     # about the account, so it is excluded rather than the comparison being loosened.
-    strip = lambda r: {k: v for k, v in r.json()["error"].items() if k != "request_id"}
+    def strip(r):
+        return {k: v for k, v in r.json()["error"].items() if k != "request_id"}
+
     assert strip(unknown) == strip(wrong) == {"code": "invalid_credentials"}
 
 

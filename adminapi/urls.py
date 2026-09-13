@@ -1,21 +1,13 @@
 from django.urls import path
 
+from adminapi.audit_views import AuditLogView
+from adminapi.browser_views import ModelListView, ModelRowsView, ModelRowView
 from adminapi.dashboard_views import DashboardView
 from adminapi.members_views import (
     MemberDetailView,
     MemberQueueView,
     ReinstateView,
     SuspendView,
-)
-from adminapi.audit_views import AuditLogView
-from adminapi.browser_views import ModelListView, ModelRowView, ModelRowsView
-from adminapi.staff_views import StaffDetailView, StaffListView, StaffResetTotpView
-from adminapi.shelters_views import (
-    DonationQrQueueView,
-    ShelterDetailView,
-    ShelterQueueView,
-    UnverifyQrView,
-    VerifyQrView,
 )
 from adminapi.moderation_views import (
     FlagActionView,
@@ -24,6 +16,14 @@ from adminapi.moderation_views import (
     FlagQueueView,
     FlagReviewView,
 )
+from adminapi.shelters_views import (
+    DonationQrQueueView,
+    ShelterDetailView,
+    ShelterQueueView,
+    UnverifyQrView,
+    VerifyQrView,
+)
+from adminapi.staff_views import StaffDetailView, StaffListView, StaffResetTotpView
 from adminapi.verifications_views import (
     ApproveView,
     NeedsInfoView,

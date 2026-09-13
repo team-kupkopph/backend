@@ -49,7 +49,7 @@ def paginate(queryset, cursor_value, key_fields, page_size=PAGE_SIZE):
         predicate = Q()
         for i, field in enumerate(key_fields):
             clause = Q(**{f"{field}__gt": cursor_value[i]})
-            for earlier, value in zip(key_fields[:i], cursor_value[:i]):
+            for earlier, value in zip(key_fields[:i], cursor_value[:i], strict=True):
                 clause &= Q(**{earlier: value})
             predicate |= clause
         queryset = queryset.filter(predicate)

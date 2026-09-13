@@ -4,11 +4,10 @@ via the staff bridge (accounts.staff.reviewer_account), never hand-edited.
 """
 from django.contrib import admin, messages
 from django.db.models import Case, IntegerField, Value, When
-from django.utils import timezone
 
 from accounts.staff import reviewer_account
 from moderation.actions import resolve_flag
-from moderation.models import FlagStatus, ModerationFlag
+from moderation.models import FlagStatus
 
 
 # ⚠️ UNREGISTERED by US-X2 (2026-09-06). Replaced by the console: /moderation

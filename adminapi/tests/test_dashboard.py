@@ -1,5 +1,4 @@
 import pytest
-from django.utils import timezone
 
 from accounts.factories import AccountFactory
 from adminapi.tests.conftest import full_signin

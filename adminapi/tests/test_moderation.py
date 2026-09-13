@@ -6,7 +6,7 @@ import pytest
 from accounts.factories import AccountFactory
 from adminapi.tests.conftest import full_signin
 from community.models import StoryPost, StoryStatus
-from moderation.models import FlagStatus, ModerationFlag
+from moderation.models import ModerationFlag
 
 
 @pytest.fixture

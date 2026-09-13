@@ -1,9 +1,9 @@
 """US-B2 · token custody, backend half — lifetime, rotation, and identity isolation."""
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from django.utils import timezone
-from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
@@ -13,7 +13,7 @@ from adminapi.tests.conftest import full_signin
 
 def _exp(token_str, cls):
     """django.utils.timezone.utc was removed in Django 5 — use datetime's own."""
-    return datetime.fromtimestamp(cls(token_str)["exp"], tz=dt_timezone.utc)
+    return datetime.fromtimestamp(cls(token_str)["exp"], tz=UTC)
 
 
 @pytest.mark.django_db
@@ -22,7 +22,7 @@ def test_staff_refresh_lives_eight_hours_not_thirty_days(client, staffer):
     credential that reaches government IDs. One stolen refresh must not grant a month of
     standing platform-admin access."""
     body = full_signin(client, staffer)
-    life = _exp(body["refresh"], RefreshToken) - datetime.now(dt_timezone.utc)
+    life = _exp(body["refresh"], RefreshToken) - datetime.now(UTC)
     assert STAFF_REFRESH_LIFETIME == timedelta(hours=8)
     assert timedelta(hours=7, minutes=55) < life <= timedelta(hours=8)
 
@@ -32,7 +32,7 @@ def test_the_mobile_refresh_is_still_thirty_days(client):
     """The 8-hour rule is a per-token override, NOT a global edit. Changing the global would
     silently log out every phone, so this pins the other side of that boundary."""
     account = AccountFactory(email="owner@example.com", password="pw", email_verified_at=timezone.now())
-    life = _exp(tokens_for(account)["refresh"], RefreshToken) - datetime.now(dt_timezone.utc)
+    life = _exp(tokens_for(account)["refresh"], RefreshToken) - datetime.now(UTC)
     assert life > timedelta(days=29)
 
 

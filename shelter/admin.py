@@ -7,8 +7,6 @@ creates these rows is the Sprint-4 donations UI — hand-add is disabled.
 """
 from django.contrib import admin, messages
 
-from shelter.models import DonationQr
-
 
 # ⚠️ UNREGISTERED by US-X2 (2026-09-06). Replaced by the console: /donations
 # (Sprint 10 US-Q1–Q2). The class is KEPT, not deleted — it is the cheapest possible rollback,

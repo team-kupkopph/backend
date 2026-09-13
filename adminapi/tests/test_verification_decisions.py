@@ -114,6 +114,7 @@ def test_two_reviewers_deciding_at_once_produce_one_decision(client, staffer):
     the applicant gets two notifications and the audit trail records one decision.
     """
     import threading
+
     from django.db import connection
 
     token = full_signin(client, staffer)["access"]

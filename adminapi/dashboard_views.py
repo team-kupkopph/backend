@@ -6,7 +6,7 @@ from accounts.models import Account, AccountStatus
 from adminapi.verifications_views import StaffView
 from moderation.models import FlagStatus, ModerationFlag
 from shelter.models import DonationQr
-from verifications.models import VerificationStatus, VerificationRequest
+from verifications.models import VerificationRequest, VerificationStatus
 
 
 class DashboardView(StaffView):

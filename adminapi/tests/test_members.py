@@ -5,7 +5,7 @@ import pytest
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
-from accounts.models import Account, AccountStatus
+from accounts.models import Account
 from accounts.tokens import tokens_for
 from adminapi.tests.conftest import full_signin
 from moderation.models import ModerationFlag
