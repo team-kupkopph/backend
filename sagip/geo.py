@@ -8,8 +8,11 @@ the launch scope. Coordinates are (lat, lng), approximate city centres.
 """
 import math
 
+from common.cities import canonical_city
+
 EARTH_RADIUS_M = 6371000
 COARSEN_CELL_SIZE_M = 500
+
 CITY_CENTROIDS = {
     "Marikina": (14.6507, 121.1029),
     "Pasig": (14.5764, 121.0851),
@@ -25,12 +28,18 @@ CITY_CENTROIDS = {
 
 
 def centroid_for(city):
-    """(lat, lng) for a known city, case-insensitively; None if unknown or unset."""
-    if not city:
+    """(lat, lng) for a known city; None if unknown or unset.
+
+    Matching goes through `canonical_city` so the mobile picker's "Marikina City" resolves
+    to the "Marikina" key here, and "Pasig City" to "Pasig". Before that, both returned None
+    and StrayReportMapView read the None as "no known city" and answered with zero pins —
+    see common/cities.py for why the two vocabularies disagree in the first place.
+    """
+    key = canonical_city(city)
+    if not key:
         return None
-    key = city.strip().lower()
     for name, latlng in CITY_CENTROIDS.items():
-        if name.lower() == key:
+        if canonical_city(name) == key:
             return latlng
     return None
 

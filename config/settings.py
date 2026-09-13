@@ -181,6 +181,11 @@ REST_FRAMEWORK = {
         "staff_otp_ip": "20/hour",
         "signup_ip": "10/hour",
         "password_forgot_ip": "20/hour", "password_forgot_identifier": "10/hour",
+        # The reset code's pre-check. Its own bucket, NOT password_forgot's: sharing would
+        # mean a user who mistypes a code several times can no longer request a new one,
+        # which is precisely when they need to. Per-code guessing is already capped at
+        # OTP_MAX_ATTEMPTS; these rates bound grinding across many codes.
+        "password_code_check_ip": "30/hour", "password_code_check_identifier": "15/hour",
         "report_create": "20/day", "offer_create": "20/hour",
         "moderation_flag_create": "20/day",
         "export_request": "3/day",

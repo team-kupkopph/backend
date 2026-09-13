@@ -146,7 +146,7 @@ Errors use a single envelope: `{ "error": { "code": "snake_case", "message": "..
 
 | Method · Path | Auth | Purpose / notes |
 |---|---|---|
-| `POST /auth/signup` | Public | `{account_type, display_name, email, password}` → `201 {account_id, email, next:"verify_email"}`. **`account_type` restricted to `personal`/`shelter`** (never `admin`). Issues an email OTP. `409 email_taken` on a duplicate. |
+| `POST /auth/signup` | Public | `{account_type, display_name, email, password}` → `201 {account_id, email, next:"verify_email"}`. **`account_type` restricted to `personal`/`shelter`** (never `admin`). Issues an email OTP. `409 email_taken` on a duplicate — but a duplicate that is an **unverified** account (someone who backed out of the OTP screen) returns `409 email_unverified` and **re-sends the code**, so the client can resume verification instead of dead-ending. |
 | `POST /auth/email/verify` | Public | `{email, code}` → `200 {access, refresh, account}`, sets `email_verified_at`. `400 code_invalid {attempts_left}` · `410 code_expired` · `423 code_locked`. |
 | `POST /auth/email/resend` | Public · throttled | `{email}` → `202 {}` (generic). Throttled 1/min + 5/hour. |
 | `POST /auth/login` | Public | `{email, password}` → `200 {access, refresh, account}`. Wrong password **and** unknown email both return the **same** generic `401 invalid_credentials`. Correct password on an unverified account → `403 email_unverified` (and re-sends the code). |
@@ -210,8 +210,10 @@ cross-project schema reference. Ten tables live here (all UUID PKs):
 
 - **Email identity**, and **no JWT is issued before the email is verified** (only `/auth/email/verify`
   and `/auth/login` mint tokens).
-- **Enumeration asymmetry (deliberate):** `signup` **may** reveal a taken email (`409`); `login`,
-  `password/forgot`, and email-verify stay **generic**. Do not "fix" them to be symmetric.
+- **Enumeration asymmetry (deliberate):** `signup` **may** reveal a taken email (`409`), and may
+  distinguish a taken-but-unverified one (`email_unverified`, to route its owner back into
+  verification); `login`, `password/forgot`, and email-verify stay **generic**. Do not "fix" them
+  to be symmetric.
 - **OTP:** 6-digit, stored **hashed** (never raw, never logged in prod), 5-minute TTL, 5-attempt lock,
   resend throttled (1/min + 5/hour).
 - **Session revocation** uses `account.sessions_revoked_at`: the JWT auth layer *and* the refresh

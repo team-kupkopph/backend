@@ -21,7 +21,7 @@ from accounts.serializers import (
 )
 from accounts.tokens import tokens_for
 from common import otp
-from common.otp import CodeExpired, CodeInvalid, CodeLocked, issue_code, verify_code
+from common.otp import CodeExpired, CodeInvalid, CodeLocked, check_code, issue_code, verify_code
 from common.throttles import (
     ExportRequestThrottle,
     LoginIdentifierThrottle,
@@ -29,6 +29,8 @@ from common.throttles import (
     OtpResendHourThrottle,
     OtpResendIdentifierThrottle,
     OtpResendMinuteThrottle,
+    PasswordCodeCheckIdentifierThrottle,
+    PasswordCodeCheckIpThrottle,
     PasswordForgotIdentifierThrottle,
     PasswordForgotIpThrottle,
     SignupIpThrottle,
@@ -44,9 +46,7 @@ class SignupView(APIView):
         if not serializer.is_valid():
             email_errors = serializer.errors.get("email")
             if email_errors and getattr(email_errors[0], "code", None) == "email_taken":
-                return Response(
-                    {"error": {"code": "email_taken", "message": "Email already in use",
-                               "field": "email"}}, status=status.HTTP_409_CONFLICT)
+                return self._email_conflict(request.data.get("email", ""))
             return Response({"error": {"code": "invalid", "message": "Invalid input",
                                        "details": serializer.errors}}, status=status.HTTP_400_BAD_REQUEST)
         data = serializer.validated_data
@@ -56,12 +56,30 @@ class SignupView(APIView):
                 password=data["password"], display_name=data["display_name"],
                 terms_consent_version=data.get("consent_version") or None)
         except IntegrityError:
-            return Response(
-                {"error": {"code": "email_taken", "message": "Email already in use",
-                           "field": "email"}}, status=status.HTTP_409_CONFLICT)
+            return self._email_conflict(data["email"])
         otp.issue_code(account, channel="email", purpose="signup")
         return Response({"account_id": str(account.account_id), "email": account.email,
                          "next": "verify_email"}, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _email_conflict(email):
+        """The address already has an account. If that account is the person's own
+        unverified signup (they backed out of the OTP screen and came round again),
+        re-arm the code and tell the client to resume verification — mirroring
+        LoginView's unverified branch — rather than dead-ending them on "already
+        registered" with nowhere to go. A verified (or deleted) account keeps the
+        generic `email_taken`: §12.1 lets signup reveal existence and nothing more."""
+        account = Account.objects.filter(email=email).first()
+        if (account is not None and account.status != AccountStatus.DELETED
+                and account.email_verified_at is None):
+            otp.issue_code(account, channel="email", purpose="signup")
+            return Response(
+                {"error": {"code": "email_unverified",
+                           "message": "Verify your email", "field": "email"}},
+                status=status.HTTP_409_CONFLICT)
+        return Response(
+            {"error": {"code": "email_taken", "message": "Email already in use",
+                       "field": "email"}}, status=status.HTTP_409_CONFLICT)
 
 
 def _otp_error_response(exc):
@@ -185,6 +203,38 @@ class PasswordForgotView(APIView):
         if account is not None:
             issue_code(account, channel="email", purpose="reset")
         return Response({})   # always generic
+
+
+class PasswordCodeCheckView(APIView):
+    """Answer "is this reset code good?" without spending it.
+
+    THE BUG. Reset is three screens — email, code, new password — but the code was only ever
+    checked by `/auth/password/reset`, which needs the password too. So a mistyped or expired
+    code was reported only after the user had chosen and typed a new password, and reported on
+    the wrong screen. This lets the code step answer for itself.
+
+    ⚠️ It is NOT a cheaper way to guess. A wrong code costs an attempt against the same
+    `max_attempts` on the same row as `/reset`, the two share `_validate` so they cannot
+    diverge, and this carries its own IP+identifier throttle pair. Grinding codes was already
+    possible by posting to /reset with a throwaway password.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [PasswordCodeCheckIpThrottle, PasswordCodeCheckIdentifierThrottle]
+
+    def post(self, request):
+        from accounts.serializers import PasswordCodeCheckSerializer
+        s = PasswordCodeCheckSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        account = Account.objects.filter(email=s.validated_data["email"]).first()
+        if account is None:
+            # Byte-identical to a real account's first wrong-code answer — §12.1, and the same
+            # reasoning (and the same line) as PasswordResetView below.
+            return _otp_error_response(CodeInvalid(attempts_left=settings.OTP_MAX_ATTEMPTS - 1))
+        try:
+            check_code(account, purpose="reset", code=s.validated_data["code"])
+        except (CodeInvalid, CodeExpired, CodeLocked) as exc:
+            return _otp_error_response(exc)
+        return Response({})
 
 
 class PasswordResetView(APIView):
