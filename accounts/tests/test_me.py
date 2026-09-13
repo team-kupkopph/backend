@@ -35,6 +35,36 @@ def test_me_shelter_block_reflects_tier_and_derived_status(client):
 
 
 @pytest.mark.django_db
+def test_me_serves_the_gate_separately_from_the_latest_status(client):
+    # Decision 16: a shelter's GATE is "any approved shelter_org" (public_poster_q), while the
+    # STATUS shown is the latest request. A tier-1 with an in-flight tier-2 upgrade has both
+    # at once: approved (older) and pending (newer). /me used to serve only the latest, and two
+    # mobile screens read it as the gate — showing the shelter its listings would not appear
+    # while the backend was, in fact, publishing them. The gate now travels with /me.
+    acc = AccountFactory(account_type="shelter", email_verified_at=timezone.now())
+    from shelter.models import ShelterProfile
+    from verifications.models import VerificationRequest
+    ShelterProfile.objects.create(account=acc, org_name="Tier1", org_type="rescue",
+                                  tier="community_rescue")
+    VerificationRequest.objects.create(account=acc, type="shelter_org", status="approved")
+    VerificationRequest.objects.create(account=acc, type="shelter_org", status="pending")
+    body = client.get("/api/v1/me", **_auth(client, acc)).json()
+    assert body["shelter"]["verification_status"] == "pending"   # what the dashboard displays
+    assert body["is_verified_rescuer"] is True                    # what the listings do
+
+
+@pytest.mark.django_db
+def test_me_is_verified_rescuer_is_the_member_badge_for_a_personal_account(client):
+    from verifications.models import AccountCapability
+    acc = AccountFactory(email_verified_at=timezone.now())
+    assert client.get("/api/v1/me", **_auth(client, acc)).json()["is_verified_rescuer"] is False
+    AccountCapability.objects.create(account=acc, capability="rescuer", status="pending")
+    assert client.get("/api/v1/me", **_auth(client, acc)).json()["is_verified_rescuer"] is False
+    AccountCapability.objects.filter(account=acc).update(status="approved")
+    assert client.get("/api/v1/me", **_auth(client, acc)).json()["is_verified_rescuer"] is True
+
+
+@pytest.mark.django_db
 def test_patch_me_updates_display_name(client):
     acc = AccountFactory(email_verified_at=timezone.now())
     res = client.patch("/api/v1/me", {"display_name": "New Name"},
