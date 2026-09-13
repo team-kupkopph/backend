@@ -239,6 +239,16 @@ AWS_SES_REGION = os.environ.get("AWS_SES_REGION", "")
 # without SES's sandbox-exit ticket. Read from the environment like every other secret and
 # never logged — see `ResendSender` for the assertion that the key cannot reach a log line.
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+# US-A2 / S0-06 · Google sign-in. The OAuth client IDs a Google ID token may be minted FOR —
+# comma-separated, because a native iOS sign-in carries the iOS client as its audience and a
+# web/server flow carries the Web client, and both are ours. Empty → `accounts.social` raises
+# SocialNotConfigured and the view answers a typed 503. Public identifiers, not secrets; the
+# Web client's *secret* is never needed for verification and must not be here.
+# S0-05 (Apple) is unpaid paperwork as of 2026-09-13: APPLE_CLIENT_ID stays unset and the
+# Apple button says "coming soon" in the app. App Store submission needs both (Guideline 4.8).
+GOOGLE_OAUTH_CLIENT_IDS = [c.strip() for c in os.environ.get("GOOGLE_OAUTH_CLIENT_IDS", "").split(",")
+                           if c.strip()]
+APPLE_CLIENT_ID = os.environ.get("APPLE_CLIENT_ID", "")
 OTP_MAX_ATTEMPTS = 5
 # Version of the Terms/Privacy text a signup consents to (RA 10173 — recorded on
 # account.terms_consent_version). Bump whenever the user-facing terms change, so an

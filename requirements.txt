@@ -18,6 +18,10 @@ djangorestframework==3.17.2   # CVE-2026-73228, CVE-2026-73229
 djangorestframework-simplejwt==5.5.1
 factory_boy==3.3.3
 Faker==40.36.0
+# google-auth · US-A2 / S0-06 · verifies Google ID tokens (signature + expiry against Google's
+# certs) in accounts/social.py; the audience allow-list check is ours. Pulls cachetools,
+# pyasn1-modules, rsa.
+google-auth==2.40.3
 idna==3.19
 iniconfig==2.3.0
 jmespath==1.1.0

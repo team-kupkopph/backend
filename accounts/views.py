@@ -376,6 +376,11 @@ class SocialAuthView(APIView):
             # the client can show "not available yet" instead of "something went wrong".
             return Response({"error": {"code": "social_not_configured",
                                        "message": "Social sign-in isn't available yet"}}, status=503)
+        except social.SocialTokenInvalid:
+            # Wrong audience, bad signature, expired, unverified email — one body for all of
+            # them. Which one it was is in the exception for the log, not for the caller.
+            return Response({"error": {"code": "invalid_token",
+                                       "message": "That sign-in couldn't be verified"}}, status=401)
         email = claims.get("email")
         if not email:
             return Response({"error": {"code": "email_required",
