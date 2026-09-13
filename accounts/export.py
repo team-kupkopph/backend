@@ -28,7 +28,7 @@ def build_export(account):
     """The caller's data as one plain JSON-serialisable dict."""
     from accounts.models import Address
     from community.models import AccountBadge, NeedPledge, StoryPost, StoryReaction
-    from listings.models import AdoptionInquiry, AdoptionListing, Pet
+    from listings.models import AdoptionInquiry, AdoptionListing, ListingPreference, Pet
     from notifications.models import Notification
     from sagip.models import ReportOffer, RescueCase, StrayReport
     from volunteer.models import VolunteerSignup
@@ -118,6 +118,14 @@ def build_export(account):
              "created_at": _dt(i.created_at)}
             for i in (AdoptionInquiry.objects.filter(adopter_account=account)
                       .select_related("listing"))
+        ],
+        # The Adopt deck's saved / hidden listings — a preference about the person, so it is
+        # theirs to take. `listing__name` is the animal, public on the browse anyway.
+        "shortlist": [
+            {"listing_id": str(p.listing_id), "listing_name": p.listing.name, "kind": p.kind,
+             "created_at": _dt(p.created_at)}
+            for p in (ListingPreference.objects.filter(account=account)
+                      .select_related("listing").order_by("-updated_at"))
         ],
         # SHARED ROW · the shift's time and the caller's own status. The host shelter's
         # contact details are shared per-shift under the §3.1.1 opt-in, not through here.

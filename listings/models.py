@@ -221,3 +221,33 @@ class AdoptionStageHistory(models.Model):
     class Meta:
         db_table = "adoption_stage_history"
         indexes = [models.Index(fields=["inquiry", "-changed_at"], name="idx_adopt_stage_hist")]
+
+
+class PreferenceKind(models.TextChoices):
+    SAVED = "saved", "Saved"
+    HIDDEN = "hidden", "Hidden"
+
+
+class ListingPreference(models.Model):
+    """One adopter's standing answer to one listing in the Adopt deck — saved (swiped right)
+    or hidden ("Not for me"). The two are exclusive per listing, which the unique constraint
+    on the pair enforces: a save after a hide REPLACES the row rather than adding one, so
+    the deck's own rule (saved XOR hidden, exact undo) holds on the server too.
+
+    A preference is about the person, not the animal: it is exported with the account's data
+    and deleted when the account is anonymized (unlike an inquiry, which the animal's record
+    keeps). `CASCADE` on both sides for the same reason — a listing that is gone takes its
+    saves with it; nothing downstream is made incomplete."""
+
+    preference_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="listing_preferences")
+    listing = models.ForeignKey(AdoptionListing, on_delete=models.CASCADE, related_name="preferences")
+    kind = models.CharField(max_length=10, choices=PreferenceKind.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "listing_preference"
+        constraints = [
+            models.UniqueConstraint(fields=["account", "listing"], name="uq_listing_preference_pair"),
+        ]
