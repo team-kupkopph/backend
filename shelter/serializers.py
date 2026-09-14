@@ -2,6 +2,7 @@ import re
 
 from rest_framework import serializers
 
+from common.phone import INVALID_PH_MOBILE_MESSAGE, normalize_ph_mobile
 from shelter.models import OrgType, QrProvider, RegType, ShelterTier
 
 PRC_RE = re.compile(r"^\d{6,8}$")   # US-C1: format check only; the register lookup is a reviewer action
@@ -40,6 +41,16 @@ class ShelterProfilePatchSerializer(serializers.Serializer):
     website_url = serializers.CharField(required=False, allow_blank=True)
     vet_name = serializers.CharField(max_length=120, required=False, allow_blank=True)
     vet_prc_number = serializers.CharField(max_length=30, required=False, allow_blank=True)
+
+    def validate_official_phone(self, value):
+        # F12 · same E.164 canonical form as /me/phone. Not unique — it may equal the
+        # owner's own number — so only the format is enforced here; blank still clears.
+        if not value:
+            return value
+        phone = normalize_ph_mobile(value)
+        if phone is None:
+            raise serializers.ValidationError(INVALID_PH_MOBILE_MESSAGE)
+        return phone
 
     def validate_vet_prc_number(self, value):
         if value and not PRC_RE.match(value):

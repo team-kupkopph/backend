@@ -54,3 +54,40 @@ def test_request_phone_taken_by_another_account_is_generic_409(client):
     res = client.post("/api/v1/me/phone", {"phone": "+639170000000"},
                       content_type="application/json", **_hdr(acc))
     assert res.status_code == 409 and res.json()["error"]["code"] == "phone_taken"
+
+
+# ---------- F12 · normalise to E.164 before storing / before the uniqueness check ----------
+
+@pytest.mark.django_db
+def test_request_phone_rejects_landline_with_field_error_and_issues_no_code(client):
+    acc = AccountFactory(email_verified_at=timezone.now())
+    res = client.post("/api/v1/me/phone", {"phone": "0281234567"},
+                      content_type="application/json", **_hdr(acc))
+    assert res.status_code == 400
+    err = res.json()["error"]
+    assert err["code"] == "invalid" and err["field"] == "phone"
+    assert err["message"] == "Enter a Philippine mobile number, e.g. 0917 123 4567"
+    acc.refresh_from_db()
+    assert acc.phone is None
+    assert not VerificationCode.objects.filter(account=acc, purpose="phone").exists()
+
+
+@pytest.mark.django_db
+def test_request_phone_stores_local_spelling_as_e164(client):
+    acc = AccountFactory(email_verified_at=timezone.now())
+    res = client.post("/api/v1/me/phone", {"phone": "0917 123 4567"},
+                      content_type="application/json", **_hdr(acc))
+    assert res.status_code == 202
+    acc.refresh_from_db()
+    assert acc.phone == "+639171234567"
+
+
+@pytest.mark.django_db
+def test_request_phone_collision_is_checked_on_the_normalised_number(client):
+    other = AccountFactory()
+    other.phone = "+639170000000"
+    other.save(update_fields=["phone"])
+    acc = AccountFactory(email_verified_at=timezone.now())
+    res = client.post("/api/v1/me/phone", {"phone": "0917 000 0000"},
+                      content_type="application/json", **_hdr(acc))
+    assert res.status_code == 409 and res.json()["error"]["code"] == "phone_taken"

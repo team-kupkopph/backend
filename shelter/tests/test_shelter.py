@@ -86,6 +86,47 @@ def test_patch_contact_updates_profile(client):
     assert acc.shelter_profile.contact_person_name == "Maria Santos"
 
 
+@pytest.mark.django_db
+def test_patch_contact_stores_official_phone_as_e164(client):
+    # F12 · same normalisation as /me/phone; official_phone is NOT unique (may equal the owner's)
+    acc = _shelter()
+    ShelterProfile.objects.create(account=acc, org_name="PAWS", org_type="shelter",
+                                  tier="community_rescue")
+    res = client.patch("/api/v1/shelter/profile", {"official_phone": "0917 123 4567"},
+                       content_type="application/json", **_hdr(acc))
+    assert res.status_code == 200
+    assert res.json()["official_phone"] == "+639171234567"
+    acc.shelter_profile.refresh_from_db()
+    assert acc.shelter_profile.official_phone == "+639171234567"
+
+
+@pytest.mark.django_db
+def test_patch_contact_rejects_landline_official_phone(client):
+    acc = _shelter()
+    ShelterProfile.objects.create(account=acc, org_name="PAWS", org_type="shelter",
+                                  tier="community_rescue")
+    res = client.patch("/api/v1/shelter/profile", {"official_phone": "0281234567"},
+                       content_type="application/json", **_hdr(acc))
+    assert res.status_code == 400
+    err = res.json()["error"]
+    assert err["field"] == "official_phone"
+    assert err["message"] == "Enter a Philippine mobile number, e.g. 0917 123 4567"
+    acc.shelter_profile.refresh_from_db()
+    assert acc.shelter_profile.official_phone == ""
+
+
+@pytest.mark.django_db
+def test_patch_contact_blank_official_phone_clears_it(client):
+    acc = _shelter()
+    ShelterProfile.objects.create(account=acc, org_name="PAWS", org_type="shelter",
+                                  tier="community_rescue", official_phone="+639171234567")
+    res = client.patch("/api/v1/shelter/profile", {"official_phone": ""},
+                       content_type="application/json", **_hdr(acc))
+    assert res.status_code == 200
+    acc.shelter_profile.refresh_from_db()
+    assert acc.shelter_profile.official_phone == ""
+
+
 # ---------- US-C1 · vet PATCH + PRC format ----------
 
 @pytest.mark.django_db
