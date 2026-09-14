@@ -263,6 +263,9 @@ class PasswordResetView(APIView):
             verify_code(account, purpose="reset", code=s.validated_data["code"])
         except (CodeInvalid, CodeExpired, CodeLocked) as exc:
             return _otp_error_response(exc)
+        if account.check_password(s.validated_data["new_password"]):
+            return Response({"error": {"code": "password_unchanged",
+                                       "message": "Choose a password you haven't used here"}}, status=400)
         account.set_password(s.validated_data["new_password"])
         account.sessions_revoked_at = timezone.now()   # revoke all existing sessions (Task 6 mechanism)
         account.save(update_fields=["password_hash", "sessions_revoked_at"])
