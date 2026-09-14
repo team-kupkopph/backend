@@ -178,3 +178,18 @@ def test_dashboard_pending_when_request_exists(client):
     assert body["verification"]["submitted"] is True
     assert body["verification"]["status"] == "pending"
     assert body["gates"]["can_publish"] is False   # pending, not approved
+
+
+@pytest.mark.django_db
+def test_dashboard_counts_adopted_from_own_listings(client):
+    from listings.models import AdoptionListing
+    acc = _shelter()
+    ShelterProfile.objects.create(account=acc, org_name="PAWS", org_type="shelter",
+                                  tier="community_rescue")
+    AdoptionListing.objects.create(posted_by=acc, species="dog", name="Rex", city="Marikina",
+                                   status="adopted")
+    AdoptionListing.objects.create(posted_by=acc, species="dog", name="Fido", city="Marikina",
+                                   status="available")
+    res = client.get("/api/v1/shelter/dashboard", **_hdr(acc))
+    assert res.status_code == 200
+    assert res.json()["counts"]["adopted"] == 1

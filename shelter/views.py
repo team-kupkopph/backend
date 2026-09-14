@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Address
+from listings.models import ListingStatus
 from shelter.models import DonationQr, ShelterProfile
 from shelter.permissions import IsShelter
 from shelter.serializers import (
@@ -79,7 +80,9 @@ class ShelterDashboardView(APIView):
         return Response({
             "verification": {"submitted": submitted,
                              "status": vr.status if vr else None, "docs": docs},
-            "counts": {"draft_listings": draft_listings, "adopted": 0, "donations": 0},
+            "counts": {"draft_listings": draft_listings,
+                       "adopted": request.user.listings.filter(status=ListingStatus.ADOPTED).count(),
+                       "donations": 0},
             "gates": {"can_publish": approved, "donations_enabled": donations_enabled},
         })
 

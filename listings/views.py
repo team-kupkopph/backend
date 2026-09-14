@@ -134,7 +134,11 @@ class ListingsView(APIView):
             if not request.user or not request.user.is_authenticated:
                 return Response({"error": {"code": "auth_required",
                                            "message": "Log in first"}}, status=401)
-            qs = (AdoptionListing.objects.filter(status="available", posted_by=request.user)
+            status = request.query_params.get("status") or "available"
+            if status not in ListingStatus.values:
+                return Response({"error": {"code": "bad_status",
+                                           "message": "Unknown status"}}, status=422)
+            qs = (AdoptionListing.objects.filter(status=status, posted_by=request.user)
                   .select_related("posted_by").order_by("-created_at"))
             page_items, next_page = _paginate(qs, request)
             posters = _poster_infos({item.posted_by for item in page_items})
