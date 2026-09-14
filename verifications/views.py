@@ -156,6 +156,19 @@ class VerificationCreateView(APIView):
             err = _shelter_doc_error(profile.tier, data["documents"], data.get("bai_pending", False))
             if err is not None:
                 return Response(err[1], status=err[0])
+        vtype = data["type"]
+        if vtype == "rescuer" and request.user.account_type == "shelter":
+            return Response({"error": {"code": "wrong_account_type",
+                                       "message": "Shelters verify as an organisation, not a member"}},
+                            status=422)
+        if request.user.verifications.filter(type=vtype, status="pending").exists():
+            return Response({"error": {"code": "already_pending",
+                                       "message": "Your request is already under review"}}, status=409)
+        cap = self.CAP_FOR_TYPE.get(vtype)
+        if cap and AccountCapability.objects.filter(account=request.user, capability=cap,
+                                                     status="approved").exists():
+            return Response({"error": {"code": "already_verified",
+                                       "message": "You're already verified"}}, status=409)
         with transaction.atomic():
             vr = VerificationRequest.objects.create(
                 account=request.user, type=data["type"], status="pending",
