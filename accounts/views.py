@@ -22,6 +22,7 @@ from accounts.serializers import (
 from accounts.tokens import tokens_for
 from common import otp
 from common.otp import CodeExpired, CodeInvalid, CodeLocked, check_code, issue_code, verify_code
+from common.phone import INVALID_PH_MOBILE_MESSAGE, normalize_ph_mobile
 from common.throttles import (
     ExportRequestThrottle,
     LoginIdentifierThrottle,
@@ -380,9 +381,16 @@ class MePhoneView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        phone = (request.data.get("phone") or "").strip()
-        if not phone:
+        raw = (request.data.get("phone") or "").strip()
+        if not raw:
             return Response({"error": {"code": "invalid", "message": "phone required",
+                                       "field": "phone"}}, status=400)
+        # F12 · canonical E.164 before the store AND before the collision check, so
+        # `0917 123 4567` and `+639171234567` are the same number to the UNIQUE column,
+        # and a landline never gets an SMS code issued to it.
+        phone = normalize_ph_mobile(raw)
+        if phone is None:
+            return Response({"error": {"code": "invalid", "message": INVALID_PH_MOBILE_MESSAGE,
                                        "field": "phone"}}, status=400)
         acc = request.user
         # Store the candidate now (phone is nullable with a separate phone_verified_at);
