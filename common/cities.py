@@ -54,4 +54,4 @@ def city_variants(value):
     if not stripped:
         return []
     # dict.fromkeys keeps order and drops the duplicate when value had no "City" suffix.
-    return list(dict.fromkeys([base, stripped, "%s City" % stripped]))
+    return list(dict.fromkeys([base, stripped, f"{stripped} City"]))
