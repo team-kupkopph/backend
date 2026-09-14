@@ -147,10 +147,12 @@ class LoginView(APIView):
         email = request.data.get("email", "")
         password = request.data.get("password", "")
         account = Account.objects.filter(email=email).first()
-        # US-N1 · a deleted account is refused here, in the SAME branch and with the SAME
-        # body as a wrong password. A distinct code or message would turn deletion into an
-        # enumeration oracle — §12.1's whole point is that login reveals nothing.
-        if (account is None or account.status == AccountStatus.DELETED
+        # US-N1 · a deleted or suspended account is refused here, in the SAME branch and
+        # with the SAME body as a wrong password. A distinct code or message would turn
+        # deletion/suspension into an enumeration oracle — §12.1's whole point is that
+        # login reveals nothing.
+        if (account is None
+                or account.status in (AccountStatus.DELETED, AccountStatus.SUSPENDED)
                 or not account.check_password(password)):
             return Response({"error": {"code": "invalid_credentials",
                                        "message": "Email or password is incorrect"}}, status=401)
