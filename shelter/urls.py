@@ -5,11 +5,13 @@ from shelter.views import (
                            ShelterDashboardView,
                            ShelterDonationQrPublicView,
                            ShelterProfileView,
+                           ShelterRequestsView,
 )
 
 urlpatterns = [
     path("shelter/profile", ShelterProfileView.as_view()),
     path("shelter/dashboard", ShelterDashboardView.as_view()),
     path("shelter/donation-qr", DonationQrView.as_view()),
+    path("shelter/requests", ShelterRequestsView.as_view()),
     path("shelters/<uuid:account_id>/donation-qr", ShelterDonationQrPublicView.as_view()),
 ]
