@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.db import IntegrityError
 from django.utils import timezone
 from rest_framework import status
@@ -129,6 +130,9 @@ class EmailResendView(APIView):
         return Response({}, status=202)   # generic regardless
 
 
+_DUMMY_HASH = make_password("kupkop-dummy")
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
     # US-SEC2 · both apply (IP catches credential stuffing across many accounts from one
@@ -147,6 +151,9 @@ class LoginView(APIView):
         email = request.data.get("email", "")
         password = request.data.get("password", "")
         account = Account.objects.filter(email=email).first()
+        # F11 — argon2 costs the same whether or not the account exists.
+        if account is None:
+            check_password(password, _DUMMY_HASH)
         # US-N1 · a deleted or suspended account is refused here, in the SAME branch and
         # with the SAME body as a wrong password. A distinct code or message would turn
         # deletion/suspension into an enumeration oracle — §12.1's whole point is that
