@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Address
+from listings.models import AdoptionInquiry, StageState
 from shelter.models import DonationQr, ShelterProfile
 from shelter.permissions import IsShelter
 from shelter.serializers import (
@@ -12,6 +13,9 @@ from shelter.serializers import (
     ShelterProfilePatchSerializer,
 )
 from verifications.models import VerificationRequest
+from volunteer.models import VolunteerSignup
+
+REQUESTS_PAGE_SIZE = 20
 
 
 class ShelterProfileView(APIView):
@@ -54,6 +58,105 @@ class ShelterProfileView(APIView):
             setattr(profile, key, value)
         profile.save()
         return Response(_profile_repr(profile))
+
+
+class ShelterRequestsView(APIView):
+    """B-be2 · GET /shelter/requests — one merged inbox across the shelter's three
+    inbound-request surfaces: adoption inquiries on its own listings, volunteer signups
+    on its own shifts, and placements addressed to it (a case-worker `.../place`d
+    inquiry where the shelter is the *adopter* and every stage is SKIPPED — the
+    placement bypass; see listings/tests/test_inquiries.py). Merged and sorted in
+    Python rather than in SQL: the three sources are different models with no shared
+    table to `UNION`, and shelf-inbox volumes make an in-memory merge cheap enough."""
+    permission_classes = [IsShelter]
+
+    def get(self, request):
+        kind = request.query_params.get("kind")
+        open_only = request.query_params.get("status") == "open"
+
+        items = []
+        if kind in (None, "adoption"):
+            items += self._adoption_items(request.user)
+        if kind in (None, "volunteer"):
+            items += self._volunteer_items(request.user)
+        if kind in (None, "placement"):
+            items += self._placement_items(request.user)
+
+        if open_only:
+            items = [i for i in items if i["status"] in ("active", "requested")]
+        items.sort(key=lambda i: i["created_at"], reverse=True)
+
+        page_items, next_page = _paginate_items(items, request)
+        for item in page_items:
+            item["created_at"] = item["created_at"].isoformat()
+        return Response({"results": page_items, "next": next_page})
+
+    @staticmethod
+    def _adoption_items(shelter):
+        # `listing__posted_by=shelter` covers everything the shelter posted; placements
+        # (all stages SKIPPED) are excluded here and surfaced separately by
+        # `_placement_items` instead, keyed off who the *adopter* is.
+        qs = (AdoptionInquiry.objects.filter(listing__posted_by=shelter)
+              .select_related("listing", "adopter_account")
+              .prefetch_related("stages").order_by("-created_at"))
+        items = []
+        for inq in qs:
+            if _is_placement(inq):
+                continue
+            items.append({
+                "kind": "adoption", "id": str(inq.pk), "title": inq.listing.name,
+                "subtitle": inq.adopter_account.display_name, "status": inq.status,
+                "created_at": inq.created_at,
+                "target": {"route": "inquiry", "id": str(inq.pk)},
+            })
+        return items
+
+    @staticmethod
+    def _volunteer_items(shelter):
+        qs = (VolunteerSignup.objects.filter(shift__shelter_account=shelter)
+              .select_related("shift", "volunteer_account").order_by("-created_at"))
+        return [{
+            "kind": "volunteer", "id": str(su.pk), "title": su.shift.get_type_display(),
+            "subtitle": su.volunteer_account.display_name, "status": su.status,
+            "created_at": su.created_at,
+            "target": {"route": "shelterVolunteerRequests", "id": str(su.shift_id)},
+        } for su in qs]
+
+    @staticmethod
+    def _placement_items(shelter):
+        qs = (AdoptionInquiry.objects.filter(adopter_account=shelter)
+              .select_related("listing", "listing__posted_by")
+              .prefetch_related("stages").order_by("-created_at"))
+        items = []
+        for inq in qs:
+            if not _is_placement(inq):
+                continue
+            items.append({
+                "kind": "placement", "id": str(inq.pk), "title": inq.listing.name,
+                "subtitle": f"Placed by {inq.listing.posted_by.display_name}",
+                "status": inq.status, "created_at": inq.created_at,
+                "target": {"route": "inquiry", "id": str(inq.pk)},
+            })
+        return items
+
+
+def _is_placement(inquiry):
+    """A placement is an `AdoptionInquiry` created via the case-worker `.../place` path
+    (decision 9's placement bypass) — every stage on its ladder starts (and stays)
+    SKIPPED, unlike an ordinary inquiry whose stages progress normally."""
+    stages = list(inquiry.stages.all())
+    return bool(stages) and all(s.state == StageState.SKIPPED for s in stages)
+
+
+def _paginate_items(items, request):
+    try:
+        page = max(1, int(request.query_params.get("page") or 1))
+    except (TypeError, ValueError):
+        page = 1
+    start = (page - 1) * REQUESTS_PAGE_SIZE
+    page_items = items[start:start + REQUESTS_PAGE_SIZE]
+    has_next = len(items) > start + REQUESTS_PAGE_SIZE
+    return page_items, (page + 1 if has_next else None)
 
 
 class ShelterDashboardView(APIView):
