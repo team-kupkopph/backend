@@ -24,7 +24,7 @@ class SignupSerializer(serializers.Serializer):
     # Public signup may only create "personal" or "shelter" accounts.
     # "admin" (in AccountType.choices) must never be reachable from here.
     account_type = serializers.ChoiceField(choices=[("personal", "personal"), ("shelter", "shelter")])
-    display_name = serializers.CharField(max_length=100)
+    display_name = serializers.CharField(min_length=2, max_length=100)
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, validators=[validate_password_strength])
     # The terms version the client actually displayed. Optional so an older build still
