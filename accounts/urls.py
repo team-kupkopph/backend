@@ -1,5 +1,6 @@
 from django.urls import path
 
+from accounts.dev_views import dev_seed_tokens
 from accounts.views import (
                             AccountTokenRefreshView,
                             EmailResendView,
@@ -32,6 +33,7 @@ urlpatterns = [
     path("auth/password/code/check", PasswordCodeCheckView.as_view()),
     path("auth/password/reset", PasswordResetView.as_view()),
     path("auth/social/<str:provider>", SocialAuthView.as_view()),
+    path("auth/dev/seed_tokens", dev_seed_tokens),
     path("me", MeView.as_view()),
     path("me/settings", MeSettingsView.as_view()),
     path("me/export", MeExportView.as_view()),
