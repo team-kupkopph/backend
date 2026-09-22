@@ -59,12 +59,21 @@ _VET_PRC_NUMBER = "654321"   # 6-8 digits — shelter/serializers.py::PRC_RE
 
 def _kind_fixture(kind):
     """(documents, social_proof_url, shelter_profile_fields) for a known `kind`, or
-    None for anything else."""
+    None for anything else.
+
+    `shelter_profile_fields` entries are only written when the current column value is
+    blank (see the dispatch loop below) — repeated seed calls don't overwrite state a
+    real caller might have set, EXCEPT for `tier`: `shelter_org` bumps a tier-1 profile
+    to `registered_ngo` because C-2's UI walk assumes the shelter's tier is already
+    tier-2 by the time NGO papers land, and a mismatch between the pending
+    verification's document set and `ShelterProfile.tier` breaks the shelter shell's
+    dashboard state derivation (F21)."""
     if kind == "shelter_tier1":
         return list(_TIER1_DOCS), "https://facebook.com/dev-seed-shelter", {}
     if kind == "shelter_org":
         return (list(_TIER1_DOCS) + list(_TIER2_EXTRA_DOCS), "",
-               {"vet_name": _VET_NAME, "vet_prc_number": _VET_PRC_NUMBER})
+               {"vet_name": _VET_NAME, "vet_prc_number": _VET_PRC_NUMBER,
+                "tier": "registered_ngo"})
     return None
 
 
@@ -89,14 +98,30 @@ class MeVerificationsSeedView(APIView):
 
         # Only one pending shelter_org request at a time — the same constraint the real
         # submit path enforces (verifications/views.py::VerificationCreateView), since
-        # both kinds land in that one queue.
+        # BOTH kinds map internally to type="shelter_org" (the model has no tier-1 vs.
+        # tier-2 distinction on the type field). F22: the 409 body names the model
+        # type, not the requested `kind`, because echoing the caller's kind was
+        # misleading when the pending it collided with was created with the other kind.
         if request.user.verifications.filter(type="shelter_org", status="pending").exists():
-            return Response({"detail": f"already has a pending {kind} verification"}, status=409)
+            return Response({"detail": "a pending shelter_org verification already exists"}, status=409)
 
-        update_fields = [f for f, v in profile_fields.items() if not getattr(profile, f)]
+        # `tier` gets its own rule (F21): it is a required field with a default, never
+        # blank, so the blank-guard below would skip it. For `shelter_org` we want to
+        # bump `community_rescue` to `registered_ngo`; leave any other value alone (a
+        # profile already at `registered_ngo` is idempotent; any future third value is
+        # left to the caller to reason about).
+        update_fields = []
+        for f, v in profile_fields.items():
+            current = getattr(profile, f)
+            if f == "tier":
+                if current == "community_rescue" and v == "registered_ngo":
+                    setattr(profile, f, v)
+                    update_fields.append(f)
+                continue
+            if not current:
+                setattr(profile, f, v)
+                update_fields.append(f)
         if update_fields:
-            for f in update_fields:
-                setattr(profile, f, profile_fields[f])
             profile.save(update_fields=update_fields)
 
         vr = VerificationRequest.objects.create(
