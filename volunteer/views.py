@@ -35,6 +35,15 @@ def _not_found(what="shift"):
     return Response({"error": {"code": "not_found", "message": f"No such {what}"}}, status=404)
 
 
+def _animal_repr(listing):
+    """G6 · the shelter picked this animal at approval; the volunteer should know."""
+    if listing is None:
+        return None
+    photo = listing.photos.filter(is_primary=True).first() or listing.photos.first()
+    return {"listing_id": str(listing.pk), "name": listing.name,
+            "photo_url": photo.url if photo else None}
+
+
 def _my_item_repr(su, now):
     late = (su.status == SignupStatus.CANCELLED and su.cancelled_at is not None
             and su.cancelled_at > su.shift.starts_at - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS))
@@ -50,7 +59,11 @@ def _my_item_repr(su, now):
             "was_late": late,
             "check_in_at": su.check_in_at.isoformat() if su.check_in_at else None,
             "check_out_at": su.check_out_at.isoformat() if su.check_out_at else None,
-            "hours": hours, "shift": shift}
+            "hours": hours, "shift": shift,
+            "cancel_cutoff_at": (su.shift.starts_at
+                                 - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS)).isoformat(),
+            "needs_marking": su.status == SignupStatus.APPROVED and su.shift.ends_at <= now,
+            "assigned_animal": _animal_repr(su.assigned_listing)}
 
 
 class ShelterShiftsView(APIView):
@@ -236,7 +249,8 @@ class MySignupsView(APIView):
     def get(self, request):
         now = timezone.now()
         qs = (VolunteerSignup.objects.filter(volunteer_account=request.user)
-              .select_related("shift", "shift__shelter_account").order_by("-shift__starts_at"))
+              .select_related("shift", "shift__shelter_account", "assigned_listing")
+              .order_by("-shift__starts_at"))
         requested, upcoming, history = [], [], []
         for su in qs:
             item = _my_item_repr(su, now)
@@ -497,6 +511,7 @@ class SignupCancelView(APIView):
 
             cutoff = shift.starts_at - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS)
             was_late = now > cutoff
+            was_approved = signup.status == SignupStatus.APPROVED
 
             set_signup_status(signup, SignupStatus.CANCELLED, now=now)
             if shift.status == ShiftStatus.FULL:
@@ -504,6 +519,16 @@ class SignupCancelView(APIView):
                 if approved < shift.capacity:
                     shift.status = ShiftStatus.OPEN
                     shift.save(update_fields=["status", "updated_at"])
+
+        if was_approved:
+            # K4 · a shelter counting on this person must hear it from us, not on the day.
+            notify(shift.shelter_account, "signup_cancelled_by_volunteer",
+                   title="A volunteer cancelled",
+                   body=(f"{request.user.display_name} can't make "
+                         f"{shift.title or shift.get_type_display()}."
+                         + (" They cancelled less than 12 hours before." if was_late else "")),
+                   data={"shift_id": str(shift.pk), "signup_id": str(signup.pk),
+                         "was_late": was_late})
         return Response({"status": SignupStatus.CANCELLED, "was_late": was_late})
 
 

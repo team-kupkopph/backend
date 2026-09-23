@@ -23,6 +23,20 @@ from .models import SignupStatus, VolunteerSignup
 REMINDER_WINDOWS = [("24h", 24, 1), ("1h", 1, 0)]
 
 
+def _clock(dt):
+    local = timezone.localtime(dt)
+    return f"{local.hour % 12 or 12}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
+
+
+def _reminder_body(signup, label, now):
+    shift = signup.shift
+    what = f"{shift.title or shift.get_type_display()} at {shift.shelter_account.display_name}"
+    if label == "1h":
+        return f"{what} starts at {_clock(shift.starts_at)}. See you there!"
+    same_day = timezone.localtime(shift.starts_at).date() == timezone.localtime(now).date()
+    return f"{what} starts {'today' if same_day else 'tomorrow'} at {_clock(shift.starts_at)}."
+
+
 def remind_shifts(now=None):
     """Send any due shift reminders. Idempotent. Returns the signups reminded."""
     now = now or timezone.now()
@@ -43,7 +57,7 @@ def remind_shifts(now=None):
                 continue
             notify(signup.volunteer_account, "shift_reminder",
                    title="Your shift is coming up",
-                   body=f"Your shift starts {label.replace('h', ' hour')}s from now.",
+                   body=_reminder_body(signup, label, now),
                    data={"shift_id": str(signup.shift_id), "signup_id": str(signup.pk),
                          "window": label})
             reminded.append(signup)
