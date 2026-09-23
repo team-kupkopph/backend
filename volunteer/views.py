@@ -14,6 +14,7 @@ from shelter.permissions import IsShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.reliability import reliability_for, reliability_for_many
 from volunteer.serializers import (
+    naive_datetime_response,
     AttendanceSerializer,
     ShiftCreateSerializer,
     ShiftPatchSerializer,
@@ -69,7 +70,11 @@ class ShelterShiftsView(APIView):
 
     def post(self, request):
         s = ShiftCreateSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
+        if not s.is_valid():
+            naive = naive_datetime_response(s)
+            if naive is not None:
+                return naive
+            s.is_valid(raise_exception=True)   # every other field error: the standard envelope
         d = s.validated_data
         if d["ends_at"] <= d["starts_at"]:
             return Response({"error": {"code": "bad_window",
@@ -120,7 +125,11 @@ class ShelterShiftDetailView(APIView):
                                        "message": "A closed activity cannot be changed"}},
                             status=409)
         s = ShiftPatchSerializer(data=request.data, partial=True)
-        s.is_valid(raise_exception=True)
+        if not s.is_valid():
+            naive = naive_datetime_response(s)
+            if naive is not None:
+                return naive
+            s.is_valid(raise_exception=True)   # every other field error: the standard envelope
         for key, value in s.validated_data.items():
             setattr(shift, key, value)
         if shift.ends_at <= shift.starts_at:
