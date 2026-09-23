@@ -1,10 +1,12 @@
 """P1 · trust & privacy fixes (dev/volunteer-build-review.md G3/G4/G16, test plan K1–K6)."""
+from datetime import UTC
+
 import pytest
-from datetime import timezone
 from django.conf import settings
 from django.utils import timezone as tz
 
-from volunteer.models import VolunteerShift
+from accounts.factories import AccountFactory
+from volunteer.models import SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.tests.helpers import hdr, verified_shelter
 
 SHIFTS = "/api/v1/shelter/shifts"
@@ -37,7 +39,7 @@ def test_an_offset_time_is_stored_as_that_instant(client):
                       content_type="application/json", **hdr(shelter))
     assert res.status_code == 201
     shift = VolunteerShift.objects.get()
-    assert shift.starts_at.astimezone(timezone.utc).isoformat() == "2030-10-04T01:00:00+00:00"
+    assert shift.starts_at.astimezone(UTC).isoformat() == "2030-10-04T01:00:00+00:00"
 
 
 @pytest.mark.django_db
@@ -50,10 +52,6 @@ def test_patch_also_refuses_naive(client):
                        content_type="application/json", **hdr(shelter))
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "naive_datetime"
-
-
-from accounts.factories import AccountFactory
-from volunteer.models import ShiftStatus, SignupStatus, VolunteerSignup
 
 
 def _future_shift(shelter, **kw):

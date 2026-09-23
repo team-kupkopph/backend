@@ -15,11 +15,11 @@ from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, Voluntee
 from volunteer.reliability import reliability_for, reliability_for_many
 from volunteer.representations import discloses_full, shelter_contact, shift_location, shift_public
 from volunteer.serializers import (
-    naive_datetime_response,
     AttendanceSerializer,
     ShiftCreateSerializer,
     ShiftPatchSerializer,
     SignupCreateSerializer,
+    naive_datetime_response,
 )
 from volunteer.status import set_signup_status
 from volunteer.visibility import public_shifts
