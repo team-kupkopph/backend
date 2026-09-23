@@ -599,13 +599,23 @@ class ShelterShiftRosterView(APIView):
         } for su in signups]})
 
 
+# P3 · K7/K21. A check-in days early, or a check-out before a check-in, produced negative
+# "hours" and a record the shelter could not trust.
+CHECKIN_OPENS_MINUTES = 30
+CHECKOUT_GRACE_HOURS = 2
+
+
+def _conflict(code, message):
+    return Response({"error": {"code": code, "message": message}}, status=409)
+
+
 class SignupCheckView(APIView):
     """US-V7 · the volunteer checks in and out on the day. Only an approved signup can —
     a requested or cancelled one has nothing to check into."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, signup_id, action):
-        signup = VolunteerSignup.objects.filter(pk=signup_id).first()
+        signup = VolunteerSignup.objects.select_related("shift").filter(pk=signup_id).first()
         if signup is None:
             return _not_found("signup")
         if signup.volunteer_account_id != request.user.pk:
@@ -615,10 +625,30 @@ class SignupCheckView(APIView):
         if signup.status != SignupStatus.APPROVED:
             return Response({"error": {"code": "not_approved",
                                        "message": "This shift isn't confirmed"}}, status=409)
-        field = "check_in_at" if action == "in" else "check_out_at"
-        setattr(signup, field, timezone.now())
+        now = timezone.now()
+        shift = signup.shift
+        if action == "in":
+            opens = shift.starts_at - timezone.timedelta(minutes=CHECKIN_OPENS_MINUTES)
+            if signup.check_in_at is not None:
+                return _conflict("already_checked_in", "You're already checked in")
+            if now < opens:
+                return Response({"error": {"code": "too_early",
+                                           "message": "Check-in opens 30 minutes before the shift",
+                                           "details": {"opens_at": opens.isoformat()}}}, status=409)
+            if now > shift.ends_at:
+                return _conflict("too_late", "This shift has ended")
+            field = "check_in_at"
+        else:
+            if signup.check_in_at is None:
+                return _conflict("not_checked_in", "Check in first")
+            if signup.check_out_at is not None:
+                return _conflict("already_checked_out", "You've already checked out")
+            if now > shift.ends_at + timezone.timedelta(hours=CHECKOUT_GRACE_HOURS):
+                return _conflict("too_late", "Check-out closed 2 hours after the shift")
+            field = "check_out_at"
+        setattr(signup, field, now)
         signup.save(update_fields=[field, "updated_at"])
-        return Response({field: getattr(signup, field).isoformat()})
+        return Response({field: now.isoformat()})
 
 
 class SignupAttendanceView(APIView):
