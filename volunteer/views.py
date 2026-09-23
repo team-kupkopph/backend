@@ -385,6 +385,24 @@ def _load_signup_for_shelter(signup_id, user):
     return signup, None
 
 
+def _own_walking_listing(listing_id, shelter, shift):
+    """Validate `listing_id` for a walking shift: must be a real UUID, owned by `shelter`, and
+    the shift must be a walking shift. Shared by approve (P3) and re-assign (P4 · G6) so the
+    rule can't drift between the two call sites. Returns (listing, None) or (None, error)."""
+    try:
+        uuid.UUID(str(listing_id))
+    except (ValueError, TypeError):
+        return None, Response({"error": {"code": "bad_listing",
+                                         "message": "Pick one of your own animals for a walking shift"}},
+                              status=422)
+    listing = AdoptionListing.objects.filter(pk=listing_id, posted_by=shelter).first()
+    if listing is None or shift.type != "walking":
+        return None, Response({"error": {"code": "bad_listing",
+                                         "message": "Pick one of your own animals for a walking shift"}},
+                              status=422)
+    return listing, None
+
+
 class SignupApproveView(APIView):
     """US-V4 · approve a request, capacity-safe.
 
@@ -414,18 +432,9 @@ class SignupApproveView(APIView):
         listing_id = request.data.get("assigned_listing_id")
         listing = None
         if listing_id:
-            try:
-                uuid.UUID(str(listing_id))
-            except (ValueError, TypeError):
-                return Response({"error": {"code": "bad_listing",
-                                           "message": "Pick one of your own animals for a walking shift"}},
-                                status=422)
-            listing = AdoptionListing.objects.filter(pk=listing_id,
-                                                     posted_by=request.user).first()
-            if listing is None or signup.shift.type != "walking":
-                return Response({"error": {"code": "bad_listing",
-                                           "message": "Pick one of your own animals for a walking shift"}},
-                                status=422)
+            listing, error = _own_walking_listing(listing_id, request.user, signup.shift)
+            if error:
+                return error
 
         rel = reliability_for(signup.volunteer_account)
         if rel["needs_reapproval"] and request.data.get("acknowledged_reapproval") is not True:
@@ -638,12 +647,88 @@ class ShiftRequestsView(APIView):
 
 _ROSTER_STATUSES = (SignupStatus.APPROVED, SignupStatus.COMPLETED, SignupStatus.NO_SHOW)
 
+UNDO_HOURS = 24
+
+
+class ShelterSignupView(APIView):
+    """P4 · re-assign the walk animal on an approved signup (G6)."""
+    permission_classes = [IsShelter]
+
+    def patch(self, request, signup_id):
+        signup, error = _load_signup_for_shelter(signup_id, request.user)
+        if error:
+            return error
+        if signup.status != SignupStatus.APPROVED:
+            return _conflict("not_approved", "Only a confirmed volunteer can be assigned")
+        listing_id = request.data.get("assigned_listing_id")
+        listing = None
+        if listing_id is not None:
+            listing, error = _own_walking_listing(listing_id, request.user, signup.shift)
+            if error:
+                return error
+        signup.assigned_listing = listing
+        signup.save(update_fields=["assigned_listing", "updated_at"])
+        return Response({"assigned_animal": _animal_repr(listing)})
+
+
+class SignupRemoveView(APIView):
+    """P4 · G11. A shelter removes ONE volunteer. Recorded as cancelled-by-shelter: it is not
+    the volunteer's cancel and never a no-show, so it cannot touch their reliability."""
+    permission_classes = [IsShelter]
+
+    def post(self, request, signup_id):
+        signup, error = _load_signup_for_shelter(signup_id, request.user)
+        if error:
+            return error
+        with transaction.atomic():
+            shift = VolunteerShift.objects.select_for_update().get(pk=signup.shift_id)
+            signup = VolunteerSignup.objects.select_for_update().get(pk=signup.pk)
+            if (signup.status not in (SignupStatus.REQUESTED, SignupStatus.APPROVED)
+                    or shift.ends_at <= timezone.now()):
+                return _conflict("not_removable", "This volunteer can't be removed now")
+            set_signup_status(signup, SignupStatus.CANCELLED, by="shelter")
+            if shift.status == ShiftStatus.FULL:
+                approved = shift.signups.filter(status=SignupStatus.APPROVED).count()
+                if approved < shift.capacity:
+                    shift.status = ShiftStatus.OPEN
+                    shift.save(update_fields=["status", "updated_at"])
+        notify(signup.volunteer_account, "signup_cancelled_by_shelter",
+               title="The shelter changed its plans",
+               body=f"You're no longer on {shift.title or shift.get_type_display()}. "
+                    "This isn't counted against you.",
+               data={"shift_id": str(shift.pk), "signup_id": str(signup.pk)})
+        return Response({"status": SignupStatus.CANCELLED})
+
+
+class AttendanceUndoView(APIView):
+    """P4 · K16. A mis-tapped No-show used to be permanent and fed the re-approval gate."""
+    permission_classes = [IsShelter]
+
+    def post(self, request, signup_id):
+        signup, error = _load_signup_for_shelter(signup_id, request.user)
+        if error:
+            return error
+        with transaction.atomic():
+            signup = VolunteerSignup.objects.select_for_update().get(pk=signup.pk)
+            if signup.status not in (SignupStatus.COMPLETED, SignupStatus.NO_SHOW):
+                return _conflict("not_marked", "There's no attendance to undo")
+            if (signup.attendance_marked_at is None or timezone.now()
+                    > signup.attendance_marked_at + timezone.timedelta(hours=UNDO_HOURS)):
+                return _conflict("undo_expired", "Attendance can be changed for 24 hours")
+            signup.status = SignupStatus.APPROVED
+            signup.attendance_marked_at = None
+            signup.save(update_fields=["status", "attendance_marked_at", "updated_at"])
+        return Response({"status": SignupStatus.APPROVED})
+
 
 class ShelterShiftRosterView(APIView):
     """US-V9 · the shift's attendance-relevant roster — approved signups still to be marked,
     plus completed/no_show ones already marked, so the mobile attendance screen has one list
     to render Attended/No-show against. `requested`, `declined`, and `cancelled` are excluded:
-    they are not attendance-relevant."""
+    they are not attendance-relevant.
+
+    P4 · rows also carry the assigned animal, whether the volunteer opted into contact
+    sharing, and the 24h attendance-undo window (G6, G7, K16)."""
     permission_classes = [IsShelter]
 
     def get(self, request, shift_id):
@@ -655,13 +740,20 @@ class ShelterShiftRosterView(APIView):
                                        "message": "Only the posting shelter can see this"}},
                             status=403)
         signups = (shift.signups.filter(status__in=_ROSTER_STATUSES)
-                   .select_related("volunteer_account").order_by("created_at"))
+                   .select_related("volunteer_account", "assigned_listing")
+                   .order_by("created_at"))
+        now = timezone.now()
         return Response({"results": [{
             "signup_id": str(su.pk),
             "volunteer": {"display_name": su.volunteer_account.display_name},
             "status": su.status,
             "check_in_at": su.check_in_at.isoformat() if su.check_in_at else None,
             "check_out_at": su.check_out_at.isoformat() if su.check_out_at else None,
+            "assigned_animal": _animal_repr(su.assigned_listing),
+            "contact_shared": su.contact_share_consent,
+            "attendance_marked_at": su.attendance_marked_at.isoformat() if su.attendance_marked_at else None,
+            "can_undo": bool(su.attendance_marked_at and now
+                             <= su.attendance_marked_at + timezone.timedelta(hours=UNDO_HOURS)),
         } for su in signups]})
 
 

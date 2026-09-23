@@ -33,6 +33,10 @@ def set_signup_status(signup, status, *, now=None, by=""):
     `attendance_marked_at` (P4 · K16's 24h undo window) is stamped the moment attendance is
     recorded, regardless of outcome.
 
+    The only reopen path is P4's attendance undo (`AttendanceUndoView`), which writes
+    `status` back to `approved` directly rather than through this function, and clears
+    `attendance_marked_at` — everything above is a forward-only transition.
+
     Returns the saved signup.
     """
     if status not in SignupStatus.values:
