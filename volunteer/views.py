@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 
 from listings.models import AdoptionListing
 from notifications.service import notify
-from shelter.permissions import IsShelter
+from shelter.permissions import IsShelter, IsVerifiedShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.reliability import reliability_for, reliability_for_many
 from volunteer.serializers import (
@@ -21,6 +21,7 @@ from volunteer.serializers import (
     SignupCreateSerializer,
 )
 from volunteer.status import set_signup_status
+from volunteer.visibility import public_shifts
 
 PAGE_SIZE = 20
 
@@ -65,8 +66,12 @@ def _my_item_repr(su, now):
 
 
 class ShelterShiftsView(APIView):
-    """US-V2 · a shelter posts and lists its own activities."""
-    permission_classes = [IsShelter]
+    """US-V2 · a shelter posts and lists its own activities. Posting needs a verified org
+    (D3); listing its own does not, so a shelter whose verification lapses can still manage
+    and cancel what it already posted."""
+
+    def get_permissions(self):
+        return [IsVerifiedShelter()] if self.request.method == "POST" else [IsShelter()]
 
     def post(self, request):
         s = ShiftCreateSerializer(data=request.data)
@@ -184,9 +189,7 @@ class ShiftsBrowseView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        qs = (VolunteerShift.objects
-              .filter(status__in=[ShiftStatus.OPEN, ShiftStatus.FULL],
-                      starts_at__gt=timezone.now())
+        qs = (public_shifts()
               .select_related("shelter_account")
               .annotate(approved_count=_APPROVED_COUNT)
               .order_by("starts_at"))
@@ -202,8 +205,7 @@ class ShiftDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, shift_id):
-        shift = (VolunteerShift.objects.filter(pk=shift_id)
-                 .select_related("shelter_account").first())
+        shift = public_shifts().filter(pk=shift_id).select_related("shelter_account").first()
         if shift is None:
             return _not_found()
         return Response(_shift_repr(shift))
@@ -246,7 +248,7 @@ class ShiftSignupView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, shift_id):
-        shift = VolunteerShift.objects.filter(pk=shift_id).first()
+        shift = public_shifts().filter(pk=shift_id).first()
         if shift is None:
             return _not_found()
         if shift.status != ShiftStatus.OPEN:

@@ -40,3 +40,9 @@ def test_an_existing_profile_with_an_invalid_tier_is_corrected(settings, capsys)
     _run(settings, capsys)
     profile = ShelterProfile.objects.get(account__email=e2e_fixtures.SHELTER)
     assert profile.tier == ShelterTier.COMMUNITY_RESCUE
+
+
+def test_the_e2e_shelter_is_verified_so_its_shift_is_public(settings, capsys):
+    _run(settings, capsys)
+    from volunteer.visibility import public_shifts
+    assert public_shifts().filter(shelter_account__email=e2e_fixtures.SHELTER).exists()

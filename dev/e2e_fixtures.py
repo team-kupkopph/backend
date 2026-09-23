@@ -103,6 +103,12 @@ def main():
         defaults={"org_name": "E2E Test Shelter", "org_type": OrgType.SHELTER,
                   "tier": ShelterTier.COMMUNITY_RESCUE})
 
+    # P1/D3 · only verified shelters' shifts are public, and flow 30 browses for one.
+    from verifications.models import VerificationRequest
+    VerificationRequest.objects.get_or_create(account=shelter, type="shelter_org",
+                                              defaults={"status": "approved"})
+    VerificationRequest.objects.filter(account=shelter, type="shelter_org").update(status="approved")
+
     # An OPEN shift in the future, because 30-volunteer-signup browses for one and there is
     # nothing to sign up for otherwise. The flow failing on an empty list is technically
     # correct — a flow that skips itself when its fixture is missing is the green-that-checked-
