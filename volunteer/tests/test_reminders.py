@@ -101,3 +101,20 @@ def test_run_sweeps_reports_the_volunteer_reminders(capsys):
     call_command("run_sweeps")
     out = capsys.readouterr().out
     assert "reminded" in out
+
+
+@pytest.mark.django_db
+def test_reminder_copy_names_the_local_time_and_day():
+    from zoneinfo import ZoneInfo
+    manila = ZoneInfo("Asia/Manila")
+    now = timezone.datetime(2030, 10, 3, 10, 0, tzinfo=manila)
+    start = timezone.datetime(2030, 10, 4, 9, 0, tzinfo=manila)          # 23 h later
+    shift = VolunteerShift.objects.create(shelter_account=AccountFactory(account_type="shelter",
+                                          display_name="KG Test Shelter"),
+                                          starts_at=start, ends_at=start + timezone.timedelta(hours=2),
+                                          capacity=2, title="Morning dog walk")
+    VolunteerSignup.objects.create(shift=shift, volunteer_account=AccountFactory(),
+                                   status=SignupStatus.APPROVED)
+    remind_shifts(now=now)
+    n = Notification.objects.get(type="shift_reminder")
+    assert n.body == "Morning dog walk at KG Test Shelter starts tomorrow at 9:00 AM."

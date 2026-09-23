@@ -26,7 +26,7 @@ def _signup(hours_out=-3, status=SignupStatus.APPROVED):
 
 @pytest.mark.django_db
 def test_check_in_then_out(client):
-    shift, su = _signup()
+    shift, su = _signup(hours_out=0)
     assert client.post(f"/api/v1/signups/{su.pk}/check-in",
                        **_hdr(su.volunteer_account)).status_code == 200
     assert client.post(f"/api/v1/signups/{su.pk}/check-out",

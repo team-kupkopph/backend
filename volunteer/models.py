@@ -117,6 +117,11 @@ class VolunteerSignup(models.Model):
                   models.Index(fields=["status"], name="idx_volunteer_signup_status"),
                   models.Index(fields=["assigned_listing"], name="idx_volunteer_signup_listing")]
         constraints = [
-            models.UniqueConstraint(fields=["shift", "volunteer_account"],
-                                    name="idx_volunteer_signup_pair"),
+            # D4 · one LIVE signup per volunteer per shift. Cancelled and declined rows are
+            # history, not a lock: a volunteer who cancelled with notice, or was declined once,
+            # may ask again — and the old row stays, so a late cancel is still on record.
+            models.UniqueConstraint(
+                fields=["shift", "volunteer_account"],
+                condition=~models.Q(status__in=["cancelled", "declined"]),
+                name="volunteer_signup_live_pair"),
         ]

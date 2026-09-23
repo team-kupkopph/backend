@@ -42,6 +42,8 @@ _TYPES = [
     NotificationType("signup_declined", "{shift_id, signup_id}", True, "kupkop://shifts/history"),
     NotificationType("shift_cancelled_by_shelter", "{shift_id}", True, "kupkop://shifts/history"),
     NotificationType("shift_reminder", "{shift_id, signup_id, window}", True, "kupkop://shifts"),
+    NotificationType("signup_cancelled_by_volunteer", "{shift_id, signup_id, was_late}", True,
+                     "kupkop://shelter/shifts/{shift_id}"),
     NotificationType("pledge_received", "{need_id, pledge_id}", True, "kupkop://shelter/needs/{need_id}/pledges"),
     NotificationType("pledge_confirmed", "{need_id, pledge_id}", True, "kupkop://donations"),
     # D-S6-5: a badge is a celebration, in-app only — push:false, so it never buzzes a phone

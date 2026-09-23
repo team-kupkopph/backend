@@ -35,6 +35,15 @@ def _not_found(what="shift"):
     return Response({"error": {"code": "not_found", "message": f"No such {what}"}}, status=404)
 
 
+def _animal_repr(listing):
+    """G6 · the shelter picked this animal at approval; the volunteer should know."""
+    if listing is None:
+        return None
+    photo = listing.photos.filter(is_primary=True).first() or listing.photos.first()
+    return {"listing_id": str(listing.pk), "name": listing.name,
+            "photo_url": photo.url if photo else None}
+
+
 def _my_item_repr(su, now):
     late = (su.status == SignupStatus.CANCELLED and su.cancelled_at is not None
             and su.cancelled_at > su.shift.starts_at - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS))
@@ -50,7 +59,11 @@ def _my_item_repr(su, now):
             "was_late": late,
             "check_in_at": su.check_in_at.isoformat() if su.check_in_at else None,
             "check_out_at": su.check_out_at.isoformat() if su.check_out_at else None,
-            "hours": hours, "shift": shift}
+            "hours": hours, "shift": shift,
+            "cancel_cutoff_at": (su.shift.starts_at
+                                 - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS)).isoformat(),
+            "needs_marking": su.status == SignupStatus.APPROVED and su.shift.ends_at <= now,
+            "assigned_animal": _animal_repr(su.assigned_listing)}
 
 
 class ShelterShiftsView(APIView):
@@ -236,7 +249,8 @@ class MySignupsView(APIView):
     def get(self, request):
         now = timezone.now()
         qs = (VolunteerSignup.objects.filter(volunteer_account=request.user)
-              .select_related("shift", "shift__shelter_account").order_by("-shift__starts_at"))
+              .select_related("shift", "shift__shelter_account", "assigned_listing")
+              .order_by("-shift__starts_at"))
         requested, upcoming, history = [], [], []
         for su in qs:
             item = _my_item_repr(su, now)
@@ -273,6 +287,13 @@ class ShiftSignupView(APIView):
         if shift.status != ShiftStatus.OPEN:
             return Response({"error": {"code": "shift_not_open",
                                        "message": "This activity is not taking requests"}},
+                            status=409)
+        declined = VolunteerSignup.objects.filter(shift=shift, volunteer_account=request.user,
+                                                  status=SignupStatus.DECLINED).count()
+        if declined >= 2:
+            # D4 · asking again after one decline is fine; after two, the shelter has answered.
+            return Response({"error": {"code": "declined_twice",
+                                       "message": "The shelter has declined this shift twice"}},
                             status=409)
 
         s = SignupCreateSerializer(data=request.data)
@@ -490,6 +511,7 @@ class SignupCancelView(APIView):
 
             cutoff = shift.starts_at - timezone.timedelta(hours=CANCEL_CUTOFF_HOURS)
             was_late = now > cutoff
+            was_approved = signup.status == SignupStatus.APPROVED
 
             set_signup_status(signup, SignupStatus.CANCELLED, now=now)
             if shift.status == ShiftStatus.FULL:
@@ -497,6 +519,16 @@ class SignupCancelView(APIView):
                 if approved < shift.capacity:
                     shift.status = ShiftStatus.OPEN
                     shift.save(update_fields=["status", "updated_at"])
+
+        if was_approved:
+            # K4 · a shelter counting on this person must hear it from us, not on the day.
+            notify(shift.shelter_account, "signup_cancelled_by_volunteer",
+                   title="A volunteer cancelled",
+                   body=(f"{request.user.display_name} can't make "
+                         f"{shift.title or shift.get_type_display()}."
+                         + (" They cancelled less than 12 hours before." if was_late else "")),
+                   data={"shift_id": str(shift.pk), "signup_id": str(signup.pk),
+                         "was_late": was_late})
         return Response({"status": SignupStatus.CANCELLED, "was_late": was_late})
 
 
@@ -552,11 +584,14 @@ class ShiftRequestsView(APIView):
         # Batch the reliability aggregates for the pending volunteers in a bounded number of
         # queries instead of ~4 per row. Response shape is unchanged.
         reliability = reliability_for_many(su.volunteer_account for su in pending)
+        declined_before = set(shift.signups.filter(status=SignupStatus.DECLINED)
+                              .values_list("volunteer_account_id", flat=True))
         return Response({"results": [{
             "signup_id": str(su.pk),
             "volunteer": {"display_name": su.volunteer_account.display_name},
             "requested_at": su.created_at.isoformat(),
             "reliability": reliability[su.volunteer_account_id],
+            "previously_declined": su.volunteer_account_id in declined_before,
         } for su in pending]})
 
 
@@ -589,13 +624,23 @@ class ShelterShiftRosterView(APIView):
         } for su in signups]})
 
 
+# P3 · K7/K21. A check-in days early, or a check-out before a check-in, produced negative
+# "hours" and a record the shelter could not trust.
+CHECKIN_OPENS_MINUTES = 30
+CHECKOUT_GRACE_HOURS = 2
+
+
+def _conflict(code, message):
+    return Response({"error": {"code": code, "message": message}}, status=409)
+
+
 class SignupCheckView(APIView):
     """US-V7 · the volunteer checks in and out on the day. Only an approved signup can —
     a requested or cancelled one has nothing to check into."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, signup_id, action):
-        signup = VolunteerSignup.objects.filter(pk=signup_id).first()
+        signup = VolunteerSignup.objects.select_related("shift").filter(pk=signup_id).first()
         if signup is None:
             return _not_found("signup")
         if signup.volunteer_account_id != request.user.pk:
@@ -605,10 +650,30 @@ class SignupCheckView(APIView):
         if signup.status != SignupStatus.APPROVED:
             return Response({"error": {"code": "not_approved",
                                        "message": "This shift isn't confirmed"}}, status=409)
-        field = "check_in_at" if action == "in" else "check_out_at"
-        setattr(signup, field, timezone.now())
+        now = timezone.now()
+        shift = signup.shift
+        if action == "in":
+            opens = shift.starts_at - timezone.timedelta(minutes=CHECKIN_OPENS_MINUTES)
+            if signup.check_in_at is not None:
+                return _conflict("already_checked_in", "You're already checked in")
+            if now < opens:
+                return Response({"error": {"code": "too_early",
+                                           "message": "Check-in opens 30 minutes before the shift",
+                                           "details": {"opens_at": opens.isoformat()}}}, status=409)
+            if now > shift.ends_at:
+                return _conflict("too_late", "This shift has ended")
+            field = "check_in_at"
+        else:
+            if signup.check_in_at is None:
+                return _conflict("not_checked_in", "Check in first")
+            if signup.check_out_at is not None:
+                return _conflict("already_checked_out", "You've already checked out")
+            if now > shift.ends_at + timezone.timedelta(hours=CHECKOUT_GRACE_HOURS):
+                return _conflict("too_late", "Check-out closed 2 hours after the shift")
+            field = "check_out_at"
+        setattr(signup, field, now)
         signup.save(update_fields=[field, "updated_at"])
-        return Response({field: getattr(signup, field).isoformat()})
+        return Response({field: now.isoformat()})
 
 
 class SignupAttendanceView(APIView):
