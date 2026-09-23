@@ -1,5 +1,5 @@
 import pytest
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
@@ -39,12 +39,18 @@ def test_signup_defaults_to_requested_with_consents_false():
 
 
 @pytest.mark.django_db
-def test_one_signup_per_volunteer_per_shift():
+def test_one_live_signup_per_volunteer_per_shift():
     s = _shift()
     vol = AccountFactory()
-    VolunteerSignup.objects.create(shift=s, volunteer_account=vol)
+    first = VolunteerSignup.objects.create(shift=s, volunteer_account=vol)
     with pytest.raises(IntegrityError):
-        VolunteerSignup.objects.create(shift=s, volunteer_account=vol)
+        with transaction.atomic():
+            VolunteerSignup.objects.create(shift=s, volunteer_account=vol)
+
+    # D4 · a cancelled row is history, not a lock — asking again is allowed.
+    first.status = SignupStatus.CANCELLED
+    first.save()
+    VolunteerSignup.objects.create(shift=s, volunteer_account=vol)   # allowed now
 
 
 @pytest.mark.django_db

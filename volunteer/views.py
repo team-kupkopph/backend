@@ -274,6 +274,13 @@ class ShiftSignupView(APIView):
             return Response({"error": {"code": "shift_not_open",
                                        "message": "This activity is not taking requests"}},
                             status=409)
+        declined = VolunteerSignup.objects.filter(shift=shift, volunteer_account=request.user,
+                                                  status=SignupStatus.DECLINED).count()
+        if declined >= 2:
+            # D4 · asking again after one decline is fine; after two, the shelter has answered.
+            return Response({"error": {"code": "declined_twice",
+                                       "message": "The shelter has declined this shift twice"}},
+                            status=409)
 
         s = SignupCreateSerializer(data=request.data)
         s.is_valid(raise_exception=True)
@@ -552,11 +559,14 @@ class ShiftRequestsView(APIView):
         # Batch the reliability aggregates for the pending volunteers in a bounded number of
         # queries instead of ~4 per row. Response shape is unchanged.
         reliability = reliability_for_many(su.volunteer_account for su in pending)
+        declined_before = set(shift.signups.filter(status=SignupStatus.DECLINED)
+                              .values_list("volunteer_account_id", flat=True))
         return Response({"results": [{
             "signup_id": str(su.pk),
             "volunteer": {"display_name": su.volunteer_account.display_name},
             "requested_at": su.created_at.isoformat(),
             "reliability": reliability[su.volunteer_account_id],
+            "previously_declined": su.volunteer_account_id in declined_before,
         } for su in pending]})
 
 
