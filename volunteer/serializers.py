@@ -26,16 +26,30 @@ class AwareDateTimeField(serializers.DateTimeField):
 
 class ShiftCreateSerializer(serializers.Serializer):
     type = serializers.ChoiceField(choices=VolunteerType.values)
+    title = serializers.CharField(max_length=80)
     starts_at = AwareDateTimeField()
     ends_at = AwareDateTimeField()
     capacity = serializers.IntegerField(min_value=1)
+    description = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    meeting_point = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    address_line1 = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    barangay = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    city = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    province = serializers.CharField(max_length=80, required=False, allow_blank=True)
 
 
 class ShiftPatchSerializer(serializers.Serializer):
     type = serializers.ChoiceField(choices=VolunteerType.values, required=False)
+    title = serializers.CharField(max_length=80, required=False)
     starts_at = AwareDateTimeField(required=False)
     ends_at = AwareDateTimeField(required=False)
     capacity = serializers.IntegerField(min_value=1, required=False)
+    description = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    meeting_point = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    address_line1 = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    barangay = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    city = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    province = serializers.CharField(max_length=80, required=False, allow_blank=True)
 
 
 class SignupCreateSerializer(serializers.Serializer):

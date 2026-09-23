@@ -73,8 +73,20 @@ class ShelterShiftsView(APIView):
             return Response({"error": {"code": "bad_window",
                                        "message": "The activity must end after it starts"}},
                             status=422)
+        if not d.get("city"):
+            # No location given: copy the shelter's primary address, as a whole. Mixing a
+            # typed street with the shelter's city would describe a place that doesn't exist.
+            addr = (request.user.addresses.filter(is_primary=True).first()
+                    or request.user.addresses.first())
+            if addr is not None:
+                d.update(address_line1=addr.line1 or "", barangay=addr.barangay or "",
+                         city=addr.city or "", province=addr.province or "")
+        if not d.get("city"):
+            return Response({"error": {"code": "location_required",
+                                       "message": "Add where this activity happens"}}, status=422)
         shift = VolunteerShift.objects.create(shelter_account=request.user, **d)
-        return Response(shift_public(shift, approved_count=0), status=201)
+        return Response({**shift_public(shift, approved_count=0),
+                         "location": shift_location(shift)}, status=201)
 
     def get(self, request):
         qs = (VolunteerShift.objects.filter(shelter_account=request.user)
@@ -184,6 +196,9 @@ class ShiftsBrowseView(APIView):
         shift_type = request.query_params.get("type")
         if shift_type:
             qs = qs.filter(type=shift_type)
+        city = (request.query_params.get("city") or "").strip()
+        if city:
+            qs = qs.filter(city__iexact=city)
         return Response({"results": [shift_public(s, approved_count=s.approved_count)
                                      for s in qs[:PAGE_SIZE]], "next": None})
 

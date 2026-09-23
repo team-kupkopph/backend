@@ -31,7 +31,8 @@ def test_a_naive_start_time_is_refused_not_guessed(client):
 @pytest.mark.django_db
 def test_an_offset_time_is_stored_as_that_instant(client):
     shelter = verified_shelter()
-    res = client.post(SHIFTS, {"type": "walking", "starts_at": "2030-10-04T09:00:00+08:00",
+    res = client.post(SHIFTS, {"type": "walking", "title": "Test activity", "city": "Marikina",
+                               "starts_at": "2030-10-04T09:00:00+08:00",
                                "ends_at": "2030-10-04T11:00:00+08:00", "capacity": 2},
                       content_type="application/json", **hdr(shelter))
     assert res.status_code == 201
