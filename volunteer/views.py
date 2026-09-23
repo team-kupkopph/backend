@@ -14,11 +14,11 @@ from shelter.permissions import IsShelter, IsVerifiedShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.reliability import reliability_for, reliability_for_many
 from volunteer.serializers import (
-    naive_datetime_response,
     AttendanceSerializer,
     ShiftCreateSerializer,
     ShiftPatchSerializer,
     SignupCreateSerializer,
+    naive_datetime_response,
 )
 from volunteer.status import set_signup_status
 from volunteer.visibility import public_shifts

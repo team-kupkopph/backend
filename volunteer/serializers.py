@@ -1,6 +1,7 @@
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import serializers
+from rest_framework.response import Response
 
 from volunteer.models import VolunteerType
 
@@ -48,9 +49,6 @@ class SignupCreateSerializer(serializers.Serializer):
 
 class AttendanceSerializer(serializers.Serializer):
     outcome = serializers.ChoiceField(choices=["completed", "no_show"])
-
-
-from rest_framework.response import Response
 
 
 def naive_datetime_response(serializer):
