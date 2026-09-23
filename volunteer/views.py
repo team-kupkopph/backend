@@ -222,7 +222,7 @@ class ShelterShiftCancelView(APIView):
             shift.save(update_fields=["status", "updated_at"])
             affected = list(shift.signups.select_for_update().filter(status__in=live))
             for signup in affected:
-                set_signup_status(signup, SignupStatus.CANCELLED)
+                set_signup_status(signup, SignupStatus.CANCELLED, by="shelter")
                 notify(signup.volunteer_account, "shift_cancelled_by_shelter",
                        title="An activity you signed up for was cancelled",
                        body="The shelter cancelled this activity.",
@@ -554,7 +554,7 @@ class SignupCancelView(APIView):
             was_late = now > cutoff
             was_approved = signup.status == SignupStatus.APPROVED
 
-            set_signup_status(signup, SignupStatus.CANCELLED, now=now)
+            set_signup_status(signup, SignupStatus.CANCELLED, now=now, by="volunteer")
             if shift.status == ShiftStatus.FULL:
                 approved = shift.signups.filter(status=SignupStatus.APPROVED).count()
                 if approved < shift.capacity:

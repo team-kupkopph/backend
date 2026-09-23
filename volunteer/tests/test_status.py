@@ -74,3 +74,15 @@ def test_unknown_status_is_refused_and_does_not_mutate():
         set_signup_status(su, "abducted_by_aliens")
     su.refresh_from_db()
     assert su.status == SignupStatus.REQUESTED
+
+
+@pytest.mark.django_db
+def test_cancel_records_who_and_attendance_records_when():
+    su = _signup()                                   # test_status.py's own builder
+    set_signup_status(su, SignupStatus.CANCELLED, by="shelter")
+    su.refresh_from_db()
+    assert su.cancelled_by == "shelter"
+    su2 = _signup()
+    set_signup_status(su2, SignupStatus.COMPLETED)
+    su2.refresh_from_db()
+    assert su2.attendance_marked_at is not None
