@@ -251,6 +251,12 @@ class ShiftSignupView(APIView):
         shift = public_shifts().filter(pk=shift_id).first()
         if shift is None:
             return _not_found()
+        if request.user.account_type == "shelter":
+            # K6 · an organisation is not a volunteer. Without this a shelter could request
+            # its own shift and appear in its own pending list.
+            return Response({"error": {"code": "shelters_cannot_volunteer",
+                                       "message": "Shelter accounts can't sign up for shifts"}},
+                            status=403)
         if shift.status != ShiftStatus.OPEN:
             return Response({"error": {"code": "shift_not_open",
                                        "message": "This activity is not taking requests"}},

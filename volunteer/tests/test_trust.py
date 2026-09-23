@@ -106,3 +106,23 @@ def test_verification_join_does_not_inflate_slot_counts(client):
                                    status=SignupStatus.APPROVED)
     row = client.get("/api/v1/shifts").json()["results"][0]
     assert row["slots_left"] == 2
+
+
+@pytest.mark.django_db
+def test_a_shelter_account_cannot_request_a_shift(client):
+    s = _future_shift(verified_shelter())
+    other_shelter = verified_shelter()
+    res = client.post(f"/api/v1/shifts/{s.pk}/signups", {"waiver_accepted": True},
+                      content_type="application/json", **hdr(other_shelter))
+    assert res.status_code == 403
+    assert res.json()["error"]["code"] == "shelters_cannot_volunteer"
+
+
+@pytest.mark.django_db
+def test_a_started_shift_cannot_be_requested(client):
+    start = tz.now() - tz.timedelta(minutes=30)
+    s = VolunteerShift.objects.create(shelter_account=verified_shelter(), starts_at=start,
+                                      ends_at=start + tz.timedelta(hours=2), capacity=2)
+    res = client.post(f"/api/v1/shifts/{s.pk}/signups", {"waiver_accepted": True},
+                      content_type="application/json", **hdr(AccountFactory()))
+    assert res.status_code == 404
