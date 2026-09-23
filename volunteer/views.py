@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from listings.models import AdoptionListing
 from notifications.service import notify
 from shelter.permissions import IsShelter, IsVerifiedShelter
+from verifications.models import AccountCapability
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.reliability import reliability_for, reliability_for_many
 from volunteer.representations import discloses_full, shelter_contact, shift_location, shift_public
@@ -607,8 +608,12 @@ class ShelterSignupVolunteerView(APIView):
         signup, error = _load_signup_for_shelter(signup_id, request.user)
         if error:
             return error
+        is_verified_member = AccountCapability.objects.filter(
+            account_id=signup.volunteer_account_id, capability="rescuer",
+            status="approved").exists()
         body = {"display_name": signup.volunteer_account.display_name,
-                "reliability": reliability_for(signup.volunteer_account)}
+                "reliability": reliability_for(signup.volunteer_account),
+                "is_verified_member": is_verified_member}
         if signup.contact_share_consent and signup.status not in _TERMINAL:
             body["contact"] = _contact_repr(signup.volunteer_account)
         return Response(body)
@@ -634,6 +639,10 @@ class ShiftRequestsView(APIView):
         # Batch the reliability aggregates for the pending volunteers in a bounded number of
         # queries instead of ~4 per row. Response shape is unchanged.
         reliability = reliability_for_many(su.volunteer_account for su in pending)
+        members = set(AccountCapability.objects
+                      .filter(account_id__in=[su.volunteer_account_id for su in pending],
+                              capability="rescuer", status="approved")
+                      .values_list("account_id", flat=True))
         declined_before = set(shift.signups.filter(status=SignupStatus.DECLINED)
                               .values_list("volunteer_account_id", flat=True))
         return Response({"results": [{
@@ -641,6 +650,7 @@ class ShiftRequestsView(APIView):
             "volunteer": {"display_name": su.volunteer_account.display_name},
             "requested_at": su.created_at.isoformat(),
             "reliability": reliability[su.volunteer_account_id],
+            "is_verified_member": su.volunteer_account_id in members,
             "previously_declined": su.volunteer_account_id in declined_before,
         } for su in pending]})
 

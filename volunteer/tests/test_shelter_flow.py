@@ -182,3 +182,16 @@ def test_the_shelter_can_change_or_clear_the_assigned_animal(client):
     cleared = client.patch(url, {"assigned_listing_id": None},
                            content_type="application/json", **hdr(shelter))
     assert cleared.json()["assigned_animal"] is None
+
+
+@pytest.mark.django_db
+def test_requests_say_whether_the_volunteer_is_a_verified_member(client):
+    from verifications.models import AccountCapability
+    s = _shift(verified_shelter())
+    member = AccountFactory()
+    AccountCapability.objects.create(account=member, capability="rescuer", status="approved")
+    _signup(s, status=SignupStatus.REQUESTED, vol=member)
+    row = client.get(f"{SHIFTS}/{s.pk}/requests", **hdr(s.shelter_account)).json()["results"][0]
+    assert row["is_verified_member"] is True
+    assert set(row["reliability"]) == {"shifts_completed", "no_shows", "consecutive_no_shows",
+                                       "needs_reapproval", "is_reliable"}
