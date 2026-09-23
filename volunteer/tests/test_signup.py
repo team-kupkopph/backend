@@ -6,6 +6,7 @@ from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
 from notifications.models import Notification
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
+from volunteer.tests.helpers import verified_shelter
 
 
 def _hdr(acc):
@@ -13,7 +14,7 @@ def _hdr(acc):
 
 
 def _shift(**kw):
-    defaults = dict(shelter_account=AccountFactory(account_type="shelter"),
+    defaults = dict(shelter_account=verified_shelter(),
                     starts_at=timezone.now() + timezone.timedelta(days=2),
                     ends_at=timezone.now() + timezone.timedelta(days=2, hours=2), capacity=2)
     defaults.update(kw)
@@ -149,11 +150,12 @@ def test_requesting_twice_is_409_not_500(client):
 
 @pytest.mark.django_db
 def test_cannot_request_a_closed_shift(client):
+    # P1/D3 · closed shifts are terminal and no longer public — a request to one is
+    # indistinguishable from a request to a shift that never existed (K5).
     s = _shift(status=ShiftStatus.CLOSED)
     res = client.post(f"/api/v1/shifts/{s.pk}/signups", _body(),
                       content_type="application/json", **_hdr(AccountFactory()))
-    assert res.status_code == 409
-    assert res.json()["error"]["code"] == "shift_not_open"
+    assert res.status_code == 404
 
 
 @pytest.mark.django_db

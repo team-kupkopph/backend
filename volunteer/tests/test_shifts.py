@@ -5,6 +5,7 @@ from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
 from notifications.models import Notification
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
+from volunteer.tests.helpers import verified_shelter
 
 SHIFTS = "/api/v1/shelter/shifts"
 
@@ -14,7 +15,7 @@ def _hdr(acc):
 
 
 def _shelter():
-    return AccountFactory(account_type="shelter")
+    return verified_shelter()
 
 
 def _payload(**kw):

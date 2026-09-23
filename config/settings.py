@@ -267,6 +267,14 @@ TERMS_VERSION = "2026-08-01"
 # written before Kawang-Gawa reaches real volunteers (a launch blocker for M3).
 WAIVER_VERSION = "2026-08-24"
 
+# Kupkop serves the Philippines. Storage stays UTC (USE_TZ); this only decides how a NAIVE
+# value is read and how "today" is computed. Unset, Django defaulted to America/Chicago and
+# a 09:00 shift posted from Manila landed at 22:00 PHT (test plan K3). Naive input is also
+# refused outright on the shift endpoints — see volunteer.serializers.AwareDateTimeField.
+TIME_ZONE = "Asia/Manila"
+USE_TZ = True
+
+
 # US-SEC3 / US-K1 · session hardening + the §12.4 transport posture.
 #
 # Everything HTTPS-dependent is gated on `not DEBUG`: these flags need TLS to work at all,

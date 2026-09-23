@@ -10,16 +10,18 @@ from rest_framework.views import APIView
 
 from listings.models import AdoptionListing
 from notifications.service import notify
-from shelter.permissions import IsShelter
+from shelter.permissions import IsShelter, IsVerifiedShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.reliability import reliability_for, reliability_for_many
 from volunteer.serializers import (
+    naive_datetime_response,
     AttendanceSerializer,
     ShiftCreateSerializer,
     ShiftPatchSerializer,
     SignupCreateSerializer,
 )
 from volunteer.status import set_signup_status
+from volunteer.visibility import public_shifts
 
 PAGE_SIZE = 20
 
@@ -64,12 +66,20 @@ def _my_item_repr(su, now):
 
 
 class ShelterShiftsView(APIView):
-    """US-V2 · a shelter posts and lists its own activities."""
-    permission_classes = [IsShelter]
+    """US-V2 · a shelter posts and lists its own activities. Posting needs a verified org
+    (D3); listing its own does not, so a shelter whose verification lapses can still manage
+    and cancel what it already posted."""
+
+    def get_permissions(self):
+        return [IsVerifiedShelter()] if self.request.method == "POST" else [IsShelter()]
 
     def post(self, request):
         s = ShiftCreateSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
+        if not s.is_valid():
+            naive = naive_datetime_response(s)
+            if naive is not None:
+                return naive
+            s.is_valid(raise_exception=True)   # every other field error: the standard envelope
         d = s.validated_data
         if d["ends_at"] <= d["starts_at"]:
             return Response({"error": {"code": "bad_window",
@@ -120,7 +130,11 @@ class ShelterShiftDetailView(APIView):
                                        "message": "A closed activity cannot be changed"}},
                             status=409)
         s = ShiftPatchSerializer(data=request.data, partial=True)
-        s.is_valid(raise_exception=True)
+        if not s.is_valid():
+            naive = naive_datetime_response(s)
+            if naive is not None:
+                return naive
+            s.is_valid(raise_exception=True)   # every other field error: the standard envelope
         for key, value in s.validated_data.items():
             setattr(shift, key, value)
         if shift.ends_at <= shift.starts_at:
@@ -175,9 +189,7 @@ class ShiftsBrowseView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        qs = (VolunteerShift.objects
-              .filter(status__in=[ShiftStatus.OPEN, ShiftStatus.FULL],
-                      starts_at__gt=timezone.now())
+        qs = (public_shifts()
               .select_related("shelter_account")
               .annotate(approved_count=_APPROVED_COUNT)
               .order_by("starts_at"))
@@ -193,8 +205,7 @@ class ShiftDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, shift_id):
-        shift = (VolunteerShift.objects.filter(pk=shift_id)
-                 .select_related("shelter_account").first())
+        shift = public_shifts().filter(pk=shift_id).select_related("shelter_account").first()
         if shift is None:
             return _not_found()
         return Response(_shift_repr(shift))
@@ -237,9 +248,15 @@ class ShiftSignupView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, shift_id):
-        shift = VolunteerShift.objects.filter(pk=shift_id).first()
+        shift = public_shifts().filter(pk=shift_id).first()
         if shift is None:
             return _not_found()
+        if request.user.account_type == "shelter":
+            # K6 · an organisation is not a volunteer. Without this a shelter could request
+            # its own shift and appear in its own pending list.
+            return Response({"error": {"code": "shelters_cannot_volunteer",
+                                       "message": "Shelter accounts can't sign up for shifts"}},
+                            status=403)
         if shift.status != ShiftStatus.OPEN:
             return Response({"error": {"code": "shift_not_open",
                                        "message": "This activity is not taking requests"}},
@@ -275,10 +292,8 @@ class ShiftSignupView(APIView):
 
 
 def _contact_repr(account):
-    addr = account.addresses.filter(is_primary=True).first() or account.addresses.first()
-    return {"phone": account.phone, "email": account.email,
-            "address": ({"line1": addr.line1, "barangay": addr.barangay, "city": addr.city,
-                         "province": addr.province} if addr else None)}
+    """D2 · phone and email only — exactly what the consent row names. No address."""
+    return {"phone": account.phone, "email": account.email}
 
 
 def _load_signup_for_shelter(signup_id, user):
