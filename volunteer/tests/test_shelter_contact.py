@@ -34,9 +34,11 @@ def test_contact_present_when_consented_and_live():
     su = _signup(shelter, vol, consent=True)
     body = _c(shelter).get(f"/api/v1/shelter/signups/{su.pk}/volunteer").json()
     assert body["display_name"] == vol.display_name
+    # D2 · the volunteer agreed to share phone and email; the address was never theirs to
+    # give away by implication (review G3 / test plan K2).
+    assert set(body["contact"]) == {"phone", "email"}
     assert body["contact"]["phone"] == "+639170000001"
     assert body["contact"]["email"] == "vol1@example.com"
-    assert body["contact"]["address"]["city"] == "Quezon City"
     assert set(body["reliability"]) == {"shifts_completed","no_shows","consecutive_no_shows",
                                         "needs_reapproval","is_reliable"}
 

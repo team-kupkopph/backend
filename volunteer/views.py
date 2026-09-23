@@ -292,10 +292,8 @@ class ShiftSignupView(APIView):
 
 
 def _contact_repr(account):
-    addr = account.addresses.filter(is_primary=True).first() or account.addresses.first()
-    return {"phone": account.phone, "email": account.email,
-            "address": ({"line1": addr.line1, "barangay": addr.barangay, "city": addr.city,
-                         "province": addr.province} if addr else None)}
+    """D2 · phone and email only — exactly what the consent row names. No address."""
+    return {"phone": account.phone, "email": account.email}
 
 
 def _load_signup_for_shelter(signup_id, user):
