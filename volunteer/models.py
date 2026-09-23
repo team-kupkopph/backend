@@ -47,6 +47,19 @@ class VolunteerShift(models.Model):
     capacity = models.IntegerField(default=1)
     status = models.CharField(max_length=10, choices=ShiftStatus.choices,
                               default=ShiftStatus.OPEN)
+
+    # P2 · what / where (review G1). A shift used to be only a type, a time and an org name —
+    # a volunteer could not tell where to go or what they would do. Location is copied from the
+    # shelter's primary address at posting time (editable), so moving the shelter later does
+    # not silently move shifts already booked.
+    title = models.CharField(max_length=80, blank=True)
+    description = models.TextField(blank=True)
+    meeting_point = models.CharField(max_length=160, blank=True)
+    address_line1 = models.CharField(max_length=200, blank=True)
+    barangay = models.CharField(max_length=80, blank=True)
+    city = models.CharField(max_length=80, blank=True, db_index=True)
+    province = models.CharField(max_length=80, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
