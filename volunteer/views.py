@@ -13,6 +13,7 @@ from notifications.service import notify
 from shelter.permissions import IsShelter, IsVerifiedShelter
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.reliability import reliability_for, reliability_for_many
+from volunteer.representations import discloses_full, shelter_contact, shift_location, shift_public
 from volunteer.serializers import (
     naive_datetime_response,
     AttendanceSerializer,
@@ -26,29 +27,12 @@ from volunteer.visibility import public_shifts
 PAGE_SIZE = 20
 
 # Annotates a shift queryset with its approved-signup tally so a list of shifts costs one
-# query instead of a per-row COUNT (the N+1 `_shift_repr` would otherwise incur per page).
+# query instead of a per-row COUNT (the N+1 `shift_public` would otherwise incur per page).
 _APPROVED_COUNT = Count("signups", filter=Q(signups__status=SignupStatus.APPROVED))
 
 
 def _not_found(what="shift"):
     return Response({"error": {"code": "not_found", "message": f"No such {what}"}}, status=404)
-
-
-def _shift_repr(shift, approved_count=None):
-    if approved_count is None:
-        approved_count = shift.signups.filter(status=SignupStatus.APPROVED).count()
-    return {"shift_id": str(shift.pk), "type": shift.type,
-            "org_name": shift.shelter_account.display_name,
-            "starts_at": shift.starts_at.isoformat(), "ends_at": shift.ends_at.isoformat(),
-            "capacity": shift.capacity, "status": shift.status,
-            "slots_left": max(shift.capacity - approved_count, 0)}
-
-
-def _my_shift_repr(shift):
-    return {"shift_id": str(shift.pk), "type": shift.type,
-            "org_name": shift.shelter_account.display_name,
-            "starts_at": shift.starts_at.isoformat(), "ends_at": shift.ends_at.isoformat(),
-            "status": shift.status, "capacity": shift.capacity}
 
 
 def _my_item_repr(su, now):
@@ -57,12 +41,16 @@ def _my_item_repr(su, now):
     hours = None
     if su.check_in_at and su.check_out_at:
         hours = round((su.check_out_at - su.check_in_at).total_seconds() / 3600, 1)
+    shift = shift_public(su.shift)
+    if discloses_full(su, now):
+        shift["location"] = shift_location(su.shift)
+        shift["shelter_contact"] = shelter_contact(su.shift)
     return {"signup_id": str(su.pk), "status": su.status,
             "cancelled_at": su.cancelled_at.isoformat() if su.cancelled_at else None,
             "was_late": late,
             "check_in_at": su.check_in_at.isoformat() if su.check_in_at else None,
             "check_out_at": su.check_out_at.isoformat() if su.check_out_at else None,
-            "hours": hours, "shift": _my_shift_repr(su.shift)}
+            "hours": hours, "shift": shift}
 
 
 class ShelterShiftsView(APIView):
@@ -85,8 +73,20 @@ class ShelterShiftsView(APIView):
             return Response({"error": {"code": "bad_window",
                                        "message": "The activity must end after it starts"}},
                             status=422)
+        if not d.get("city"):
+            # No location given: copy the shelter's primary address, as a whole. Mixing a
+            # typed street with the shelter's city would describe a place that doesn't exist.
+            addr = (request.user.addresses.filter(is_primary=True).first()
+                    or request.user.addresses.first())
+            if addr is not None:
+                d.update(address_line1=addr.line1 or "", barangay=addr.barangay or "",
+                         city=addr.city or "", province=addr.province or "")
+        if not d.get("city"):
+            return Response({"error": {"code": "location_required",
+                                       "message": "Add where this activity happens"}}, status=422)
         shift = VolunteerShift.objects.create(shelter_account=request.user, **d)
-        return Response(_shift_repr(shift, approved_count=0), status=201)
+        return Response({**shift_public(shift, approved_count=0),
+                         "location": shift_location(shift)}, status=201)
 
     def get(self, request):
         qs = (VolunteerShift.objects.filter(shelter_account=request.user)
@@ -96,7 +96,7 @@ class ShelterShiftsView(APIView):
         status_filter = request.query_params.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
-        return Response({"results": [_shift_repr(s, approved_count=s.approved_count)
+        return Response({"results": [shift_public(s, approved_count=s.approved_count)
                                      for s in qs[:PAGE_SIZE]],
                          "next": None})
 
@@ -114,7 +114,7 @@ class ShelterShiftDetailView(APIView):
             return Response({"error": {"code": "not_your_shift",
                                        "message": "Only the posting shelter can view this"}},
                             status=403)
-        return Response(_shift_repr(shift))
+        return Response({**shift_public(shift), "location": shift_location(shift)})
 
     def patch(self, request, shift_id):
         shift = (VolunteerShift.objects.filter(pk=shift_id)
@@ -142,7 +142,7 @@ class ShelterShiftDetailView(APIView):
                                        "message": "The activity must end after it starts"}},
                             status=422)
         shift.save()
-        return Response(_shift_repr(shift))
+        return Response({**shift_public(shift), "location": shift_location(shift)})
 
 
 class ShelterShiftCancelView(APIView):
@@ -196,7 +196,10 @@ class ShiftsBrowseView(APIView):
         shift_type = request.query_params.get("type")
         if shift_type:
             qs = qs.filter(type=shift_type)
-        return Response({"results": [_shift_repr(s, approved_count=s.approved_count)
+        city = (request.query_params.get("city") or "").strip()
+        if city:
+            qs = qs.filter(city__iexact=city)
+        return Response({"results": [shift_public(s, approved_count=s.approved_count)
                                      for s in qs[:PAGE_SIZE]], "next": None})
 
 
@@ -208,7 +211,17 @@ class ShiftDetailView(APIView):
         shift = public_shifts().filter(pk=shift_id).select_related("shelter_account").first()
         if shift is None:
             return _not_found()
-        return Response(_shift_repr(shift))
+        body = shift_public(shift)
+        if request.user.is_authenticated:
+            mine = (VolunteerSignup.objects.filter(shift=shift, volunteer_account=request.user)
+                    .select_related("shift").order_by("-created_at").first())
+            body["my_signup"] = ({"signup_id": str(mine.pk), "status": mine.status}
+                                 if mine else None)
+            body["viewer"] = {"needs_reapproval": reliability_for(request.user)["needs_reapproval"]}
+            if mine is not None and discloses_full(mine, timezone.now()):
+                body["location"] = shift_location(shift)
+                body["shelter_contact"] = shelter_contact(shift)
+        return Response(body)
 
 
 class MySignupsView(APIView):

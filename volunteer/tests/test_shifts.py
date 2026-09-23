@@ -2,6 +2,7 @@ import pytest
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
+from accounts.models import Address
 from accounts.tokens import tokens_for
 from notifications.models import Notification
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
@@ -15,11 +16,13 @@ def _hdr(acc):
 
 
 def _shelter():
-    return verified_shelter()
+    acc = verified_shelter()
+    Address.objects.create(account=acc, city="Marikina", is_primary=True)
+    return acc
 
 
 def _payload(**kw):
-    d = dict(type="walking",
+    d = dict(type="walking", title="Test activity",
              starts_at=(timezone.now() + timezone.timedelta(days=2)).isoformat(),
              ends_at=(timezone.now() + timezone.timedelta(days=2, hours=2)).isoformat(),
              capacity=3)
