@@ -164,6 +164,10 @@ class ShelterShiftDetailView(APIView):
             return Response({"error": {"code": "shift_closed",
                                        "message": "A closed activity cannot be changed"}},
                             status=409)
+        if shift.ends_at <= timezone.now():
+            return Response({"error": {"code": "shift_ended",
+                                       "message": "This activity has already happened"}},
+                            status=409)
         s = ShiftPatchSerializer(data=request.data, partial=True)
         if not s.is_valid():
             naive = naive_datetime_response(s)
@@ -176,7 +180,17 @@ class ShelterShiftDetailView(APIView):
             return Response({"error": {"code": "bad_window",
                                        "message": "The activity must end after it starts"}},
                             status=422)
-        shift.save()
+        with transaction.atomic():
+            locked = VolunteerShift.objects.select_for_update().get(pk=shift.pk)
+            approved = locked.signups.filter(status=SignupStatus.APPROVED).count()
+            if shift.capacity < approved:
+                return Response({"error": {"code": "capacity_below_approved",
+                                           "message": f"{approved} volunteers are already confirmed",
+                                           "details": {"approved": approved}}}, status=409)
+            if shift.status != ShiftStatus.CLOSED:
+                # K14 · status follows capacity both ways; `closed` stays terminal.
+                shift.status = ShiftStatus.FULL if approved >= shift.capacity else ShiftStatus.OPEN
+            shift.save()
         return Response({**shift_public(shift), "location": shift_location(shift)})
 
 
@@ -197,6 +211,10 @@ class ShelterShiftCancelView(APIView):
         if shift.status == ShiftStatus.CLOSED:
             return Response({"error": {"code": "shift_closed",
                                        "message": "This activity is already closed"}}, status=409)
+        if shift.ends_at <= timezone.now():
+            return Response({"error": {"code": "shift_ended",
+                                       "message": "This activity has already happened"}},
+                            status=409)
 
         live = [SignupStatus.REQUESTED, SignupStatus.APPROVED]
         with transaction.atomic():

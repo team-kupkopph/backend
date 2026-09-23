@@ -3,7 +3,7 @@ import pytest
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
-from volunteer.models import SignupStatus, VolunteerShift, VolunteerSignup
+from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.tests.helpers import hdr, verified_shelter
 
 SHIFTS = "/api/v1/shelter/shifts"
@@ -54,3 +54,45 @@ def test_browse_pages(client):
         _shift(shelter, hours_out=24 + i)
     body = client.get("/api/v1/shifts").json()
     assert len(body["results"]) == 20 and body["next"] == 2
+
+
+def _patch(client, shift, **body):
+    return client.patch(f"{SHIFTS}/{shift.pk}", body, content_type="application/json",
+                        **hdr(shift.shelter_account))
+
+
+@pytest.mark.django_db
+def test_capacity_cannot_drop_below_approved(client):
+    s = _shift(verified_shelter(), capacity=4)
+    for _ in range(3):
+        _signup(s)
+    res = _patch(client, s, capacity=2)
+    assert res.status_code == 409
+    body = res.json()["error"]
+    body.pop("request_id", None)          # US-E2 stamps this on every hand-built error body
+    assert body == {"code": "capacity_below_approved",
+                    "message": "3 volunteers are already confirmed",
+                    "details": {"approved": 3}}
+
+
+@pytest.mark.django_db
+def test_raising_capacity_reopens_a_full_shift_and_lowering_to_approved_fills_it(client):
+    s = _shift(verified_shelter(), capacity=1, status=ShiftStatus.FULL)
+    _signup(s)
+    assert _patch(client, s, capacity=3).json()["status"] == "open"
+    assert _patch(client, s, capacity=1).json()["status"] == "full"
+
+
+@pytest.mark.django_db
+def test_an_ended_shift_cannot_be_edited_or_cancelled(client):
+    s = _shift(verified_shelter(), hours_out=-5)
+    assert _patch(client, s, capacity=9).json()["error"]["code"] == "shift_ended"
+    res = client.post(f"{SHIFTS}/{s.pk}/cancel", **hdr(s.shelter_account))
+    assert res.json()["error"]["code"] == "shift_ended"
+
+
+@pytest.mark.django_db
+def test_capacity_has_a_sane_ceiling(client):
+    s = _shift(verified_shelter())
+    res = _patch(client, s, capacity=3_000_000_000)
+    assert res.status_code == 400 and res.json()["error"]["field"] == "capacity"
