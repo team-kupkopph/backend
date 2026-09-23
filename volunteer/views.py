@@ -31,6 +31,21 @@ PAGE_SIZE = 20
 _APPROVED_COUNT = Count("signups", filter=Q(signups__status=SignupStatus.APPROVED))
 
 
+def _page(request):
+    try:
+        return max(1, int(request.query_params.get("page") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _paged(qs, request):
+    """(rows, next_page) — K8: the lists used to stop at 20 with `next: None` regardless."""
+    page = _page(request)
+    start = (page - 1) * PAGE_SIZE
+    rows = list(qs[start:start + PAGE_SIZE + 1])
+    return rows[:PAGE_SIZE], (page + 1 if len(rows) > PAGE_SIZE else None)
+
+
 def _not_found(what="shift"):
     return Response({"error": {"code": "not_found", "message": f"No such {what}"}}, status=404)
 
@@ -102,16 +117,23 @@ class ShelterShiftsView(APIView):
                          "location": shift_location(shift)}, status=201)
 
     def get(self, request):
+        now = timezone.now()
+        due = Count("signups", filter=Q(signups__status=SignupStatus.APPROVED,
+                                        ends_at__lte=now))
         qs = (VolunteerShift.objects.filter(shelter_account=request.user)
               .select_related("shelter_account")
-              .annotate(approved_count=_APPROVED_COUNT)
-              .order_by("starts_at"))
+              .annotate(approved_count=_APPROVED_COUNT, attendance_due=due))
+        if request.query_params.get("when") == "past":
+            qs = qs.filter(ends_at__lte=now).order_by("-starts_at")
+        else:
+            qs = qs.filter(ends_at__gt=now).order_by("starts_at")
         status_filter = request.query_params.get("status")
         if status_filter:
             qs = qs.filter(status=status_filter)
-        return Response({"results": [shift_public(s, approved_count=s.approved_count)
-                                     for s in qs[:PAGE_SIZE]],
-                         "next": None})
+        rows, nxt = _paged(qs, request)
+        return Response({"results": [{**shift_public(s, approved_count=s.approved_count),
+                                      "attendance_due": s.attendance_due} for s in rows],
+                         "next": nxt})
 
 
 class ShelterShiftDetailView(APIView):
@@ -212,8 +234,9 @@ class ShiftsBrowseView(APIView):
         city = (request.query_params.get("city") or "").strip()
         if city:
             qs = qs.filter(city__iexact=city)
+        rows, nxt = _paged(qs, request)
         return Response({"results": [shift_public(s, approved_count=s.approved_count)
-                                     for s in qs[:PAGE_SIZE]], "next": None})
+                                     for s in rows], "next": nxt})
 
 
 class ShiftDetailView(APIView):
