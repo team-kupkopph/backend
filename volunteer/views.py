@@ -22,6 +22,7 @@ from volunteer.serializers import (
     SignupCreateSerializer,
     naive_datetime_response,
 )
+from volunteer.services import cancel_activity
 from volunteer.status import set_signup_status
 from volunteer.visibility import public_shifts
 
@@ -217,18 +218,8 @@ class ShelterShiftCancelView(APIView):
                                        "message": "This activity has already happened"}},
                             status=409)
 
-        live = [SignupStatus.REQUESTED, SignupStatus.APPROVED]
-        with transaction.atomic():
-            shift.status = ShiftStatus.CLOSED
-            shift.save(update_fields=["status", "updated_at"])
-            affected = list(shift.signups.select_for_update().filter(status__in=live))
-            for signup in affected:
-                set_signup_status(signup, SignupStatus.CANCELLED, by="shelter")
-                notify(signup.volunteer_account, "shift_cancelled_by_shelter",
-                       title="An activity you signed up for was cancelled",
-                       body="The shelter cancelled this activity.",
-                       data={"shift_id": str(shift.pk)})
-        return Response({"cancelled_signups": len(affected)})
+        count = cancel_activity(shift, by="shelter", body="The shelter cancelled this activity.")
+        return Response({"cancelled_signups": count})
 
 
 class ShiftsBrowseView(APIView):
