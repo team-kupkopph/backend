@@ -134,3 +134,39 @@ def test_the_shelter_is_nudged_to_mark_attendance_twice_at_most():
     nudge_attendance(now=end + timezone.timedelta(hours=49))
     assert Notification.objects.filter(account=shelter, type="attendance_due").count() == 2
 
+
+@pytest.mark.django_db
+def test_a_shift_whose_approved_signups_are_all_already_marked_is_not_nudged():
+    """The query relies on status=approved meaning "attendance not yet recorded" — marking
+    attendance moves a signup to completed/no_show (volunteer/status.py) and the only
+    reopen path (attendance undo) restores approved and clears attendance_marked_at. So a
+    shift with no approved signups left needs no nudge: the shelter already acted on it."""
+    from volunteer.status import set_signup_status
+    from volunteer.sweeps import nudge_attendance
+    shelter = AccountFactory(account_type="shelter")
+    end = timezone.now() - timezone.timedelta(hours=3)
+    s = VolunteerShift.objects.create(shelter_account=shelter, starts_at=end - timezone.timedelta(hours=2),
+                                      ends_at=end, capacity=2, title="Morning dog walk")
+    su = VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(),
+                                        status=SignupStatus.APPROVED)
+    set_signup_status(su, SignupStatus.COMPLETED)
+    nudge_attendance()
+    assert Notification.objects.filter(account=shelter, type="attendance_due").count() == 0
+
+
+@pytest.mark.django_db
+def test_a_shift_with_one_marked_and_one_still_approved_signup_is_nudged():
+    from volunteer.status import set_signup_status
+    from volunteer.sweeps import nudge_attendance
+    shelter = AccountFactory(account_type="shelter")
+    end = timezone.now() - timezone.timedelta(hours=3)
+    s = VolunteerShift.objects.create(shelter_account=shelter, starts_at=end - timezone.timedelta(hours=2),
+                                      ends_at=end, capacity=2, title="Morning dog walk")
+    marked = VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(),
+                                            status=SignupStatus.APPROVED)
+    set_signup_status(marked, SignupStatus.NO_SHOW)
+    VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(),
+                                   status=SignupStatus.APPROVED)
+    nudge_attendance()
+    assert Notification.objects.filter(account=shelter, type="attendance_due").count() == 1
+
