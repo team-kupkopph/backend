@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.utils import timezone
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -13,7 +14,7 @@ from shelter.serializers import (
     ShelterProfilePatchSerializer,
 )
 from verifications.models import VerificationRequest
-from volunteer.models import VolunteerSignup
+from volunteer.models import VolunteerShift, VolunteerSignup
 
 REQUESTS_PAGE_SIZE = 20
 
@@ -116,9 +117,11 @@ class ShelterRequestsView(APIView):
         qs = (VolunteerSignup.objects.filter(shift__shelter_account=shelter)
               .select_related("shift", "volunteer_account").order_by("-created_at"))
         return [{
-            "kind": "volunteer", "id": str(su.pk), "title": su.shift.get_type_display(),
-            "subtitle": su.volunteer_account.display_name, "status": su.status,
-            "created_at": su.created_at,
+            "kind": "volunteer", "id": str(su.pk),
+            "title": su.volunteer_account.display_name,
+            "subtitle": (f"{timezone.localtime(su.shift.starts_at):%a, %b %-d} · "
+                         f"{su.shift.title or su.shift.get_type_display()}"),
+            "status": su.status, "created_at": su.created_at,
             "target": {"route": "shelterVolunteerRequests", "id": str(su.shift_id)},
         } for su in qs]
 
@@ -179,6 +182,24 @@ class ShelterDashboardView(APIView):
         # US-X3 · donations are a TWO-key gate: org approved AND a reviewer-verified QR on file.
         # Still fully derived (§3.5) — no stored donations flag; the QR's `verified` is the check.
         donations_enabled = approved and request.user.donation_qrs.filter(verified=True).exists()
+        # K27/G12 · the inbox row and dashboard both need a volunteer-facing summary: how
+        # many signups are awaiting a decision, how many past shifts still need attendance
+        # marked, and what's coming up next — all derived from VolunteerShift/Signup, no
+        # stored counters (same §3.5 discipline as the rest of this view).
+        now = timezone.now()
+        mine = VolunteerShift.objects.filter(shelter_account=request.user)
+        nxt = (mine.filter(starts_at__gt=now, status__in=["open", "full"])
+               .order_by("starts_at").first())
+        volunteer = {
+            "pending_requests": VolunteerSignup.objects.filter(
+                shift__shelter_account=request.user, status="requested",
+                shift__ends_at__gt=now).count(),
+            "attendance_due": VolunteerSignup.objects.filter(
+                shift__shelter_account=request.user, status="approved",
+                shift__ends_at__lte=now).count(),
+            "next_shift": ({"shift_id": str(nxt.pk), "title": nxt.title or nxt.get_type_display(),
+                            "starts_at": nxt.starts_at.isoformat()} if nxt else None),
+        }
         return Response({
             "verification": {"submitted": submitted,
                              "status": vr.status if vr else None, "docs": docs},
@@ -186,6 +207,7 @@ class ShelterDashboardView(APIView):
                        "adopted": request.user.listings.filter(status=ListingStatus.ADOPTED).count(),
                        "donations": 0},
             "gates": {"can_publish": approved, "donations_enabled": donations_enabled},
+            "volunteer": volunteer,
         })
 
 
