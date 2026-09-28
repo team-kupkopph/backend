@@ -41,6 +41,7 @@ from adminapi.views import (
     StaffRefreshView,
     StaffVerifyOtpView,
 )
+from adminapi.volunteer_views import ShiftCloseView
 
 # Every route here is mounted under /admin-api/ by config/urls.py.
 urlpatterns = [
@@ -82,6 +83,9 @@ urlpatterns = [
     # US-S1 · shelters.
     path("shelters", ShelterQueueView.as_view()),
     path("shelters/<uuid:shelter_profile_id>", ShelterDetailView.as_view()),
+
+    # P6 · G21 — staff take a bad shift down; same cascade as the shelter's own cancel.
+    path("shifts/<uuid:shift_id>/close", ShiftCloseView.as_view()),
 
     # US-Q1 · donation QRs.
     path("donation-qrs", DonationQrQueueView.as_view()),

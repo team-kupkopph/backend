@@ -37,3 +37,8 @@ urlpatterns = [
     # wrong side of that line.
     path("admin-api/", include("adminapi.urls")),
 ]
+
+# K22 · Django only calls handler404 when DEBUG=False (pytest-django's default), so a
+# malformed id rejected by a `<uuid:…>` converter before DRF runs still answers the JSON
+# envelope on /api/ paths instead of Django's HTML 404 page.
+handler404 = "common.errors.api_not_found"

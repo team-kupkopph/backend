@@ -128,6 +128,17 @@ class SuspendView(StaffView):
             # and the M5 constraint rejects the pair if they are confused.
             account.save(update_fields=["status", "sessions_revoked_at"])
 
+            if account.account_type == "shelter":
+                # G16 · a suspended shelter's shifts are already hidden from browse (P1); the
+                # volunteers booked on them must be told, not left to turn up. Future only —
+                # what already happened is history. Reinstating reopens nothing.
+                from volunteer.models import ShiftStatus, VolunteerShift
+                from volunteer.services import cancel_activity
+                for shift in VolunteerShift.objects.filter(
+                        shelter_account=account, starts_at__gt=timezone.now(),
+                        status__in=[ShiftStatus.OPEN, ShiftStatus.FULL]):
+                    cancel_activity(shift, by="platform", body="This activity is no longer running.")
+
         request._audit_body = {"reason": reason}
         return Response(member_detail(account))
 

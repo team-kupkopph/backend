@@ -21,6 +21,13 @@ from django.utils import timezone
 from accounts.models import AccountStatus
 
 
+def _when(dt):
+    """"Sat, 04 Oct, 9:00AM" in Manila time (K23 -- this used to format the UTC value)."""
+    local = timezone.localtime(dt)
+    hour = local.hour % 12 or 12
+    return f"{local:%a, %d %b}, {hour}:{local.minute:02d}{'AM' if local.hour < 12 else 'PM'}"
+
+
 def open_commitments(account):
     """Things other people are relying on this account for, as a list of blocker dicts.
 
@@ -60,7 +67,7 @@ def open_commitments(account):
         blockers.append({
             "kind": "volunteer_shift",
             "label": "Kawang-Gawa shift",
-            "detail": signup.shift.starts_at.strftime("%a, %d %b, %I:%M%p").lstrip("0"),
+            "detail": _when(signup.shift.starts_at),
             "id": str(signup.pk),
         })
 
@@ -77,6 +84,23 @@ def open_commitments(account):
             "detail": inquiry.listing.name,
             "id": str(inquiry.pk),
         })
+
+    # A shelter with future activity that volunteers are already rostered onto: deleting the
+    # account out from under them would strand a signup nobody can now fulfil (G16).
+    if account.account_type == "shelter":
+        from volunteer.models import ShiftStatus, VolunteerShift
+
+        hosted = (VolunteerShift.objects
+                  .filter(shelter_account=account, starts_at__gte=now,
+                          status__in=[ShiftStatus.OPEN, ShiftStatus.FULL],
+                          signups__status__in=[SignupStatus.REQUESTED, SignupStatus.APPROVED])
+                  .distinct())
+        for shift in hosted:
+            blockers.append({
+                "kind": "hosted_shift", "label": "Volunteer activity",
+                "detail": f"{shift.title or shift.get_type_display()} · {_when(shift.starts_at)}",
+                "id": str(shift.pk),
+            })
 
     return blockers
 

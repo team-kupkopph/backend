@@ -27,7 +27,7 @@ SAFE_FIELDS: dict[tuple[str, str], tuple[str, ...]] = {
         "email_verified_at", "phone_verified_at", "created_at", "updated_at",
         "deleted_at", "anonymized_at", "last_active_at",
     ),
-    ("accounts", "Address"): ("id", "account_id", "city", "province", "created_at"),
+    ("accounts", "Address"): ("address_id", "account_id", "city", "province"),
     ("shelter", "ShelterProfile"): (
         "shelter_profile_id", "account_id", "org_name", "org_type", "tier",
         "official_email", "official_phone", "website_url", "is_escalation_partner",
@@ -53,21 +53,27 @@ SAFE_FIELDS: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("sagip", "StrayReport"): (
         "report_id", "reporter_account_id", "status", "city", "barangay",
-        "description", "created_at",
+        "notes", "created_at",
     ),
-    ("sagip", "RescueCase"): ("case_id", "report_id", "status", "created_at"),
+    ("sagip", "RescueCase"): (
+        "case_id", "report_id", "claimed_by_account_id", "claimed_at", "resolved_at",
+        "expired_at",
+    ),
     ("listings", "Pet"): ("pet_id", "name", "species", "sex", "created_at"),
     ("listings", "AdoptionListing"): (
-        "listing_id", "posted_by", "pet_id", "listing_status", "fee", "city", "created_at",
+        "listing_id", "posted_by", "adopted_pet_id", "status", "adoption_fee", "city",
+        "created_at",
     ),
     ("listings", "AdoptionInquiry"): (
-        "inquiry_id", "listing_id", "inquirer_account_id", "status", "created_at",
+        "inquiry_id", "listing_id", "adopter_account_id", "status", "created_at",
     ),
     ("volunteer", "VolunteerShift"): (
-        "shift_id", "shelter_account_id", "title", "starts_at", "ends_at", "capacity",
+        "shift_id", "shelter_account_id", "type", "title", "status", "city", "starts_at",
+        "ends_at", "capacity",
     ),
     ("volunteer", "VolunteerSignup"): (
         "signup_id", "shift_id", "volunteer_account_id", "status", "created_at", "cancelled_at",
+        "cancelled_by", "attendance_marked_at",
     ),
     ("community", "StoryPost"): (
         "story_id", "author_account_id", "story_type", "status", "created_at",
@@ -76,11 +82,11 @@ SAFE_FIELDS: dict[tuple[str, str], tuple[str, ...]] = {
         "need_id", "shelter_account_id", "title", "status", "created_at",
     ),
     ("notifications", "Notification"): (
-        "notification_id", "account_id", "type", "read_at", "created_at",
+        "notification_id", "account_id", "type", "read", "created_at",
     ),
     ("devices", "DeviceToken"): (
         # No fcm_token — it is a credential for pushing to someone's phone.
-        "id", "account_id", "platform", "created_at",
+        "token_id", "account_id", "platform", "created_at",
     ),
     ("adminapi", "AdminAuditLog"): (
         "audit_id", "actor_id", "actor_label", "action", "target_type", "target_id",

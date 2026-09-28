@@ -7,6 +7,8 @@ from accounts.factories import AccountFactory
 from adminapi.tests.conftest import full_signin
 from community.models import StoryPost, StoryStatus
 from moderation.models import ModerationFlag
+from volunteer.models import VolunteerShift
+from volunteer.tests.helpers import verified_shelter
 
 
 @pytest.fixture
@@ -64,6 +66,19 @@ def test_a_present_target_is_described(client, auth):
     flag = make_flag(target_type="account", target_id=account.account_id)
     target = client.get(f"/admin-api/flags/{flag.flag_id}", **auth).json()["target"]
     assert target["state"] == "present" and target["label"] == "Spammy Org"
+
+
+@pytest.mark.django_db
+def test_a_flagged_shift_appears_with_its_title(client, auth):
+    from django.utils import timezone
+
+    start = timezone.now() + timezone.timedelta(hours=48)
+    shift = VolunteerShift.objects.create(shelter_account=verified_shelter(), starts_at=start,
+                                          ends_at=start + timezone.timedelta(hours=2), capacity=3,
+                                          title="Morning dog walk")
+    flag = make_flag(target_type="shift", target_id=shift.pk)
+    target = client.get(f"/admin-api/flags/{flag.flag_id}", **auth).json()["target"]
+    assert target["state"] == "present" and target["label"] == "Morning dog walk"
 
 
 @pytest.mark.django_db

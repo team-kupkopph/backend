@@ -1,3 +1,4 @@
+import pytest
 from rest_framework.exceptions import Throttled, ValidationError
 
 from common.errors import error_handler
@@ -39,3 +40,23 @@ def test_throttled_exception_carries_retry_after_in_details():
             "request_id": "-",
         }
     }
+
+
+# -- K22 · a malformed id in the URL never falls through DRF to Django's HTML 404 -------
+@pytest.mark.django_db
+def test_an_api_404_from_url_routing_is_json(client):
+    """A `<uuid:...>` path converter rejects a malformed id BEFORE DRF's view (and its
+    exception handler) ever runs — Django's own URL resolver 404s first, straight past
+    `error_handler` above, to the framework's HTML "Page not found" page. Every screen that
+    reads `error.message` off that response fell back to generic copy."""
+    res = client.get("/api/v1/shifts/not-a-uuid")
+    assert res.status_code == 404
+    assert res["Content-Type"].startswith("application/json")
+    assert res.json()["error"]["code"] == "not_found"
+    assert "request_id" in res.json()["error"]
+
+
+def test_non_api_404s_are_untouched(client):
+    res = client.get("/definitely-not-a-page")
+    assert res.status_code == 404
+    assert not res["Content-Type"].startswith("application/json")
