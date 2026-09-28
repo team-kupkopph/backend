@@ -122,3 +122,51 @@ def test_blocker_times_are_local():
     VolunteerSignup.objects.create(shift=s, volunteer_account=vol, status="approved")
     assert "9:00AM" in open_commitments(vol)[0]["detail"]
     assert "9:00AM" in open_commitments(shelter)[0]["detail"]
+
+
+# -- K18 · per-account throttles on requesting and posting -------------------------------
+# Sized against the REAL configured rate (settings.py), not a test-local override: DRF binds
+# `SimpleRateThrottle.THROTTLE_RATES` once at import time, so overriding `settings.REST_
+# FRAMEWORK` mid-test never reaches it (verified: it stays at the configured 30/day). Follows
+# the pattern `common/tests/test_throttles_sprint7.py` already uses for the same reason.
+@pytest.fixture(autouse=True)
+def _clear_throttle_history_platform():
+    from django.core.cache import cache
+    cache.clear()
+    yield
+    cache.clear()
+
+
+def _limit_for(scope):
+    from django.conf import settings
+    rate = settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"][scope]
+    return int(rate.split("/")[0])
+
+
+@pytest.mark.django_db
+def test_requesting_is_throttled_per_account(client):
+    shelter = verified_shelter()
+    vol = AccountFactory()
+    limit = _limit_for("signup_create")
+    codes = []
+    for _ in range(limit + 1):
+        s = _shift(shelter)
+        codes.append(client.post(f"/api/v1/shifts/{s.pk}/signups", {"waiver_accepted": True},
+                                 content_type="application/json", **hdr(vol)).status_code)
+    assert codes[:limit] == [201] * limit
+    assert codes[limit] == 429
+
+
+@pytest.mark.django_db
+def test_posting_a_shift_is_throttled_per_account(client):
+    shelter = verified_shelter()
+    limit = _limit_for("shift_create")
+    start = timezone.now() + timezone.timedelta(hours=48)
+    body = {"type": "walking", "title": "Morning dog walk", "city": "Marikina",
+           "starts_at": start.isoformat(), "ends_at": (start + timezone.timedelta(hours=2)).isoformat(),
+           "capacity": 3}
+    codes = [client.post("/api/v1/shelter/shifts", body, content_type="application/json",
+                         **hdr(shelter)).status_code
+            for _ in range(limit + 1)]
+    assert codes[:limit] == [201] * limit
+    assert codes[limit] == 429

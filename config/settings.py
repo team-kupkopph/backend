@@ -194,6 +194,8 @@ REST_FRAMEWORK = {
         # several at once stays well clear, while a script does not.
         "media_presign": "60/hour", "story_create": "10/hour",
         "need_create": "30/day", "pledge_create": "30/day",
+        # P6 · US-K18 · requesting a shift and posting one, per account.
+        "signup_create": "30/day", "shift_create": "30/day",
     },
     "EXCEPTION_HANDLER": "common.errors.error_handler",
 }

@@ -8,6 +8,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.throttles import ShiftCreateThrottle, SignupCreateThrottle
 from listings.models import AdoptionListing
 from notifications.service import notify
 from shelter.permissions import IsShelter, IsVerifiedShelter
@@ -90,6 +91,10 @@ class ShelterShiftsView(APIView):
 
     def get_permissions(self):
         return [IsVerifiedShelter()] if self.request.method == "POST" else [IsShelter()]
+
+    def get_throttles(self):
+        # K18 · only the write is rate-limited; a shelter listing its own shifts is not.
+        return [ShiftCreateThrottle()] if self.request.method == "POST" else []
 
     def post(self, request):
         s = ShiftCreateSerializer(data=request.data)
@@ -306,6 +311,9 @@ class ShiftSignupView(APIView):
     clean 409 rather than a 500.
     """
     permission_classes = [IsAuthenticated]
+
+    def get_throttles(self):
+        return [SignupCreateThrottle()]
 
     def post(self, request, shift_id):
         shift = public_shifts().filter(pk=shift_id).first()

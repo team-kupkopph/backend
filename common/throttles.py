@@ -135,3 +135,13 @@ class PledgeCreateThrottle(AccountScopedThrottle):
     """A pledge is a promise a shelter plans around — a flood of them is a denial of service
     against a shelter's ability to plan, not just noise."""
     scope = "pledge_create"
+
+
+# --- P6 · US-K18 · the volunteer write paths that shipped without a scope --------------
+class SignupCreateThrottle(AccountScopedThrottle):
+    """K18 · a script could request every open shift, each one a push to a shelter."""
+    scope = "signup_create"
+
+
+class ShiftCreateThrottle(AccountScopedThrottle):
+    scope = "shift_create"
