@@ -20,12 +20,23 @@ class StatusError(ValueError):
 
 
 @transaction.atomic
-def set_signup_status(signup, status, *, now=None):
-    """Move `signup` to `status`, stamping `cancelled_at` when it becomes cancelled.
+def set_signup_status(signup, status, *, now=None, by=""):
+    """Move `signup` to `status`, stamping `cancelled_at`/`cancelled_by` when it becomes
+    cancelled, and `attendance_marked_at` when attendance is recorded.
 
     `cancelled_at` is written here and only here. It is a dedicated column rather than a read
     of `updated_at` because the 12h free-vs-late audit must survive later writes, which
     overwrite `updated_at` (DDL caveat L4 / the `adoption_inquiry.decided_at` precedent).
+
+    `by` (P4 · G11) records who ended the signup: "volunteer" from SignupCancelView,
+    "shelter" from ShelterShiftCancelView's cascade. Left blank for non-cancel transitions.
+    `attendance_marked_at` (P4 · K16's 24h undo window) is stamped the moment attendance is
+    recorded, regardless of outcome.
+
+    The only reopen path is P4's attendance undo (`AttendanceUndoView`), which writes
+    `status` back to `approved` directly rather than through this function, and clears
+    `attendance_marked_at` — everything above is a forward-only transition.
+
     Returns the saved signup.
     """
     if status not in SignupStatus.values:
@@ -35,6 +46,10 @@ def set_signup_status(signup, status, *, now=None):
     signup.status = status
     if status == SignupStatus.CANCELLED and signup.cancelled_at is None:
         signup.cancelled_at = now or timezone.now()
-        fields.append("cancelled_at")
+        signup.cancelled_by = by
+        fields += ["cancelled_at", "cancelled_by"]
+    if status in (SignupStatus.COMPLETED, SignupStatus.NO_SHOW):
+        signup.attendance_marked_at = now or timezone.now()
+        fields.append("attendance_marked_at")
     signup.save(update_fields=fields)
     return signup

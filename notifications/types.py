@@ -51,6 +51,9 @@ _TYPES = [
     NotificationType("badge_earned", "{badge_code}", False, "kupkop://impact"),
     # §11.3: a strong lost<->found suggestion pushes both reporters — a reunion is time-sensitive.
     NotificationType("match_suggested", "{report_id}", True, "kupkop://reports/{report_id}"),
+    # P4 · G11/K16.
+    NotificationType("signup_cancelled_by_shelter", "{shift_id, signup_id}", True, "kupkop://shifts"),
+    NotificationType("attendance_due", "{shift_id, window}", True, "kupkop://shelter/shifts/{shift_id}"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}

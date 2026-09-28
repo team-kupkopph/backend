@@ -12,9 +12,11 @@ from django.db.models import Count, Max
 
 from .models import SignupStatus, VolunteerSignup
 
-# D-S5-4 · "Reliable" requires a floor of completed shifts. A brand-new volunteer reads
-# "New volunteer", never Reliable — an unearned trust signal is worse than none. 3 matches
-# the app's other tolerance numbers (3 consecutive no-shows, 3rd withdrawn inquiry).
+# D-S5-4 · "Reliable" requires a floor of completed shifts AND a clean current run — a
+# no-show suspends Reliable even for a volunteer who cleared the floor long ago, until the
+# next completed shift resets the streak. A brand-new volunteer reads "New volunteer", never
+# Reliable — an unearned trust signal is worse than none. 3 matches the app's other tolerance
+# numbers (3 consecutive no-shows, 3rd withdrawn inquiry).
 RELIABLE_MIN_COMPLETED = 3
 
 # 3 consecutive no-shows, reset by any completed shift (§6.5, read as consecutive).
@@ -51,7 +53,7 @@ def _block(shifts_completed, no_shows, consecutive):
         "no_shows": no_shows,
         "consecutive_no_shows": consecutive,
         "needs_reapproval": consecutive >= REAPPROVAL_THRESHOLD,
-        "is_reliable": shifts_completed >= RELIABLE_MIN_COMPLETED,
+        "is_reliable": shifts_completed >= RELIABLE_MIN_COMPLETED and consecutive == 0,
     }
 
 

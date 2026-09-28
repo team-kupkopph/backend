@@ -136,3 +136,12 @@ def test_owner_account_is_403d(client):
     owner = AccountFactory(account_type="personal", email_verified_at=timezone.now())
     res = client.get(URL, **_hdr(owner))
     assert res.status_code == 403
+
+
+@pytest.mark.django_db
+def test_volunteer_row_leads_with_the_person(client):
+    f = _Fixture()
+    item = client.get("/api/v1/shelter/requests?kind=volunteer",
+                      **_hdr(f.shelter)).json()["results"][0]
+    assert item["title"] == f.volunteer.display_name
+    assert item["subtitle"].endswith("Dog walking")      # _shift() posts an untitled walk

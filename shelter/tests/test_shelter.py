@@ -193,3 +193,25 @@ def test_dashboard_counts_adopted_from_own_listings(client):
     res = client.get("/api/v1/shelter/dashboard", **_hdr(acc))
     assert res.status_code == 200
     assert res.json()["counts"]["adopted"] == 1
+
+
+@pytest.mark.django_db
+def test_dashboard_carries_the_volunteer_summary(client):
+    from django.utils import timezone
+
+    from volunteer.models import VolunteerShift, VolunteerSignup
+    from volunteer.tests.helpers import verified_shelter
+    shelter = verified_shelter(email_verified_at=timezone.now())
+    now = timezone.now()
+    future = VolunteerShift.objects.create(shelter_account=shelter, capacity=2, title="Walk",
+                                           starts_at=now + timezone.timedelta(days=1),
+                                           ends_at=now + timezone.timedelta(days=1, hours=2))
+    ended = VolunteerShift.objects.create(shelter_account=shelter, capacity=2, title="Feed",
+                                          starts_at=now - timezone.timedelta(hours=5),
+                                          ends_at=now - timezone.timedelta(hours=3))
+    VolunteerSignup.objects.create(shift=future, volunteer_account=AccountFactory(), status="requested")
+    VolunteerSignup.objects.create(shift=ended, volunteer_account=AccountFactory(), status="approved")
+    body = client.get("/api/v1/shelter/dashboard", **_hdr(shelter)).json()
+    assert body["volunteer"]["pending_requests"] == 1
+    assert body["volunteer"]["attendance_due"] == 1
+    assert body["volunteer"]["next_shift"]["shift_id"] == str(future.pk)

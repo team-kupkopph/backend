@@ -190,3 +190,13 @@ def test_the_requests_payload_leaks_no_other_shelters_identity(client):
     assert "Some Other Shelter" not in text
     assert "other-shelter@example.com" not in text
     assert str(other.pk) not in text
+
+
+@pytest.mark.django_db
+def test_a_recent_no_show_suspends_reliable_until_the_next_completion():
+    vol = AccountFactory()
+    _history(vol, [(-50, SignupStatus.COMPLETED), (-40, SignupStatus.COMPLETED),
+                   (-30, SignupStatus.COMPLETED), (-20, SignupStatus.NO_SHOW)])
+    assert reliability_for(vol)["is_reliable"] is False
+    _history(vol, [(-10, SignupStatus.COMPLETED)])
+    assert reliability_for(vol)["is_reliable"] is True

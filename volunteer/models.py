@@ -6,12 +6,14 @@ from accounts.models import Account
 
 
 class VolunteerType(models.TextChoices):
-    WALKING = "walking"
-    FEEDING = "feeding"
-    VISITOR = "visitor"
-    EVENT = "event"
-    FACILITY = "facility"
-    TRANSPORT = "transport"
+    # P4 · labels match the mobile app's own TYPE_LABEL word-for-word, so
+    # get_type_display() agrees with what the app shows everywhere.
+    WALKING = "walking", "Dog walking"
+    FEEDING = "feeding", "Feeding"
+    VISITOR = "visitor", "Visitor"
+    EVENT = "event", "Event"
+    FACILITY = "facility", "Facility care"
+    TRANSPORT = "transport", "Transport"
 
 
 class ShiftStatus(models.TextChoices):
@@ -110,6 +112,12 @@ class VolunteerSignup(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    # P4 · who ended a signup (G11) and when attendance was recorded (K16 24h undo window).
+    # cancelled_by is a free string, not TextChoices: P6 adds a "platform" value for
+    # staff-initiated cancels, so this field deliberately does not pin its choices here.
+    cancelled_by = models.CharField(max_length=10, blank=True)
+    attendance_marked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "volunteer_signup"
