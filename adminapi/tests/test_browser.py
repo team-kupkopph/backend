@@ -133,3 +133,17 @@ def test_search_only_covers_fields_that_are_returned(client, auth):
     AccountFactory(display_name="Searchable Person", email="searchme@ex.com")
     hits = client.get("/admin-api/models/accounts.Account?q=Searchable", **auth).json()["results"]
     assert any(r["display_name"] == "Searchable Person" for r in hits)
+
+
+def test_every_allow_listed_field_is_a_real_field():
+    """G22 · a misspelt allow-list entry doesn't error — `serialise()` getattr()s it to None,
+    so the browser silently shows an empty column (VolunteerShift listed `title` before the
+    field existed, and hid `type` and `status`)."""
+    from django.apps import apps
+    missing = []
+    for (app_label, model_name), fields in SAFE_FIELDS.items():
+        model = apps.get_model(app_label, model_name)
+        names = {f.name for f in model._meta.get_fields()} | {
+            f.attname for f in model._meta.concrete_fields}
+        missing += [f"{app_label}.{model_name}.{f}" for f in fields if f not in names]
+    assert not missing, missing
