@@ -94,6 +94,21 @@ def test_closing_a_shift_needs_a_staff_token(client):
 
 
 @pytest.mark.django_db
+def test_staff_cannot_close_a_shift_that_already_happened(client, staff):
+    s = _shift(verified_shelter(), hours_out=-5)
+    vol = AccountFactory()
+    signup = VolunteerSignup.objects.create(shift=s, volunteer_account=vol, status="approved")
+    res = client.post(f"/admin-api/shifts/{s.pk}/close", {"reason": "Reported as a scam."},
+                      content_type="application/json", **staff)
+    assert res.json()["error"]["code"] == "shift_ended"
+    assert res.status_code == 409
+    s.refresh_from_db(); signup.refresh_from_db()
+    assert s.status != ShiftStatus.CLOSED
+    assert signup.status == "approved"
+    assert not Notification.objects.filter(account=vol, type="shift_cancelled_by_shelter").exists()
+
+
+@pytest.mark.django_db
 def test_blocker_times_are_local():
     from zoneinfo import ZoneInfo
 

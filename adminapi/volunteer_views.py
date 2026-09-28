@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework.response import Response
 
 from adminapi.verifications_views import StaffView
@@ -19,6 +20,10 @@ class ShiftCloseView(StaffView):
             return Response({"error": {"code": "not_found"}}, status=404)
         if shift.status == ShiftStatus.CLOSED:
             return Response({"error": {"code": "shift_closed"}}, status=409)
+        if shift.ends_at <= timezone.now():
+            return Response({"error": {"code": "shift_ended",
+                                       "message": "This activity has already happened"}},
+                            status=409)
         count = cancel_activity(shift, by="platform", body="This activity is no longer running.")
         request._audit_body = {"reason": reason}
         return Response({"cancelled_signups": count})
