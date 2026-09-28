@@ -48,3 +48,29 @@ def test_the_shelters_own_cancel_still_works_through_the_service(client):
     res = client.post(f"/api/v1/shelter/shifts/{s.pk}/cancel", **hdr(shelter))
     assert res.json() == {"cancelled_signups": 1}
     assert VolunteerSignup.objects.get(shift=s).cancelled_by == "shelter"
+
+
+@pytest.mark.django_db
+def test_a_shelter_with_booked_volunteers_is_blocked_from_deleting():
+    from accounts.lifecycle import open_commitments
+    shelter = verified_shelter()
+    s = _shift(shelter)
+    VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(), status="approved")
+    kinds = [b["kind"] for b in open_commitments(shelter)]
+    assert kinds == ["hosted_shift"]
+
+
+@pytest.mark.django_db
+def test_blocker_times_are_local():
+    from zoneinfo import ZoneInfo
+
+    from accounts.lifecycle import open_commitments
+    shelter = verified_shelter()
+    start = timezone.datetime(2031, 10, 4, 9, 0, tzinfo=ZoneInfo("Asia/Manila"))
+    s = VolunteerShift.objects.create(shelter_account=shelter, starts_at=start,
+                                      ends_at=start + timezone.timedelta(hours=2), capacity=2,
+                                      title="Morning dog walk")
+    vol = AccountFactory()
+    VolunteerSignup.objects.create(shift=s, volunteer_account=vol, status="approved")
+    assert "9:00AM" in open_commitments(vol)[0]["detail"]
+    assert "9:00AM" in open_commitments(shelter)[0]["detail"]
