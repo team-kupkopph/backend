@@ -1,3 +1,5 @@
+from django.http import JsonResponse
+from django.views.defaults import page_not_found
 from rest_framework.exceptions import Throttled
 from rest_framework.views import exception_handler
 
@@ -60,3 +62,12 @@ def _stamp_request_id(response):
         if isinstance(error, dict):
             error["request_id"] = request_id_var.get()
     return response
+
+
+def api_not_found(request, exception=None):
+    """K22 · a `<uuid:…>` converter rejects a malformed id before DRF runs, so the client got
+    Django's HTML 404 and every screen fell back to generic copy. API paths answer in the
+    envelope; everything else keeps Django's default page."""
+    if request.path.startswith("/api/"):
+        return JsonResponse({"error": {"code": "not_found", "message": "Not found"}}, status=404)
+    return page_not_found(request, exception)
