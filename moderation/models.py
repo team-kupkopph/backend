@@ -12,6 +12,7 @@ class FlagTarget(models.TextChoices):
     QR = "qr"
     MESSAGE = "message"
     STORY = "story"   # D-S6-4 · stories are UGC and must be flaggable via the same pipeline
+    SHIFT = "shift"   # P6 · G21 — volunteers can report a bad shift listing
 
 
 class FlagStatus(models.TextChoices):

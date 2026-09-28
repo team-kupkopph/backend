@@ -61,6 +61,39 @@ def test_a_shelter_with_booked_volunteers_is_blocked_from_deleting():
 
 
 @pytest.mark.django_db
+def test_a_shift_can_be_flagged(client):
+    s = _shift(verified_shelter())
+    res = client.post("/api/v1/moderation/flags",
+                      {"target_type": "shift", "target_id": str(s.pk), "reason": "Looks like a scam"},
+                      content_type="application/json", **hdr(AccountFactory()))
+    assert res.status_code in (200, 201)
+
+
+@pytest.mark.django_db
+def test_staff_can_close_a_shift_with_a_reason(client, staff):
+    s = _shift(verified_shelter())
+    VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(), status="approved")
+    assert client.post(f"/admin-api/shifts/{s.pk}/close", {}, content_type="application/json",
+                       **staff).json()["error"]["code"] == "reason_required"
+    res = client.post(f"/admin-api/shifts/{s.pk}/close", {"reason": "Reported as a scam."},
+                      content_type="application/json", **staff)
+    assert res.json() == {"cancelled_signups": 1}
+    s.refresh_from_db()
+    assert s.status == ShiftStatus.CLOSED
+    again = client.post(f"/admin-api/shifts/{s.pk}/close", {"reason": "x"},
+                        content_type="application/json", **staff)
+    assert again.status_code == 409
+
+
+@pytest.mark.django_db
+def test_closing_a_shift_needs_a_staff_token(client):
+    s = _shift(verified_shelter())
+    res = client.post(f"/admin-api/shifts/{s.pk}/close", {"reason": "x"},
+                      content_type="application/json", **hdr(s.shelter_account))
+    assert res.status_code in (401, 403)
+
+
+@pytest.mark.django_db
 def test_blocker_times_are_local():
     from zoneinfo import ZoneInfo
 
