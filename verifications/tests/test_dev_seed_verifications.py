@@ -38,7 +38,13 @@ def test_debug_off_hides_the_route_entirely(client, settings):
 
     assert res.status_code == 404
     assert unknown.status_code == 404
-    assert res.content == unknown.content
+    # K22 · both now carry a request_id (US-E2's per-request correlation id) which by
+    # design differs between any two requests — popped before the equality check, same
+    # as common/tests/test_throttles.py does for the OTP-resend enumeration comparison.
+    res_body, unknown_body = res.json(), unknown.json()
+    res_body["error"].pop("request_id", None)
+    unknown_body["error"].pop("request_id", None)
+    assert res_body == unknown_body
 
 
 @pytest.mark.django_db

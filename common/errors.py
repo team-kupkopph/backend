@@ -69,5 +69,6 @@ def api_not_found(request, exception=None):
     Django's HTML 404 and every screen fell back to generic copy. API paths answer in the
     envelope; everything else keeps Django's default page."""
     if request.path.startswith("/api/"):
-        return JsonResponse({"error": {"code": "not_found", "message": "Not found"}}, status=404)
+        return JsonResponse({"error": {"code": "not_found", "message": "Not found",
+                                       "request_id": request_id_var.get()}}, status=404)
     return page_not_found(request, exception)

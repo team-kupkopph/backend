@@ -53,6 +53,7 @@ def test_an_api_404_from_url_routing_is_json(client):
     assert res.status_code == 404
     assert res["Content-Type"].startswith("application/json")
     assert res.json()["error"]["code"] == "not_found"
+    assert "request_id" in res.json()["error"]
 
 
 def test_non_api_404s_are_untouched(client):
