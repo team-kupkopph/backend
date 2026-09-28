@@ -14,7 +14,7 @@ from django.utils import timezone
 from notifications.models import Notification
 from notifications.service import notify
 
-from .models import SignupStatus, VolunteerSignup
+from .models import SignupStatus, VolunteerShift, VolunteerSignup
 
 # (label, upper_hours, lower_hours): remind when lower_h < (starts_at - now) <= upper_h.
 # Bands are disjoint so a shift within 1h is ONLY in the 1h band — it never also gets the
@@ -62,3 +62,30 @@ def remind_shifts(now=None):
                          "window": label})
             reminded.append(signup)
     return reminded
+
+
+# P4 · G9 (shelter half). An unmarked shift used to sit as "Confirmed" in the volunteer's
+# history forever, with no nudge for the shelter to record who actually showed up.
+# Idempotent like remind_shifts: the notification rows are the record, not a stored flag.
+ATTENDANCE_WINDOWS = [("2h", 2), ("48h", 48)]
+
+
+def nudge_attendance(now=None):
+    """Send any due attendance-marking nudges to shelters. Idempotent. Returns the shifts nudged."""
+    now = now or timezone.now()
+    nudged = []
+    for label, hours in ATTENDANCE_WINDOWS:
+        due = (VolunteerShift.objects
+               .filter(ends_at__lte=now - timezone.timedelta(hours=hours),
+                       signups__status=SignupStatus.APPROVED)
+               .distinct().select_related("shelter_account"))
+        for shift in due:
+            if Notification.objects.filter(account=shift.shelter_account, type="attendance_due",
+                                           data__shift_id=str(shift.pk), data__window=label).exists():
+                continue
+            notify(shift.shelter_account, "attendance_due",
+                   title="Who came?",
+                   body=f"Mark attendance for {shift.title or shift.get_type_display()}.",
+                   data={"shift_id": str(shift.pk), "window": label})
+            nudged.append(shift)
+    return nudged

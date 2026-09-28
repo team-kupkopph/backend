@@ -20,7 +20,7 @@ instead. See common/locks.py for why it is a database advisory lock and not `flo
 from common.management_base import SingletonCommand
 from community.sweeps import award_badges
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims
-from volunteer.sweeps import remind_shifts
+from volunteer.sweeps import nudge_attendance, remind_shifts
 
 # (label, callable) — each returns a list of the rows it touched.
 #
@@ -36,6 +36,7 @@ SWEEPS = [
     ("escalated", escalate_reports),
     ("expired", expire_stalled_claims),
     ("reminded", remind_shifts),
+    ("attendance_nudged", nudge_attendance),
     ("badged", award_badges),
 ]
 

@@ -101,6 +101,7 @@ def test_run_sweeps_reports_the_volunteer_reminders(capsys):
     call_command("run_sweeps")
     out = capsys.readouterr().out
     assert "reminded" in out
+    assert "attendance_nudged" in out
 
 
 @pytest.mark.django_db
@@ -118,3 +119,18 @@ def test_reminder_copy_names_the_local_time_and_day():
     remind_shifts(now=now)
     n = Notification.objects.get(type="shift_reminder")
     assert n.body == "Morning dog walk at KG Test Shelter starts tomorrow at 9:00 AM."
+
+
+@pytest.mark.django_db
+def test_the_shelter_is_nudged_to_mark_attendance_twice_at_most():
+    from volunteer.sweeps import nudge_attendance
+    shelter = AccountFactory(account_type="shelter")
+    end = timezone.now() - timezone.timedelta(hours=3)
+    s = VolunteerShift.objects.create(shelter_account=shelter, starts_at=end - timezone.timedelta(hours=2),
+                                      ends_at=end, capacity=2, title="Morning dog walk")
+    VolunteerSignup.objects.create(shift=s, volunteer_account=AccountFactory(), status=SignupStatus.APPROVED)
+    nudge_attendance(); nudge_attendance()
+    assert Notification.objects.filter(account=shelter, type="attendance_due").count() == 1
+    nudge_attendance(now=end + timezone.timedelta(hours=49))
+    assert Notification.objects.filter(account=shelter, type="attendance_due").count() == 2
+
