@@ -8,7 +8,7 @@ from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
 from shelter.models import ShelterProfile, ShelterTier
 from verifications.models import VerificationDocument, VerificationRequest
-from verifications.review import approve_request
+from verifications.review import approve_request, reject_request
 
 
 def _hdr(acc):
@@ -90,6 +90,28 @@ def test_already_registered_ngo_cannot_upgrade_again(client):
     res = _upgrade(client, shelter)
     assert res.status_code == 409
     assert res.json()["error"]["code"] == "already_ngo"
+
+
+@pytest.mark.django_db
+def test_a_second_upgrade_while_one_is_pending_is_refused(client):
+    shelter = _approved_tier1_shelter()
+    assert _upgrade(client, shelter).status_code == 201
+    before = VerificationRequest.objects.filter(account=shelter).count()
+    res = _upgrade(client, shelter)   # a double tap on "Upgrade"
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "already_pending"
+    assert VerificationRequest.objects.filter(account=shelter).count() == before
+    assert VerificationRequest.objects.filter(account=shelter, status="pending").count() == 1
+
+
+@pytest.mark.django_db
+def test_a_rejected_upgrade_can_be_retried(client):
+    shelter = _approved_tier1_shelter()
+    vid = _upgrade(client, shelter).json()["verification_id"]
+    reject_request(VerificationRequest.objects.get(pk=vid), _reviewer(), "SEC papers are blurry")
+    res = _upgrade(client, shelter)
+    assert res.status_code == 201
+    assert res.json()["verification_id"] != vid
 
 
 @pytest.mark.django_db
