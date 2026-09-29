@@ -216,6 +216,11 @@ class ShelterUpgradeView(APIView):
             return Response({"error": {"code": "tier1_incomplete",
                                        "message": "Complete tier-1 verification before upgrading"}},
                             status=409)
+        # One pending shelter_org request at a time — the same rule VerificationCreateView and
+        # dev_views enforce — so a double-tapped "Upgrade" can't queue two reviews.
+        if request.user.verifications.filter(type="shelter_org", status="pending").exists():
+            return Response({"error": {"code": "already_pending",
+                                       "message": "Your request is already under review"}}, status=409)
 
         s = VerificationSerializer(data={**request.data, "type": "shelter_org"})
         s.is_valid(raise_exception=True)
