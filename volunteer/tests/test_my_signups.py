@@ -88,3 +88,25 @@ def test_no_other_shelter_identity_leaks():
                                    status=SignupStatus.REQUESTED)
     import json
     assert "SecretOtherShelter" not in json.dumps(_auth(vol).get(URL).json())
+
+
+@pytest.mark.django_db
+def test_upcoming_and_requested_are_soonest_first_history_newest_first():
+    # F-R3-3 · every bucket used to share `-shift__starts_at`, so tonight's shift sat LAST under
+    # "Upcoming shifts" while the hub's Next strip named it. Upcoming/requested read soonest
+    # first (what's next is what matters); history stays newest first.
+    shelter = AccountFactory(account_type="shelter"); vol = AccountFactory(account_type="personal")
+    now = timezone.now()
+
+    def at(hours, status):
+        s = _shift(shelter, starts_at=now + timedelta(hours=hours), ends_at=now + timedelta(hours=hours + 2))
+        return str(VolunteerSignup.objects.create(shift=s, volunteer_account=vol, status=status).pk)
+
+    up_later, up_tonight, up_mid = (at(72, SignupStatus.APPROVED), at(3, SignupStatus.APPROVED),
+                                    at(30, SignupStatus.APPROVED))
+    rq_later, rq_soon = at(96, SignupStatus.REQUESTED), at(20, SignupStatus.REQUESTED)
+    old, recent = at(-96, SignupStatus.COMPLETED), at(-30, SignupStatus.COMPLETED)
+    body = _auth(vol).get(URL).json()
+    assert [i["signup_id"] for i in body["upcoming"]] == [up_tonight, up_mid, up_later]
+    assert [i["signup_id"] for i in body["requested"]] == [rq_soon, rq_later]
+    assert [i["signup_id"] for i in body["history"]] == [recent, old]
