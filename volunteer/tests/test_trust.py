@@ -73,6 +73,17 @@ def test_an_unverified_shelter_cannot_post(client):
 
 
 @pytest.mark.django_db
+def test_a_non_shelter_posting_hears_it_is_shelter_only_not_unverified(client):
+    """F-R1-1: the verification message must not mask the account-type refusal."""
+    res = client.post(SHIFTS, {"type": "walking", "starts_at": "2030-10-04T09:00:00+08:00",
+                               "ends_at": "2030-10-04T11:00:00+08:00", "capacity": 2},
+                      content_type="application/json",
+                      **hdr(AccountFactory(account_type="personal")))
+    assert res.status_code == 403
+    assert res.json()["error"]["message"] == "This action is only available to shelter accounts."
+
+
+@pytest.mark.django_db
 def test_browse_hides_unverified_and_inactive_shelters(client):
     ok = _future_shift(verified_shelter())
     _future_shift(AccountFactory(account_type="shelter"))            # never verified

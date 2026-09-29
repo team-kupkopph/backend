@@ -15,9 +15,12 @@ class IsVerifiedShelter(IsShelter):
     mobile lock on "Volunteer program" (review G16 / test plan K5) — the UI gate alone let an
     unverified org publish public shifts through the API."""
 
-    message = "Your organization must be verified before posting volunteer activities."
+    unverified_message = "Your organization must be verified before posting volunteer activities."
 
     def has_permission(self, request, view):
-        return (super().has_permission(request, view)
-                and request.user.verifications.filter(type="shelter_org",
-                                                      status="approved").exists())
+        if not super().has_permission(request, view):
+            return False                      # keeps IsShelter.message (F-R1-1)
+        if request.user.verifications.filter(type="shelter_org", status="approved").exists():
+            return True
+        self.message = self.unverified_message
+        return False
