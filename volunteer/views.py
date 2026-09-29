@@ -298,6 +298,11 @@ class MySignupsView(APIView):
                 upcoming.append(item)
             else:
                 history.append(item)
+        # F-R3-3 · the query is newest-first, which suits history only. Upcoming and requested
+        # read soonest-first — tonight's shift leads "Upcoming shifts", matching the hub's Next
+        # strip. Reversing (not re-sorting) keeps the one query and its tie order.
+        requested.reverse()
+        upcoming.reverse()
         return Response({"requested": requested, "upcoming": upcoming, "history": history,
                          "reliability": reliability_for(request.user)})
 
