@@ -99,6 +99,22 @@ def test_out_needs_in_and_neither_repeats(client):
 
 
 @pytest.mark.django_db
+def test_check_out_waits_for_the_shift_to_start(client):
+    """F-R3-7 · check-in opens 30 min early, but checking out before `starts_at` would let an
+    in+out pair read as "attended" with ~0 hours. Refused until the shift starts."""
+    su = _approved(hours_out=0.25)
+    assert _check(client, su, "in").status_code == 200
+    res = _check(client, su, "out")
+    assert res.status_code == 409 and res.json()["error"]["code"] == "shift_not_started"
+    assert "starts_at" in res.json()["error"]["details"]
+    su.refresh_from_db()
+    assert su.check_out_at is None
+    VolunteerShift.objects.filter(pk=su.shift_id).update(
+        starts_at=timezone.now() - timezone.timedelta(minutes=1))
+    assert _check(client, su, "out").status_code == 200
+
+
+@pytest.mark.django_db
 def test_hours_can_never_be_negative(client):
     su = _approved(hours_out=-0.5)
     _check(client, su, "in"); _check(client, su, "out")

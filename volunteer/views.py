@@ -778,7 +778,8 @@ def _conflict(code, message):
 
 class SignupCheckView(APIView):
     """US-V7 · the volunteer checks in and out on the day. Only an approved signup can —
-    a requested or cancelled one has nothing to check into."""
+    a requested or cancelled one has nothing to check into. Check-in opens 30 minutes
+    before `starts_at`; check-out opens at `starts_at` and closes 2 hours after `ends_at`."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, signup_id, action):
@@ -810,6 +811,13 @@ class SignupCheckView(APIView):
                 return _conflict("not_checked_in", "Check in first")
             if signup.check_out_at is not None:
                 return _conflict("already_checked_out", "You've already checked out")
+            # F-R3-7 · check-in opens early, check-out doesn't: an in+out pair before the
+            # start would read as "attended" to the shelter with ~0 hours worked.
+            if now < shift.starts_at:
+                return Response({"error": {"code": "shift_not_started",
+                                           "message": "Check-out opens when the shift starts",
+                                           "details": {"starts_at": shift.starts_at.isoformat()}}},
+                                status=409)
             if now > shift.ends_at + timezone.timedelta(hours=CHECKOUT_GRACE_HOURS):
                 return _conflict("too_late", "Check-out closed 2 hours after the shift")
             field = "check_out_at"
