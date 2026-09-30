@@ -791,10 +791,16 @@ def _escalation_notified(report):
     # D2 · the report-time alert. None when the policy sends nothing (a healthy stray, a lost
     # pet), so the client never reads "no one there to alert" when the truth is "we don't
     # alert for this".
-    at_report = (Notification.objects.filter(type=alerts.ALERT_TYPE,
-                                             data__report_id=str(report.pk)).count()
-                 if alerts.alerts_at_report_apply(report) else None)
-    return {"level_1": reached.get(1, 0), "level_2": reached.get(2, 0), "at_report": at_report}
+    applies = alerts.alerts_at_report_apply(report)
+    nearby = Notification.objects.filter(type=alerts.ALERT_TYPE, data__report_id=str(report.pk))
+    # A reopened report's re-alert rows carry `reopened` (sagip.alerts.alert_on_reopen); counting
+    # them apart keeps "alerted right away" true to what happened at filing time.
+    # ⚠️ has_key, not `exclude(data__reopened=True)`: for a row with no `reopened` key that
+    # comparison is SQL NULL, and NOT NULL drops the row — at_report read 0 for every report.
+    at_report = nearby.exclude(data__has_key="reopened").count() if applies else None
+    reopened = nearby.filter(data__reopened=True).count() if applies else None
+    return {"level_1": reached.get(1, 0), "level_2": reached.get(2, 0),
+            "at_report": at_report, "reopened": reopened}
 
 
 def _match_repr(match, viewer_report):

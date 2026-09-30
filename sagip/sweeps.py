@@ -14,7 +14,7 @@ from accounts.models import Account
 from notifications.models import Notification
 from notifications.service import notify
 from sagip import notices
-from sagip.alerts import already_alerted_ids, verified_in_city
+from sagip.alerts import alert_on_reopen, already_alerted_ids, verified_in_city
 from sagip.geo import centroid_for, distance_km
 from sagip.models import (
     CaseStatusHistory,
@@ -225,6 +225,14 @@ def reopen_case(case, by, note, now=None):
                body=f"The {report.get_species_display().lower()} in "
                     f"{report.city or 'the area'} needs help again.",
                data={"report_id": str(report.pk)})
+    # Re-alert · the people who haven't been asked about this report yet. Best-effort: a paging
+    # failure must not undo the reopen (the report is back on the map either way).
+    try:
+        with transaction.atomic():
+            alert_on_reopen(report, released_by=case.claimed_by_account_id, now=now)
+    except Exception:
+        import logging
+        logging.getLogger("kupkop.alerts").exception("re-alert on reopen failed")
 
 
 def warn_due_claims(now=None):
