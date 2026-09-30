@@ -1,6 +1,4 @@
-from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.geos import Point
-from django.contrib.gis.measure import D
 from django.db import IntegrityError, transaction
 from django.db.models import Count
 from django.utils import timezone
@@ -14,7 +12,7 @@ from listings.permissions import IsVerifiedRescuer
 from notifications.models import Notification
 from notifications.service import notify
 from sagip import alerts, contact, notices
-from sagip.geo import centroid_for, coarsen_point
+from sagip.geo import coarsen_point
 from sagip.models import (
     MatchStatus,
     OfferStatus,
@@ -27,6 +25,7 @@ from sagip.models import (
     StrayStatus,
 )
 from sagip.permissions import is_active_claimer
+from sagip.queries import DEFAULT_RADIUS_KM, reports_near_city
 from sagip.serializers import (
     CaseStatusUpdateSerializer,
     ClaimReleaseSerializer,
@@ -38,7 +37,6 @@ from sagip.serializers import (
 from sagip.status import set_report_status
 from sagip.sweeps import claim_due_at, reopen_case
 
-DEFAULT_RADIUS_KM = 10.0
 # decision 14: offers must outlive the longest claim window (24h) so a reopened case
 # still has people to re-ask — if either number moves, move both.
 OFFER_WINDOW_HOURS = 48
@@ -488,23 +486,18 @@ class RescueMapView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        centroid_ll = centroid_for(request.query_params.get("city"))
-        if centroid_ll is None:
+        try:
+            radius_km = float(request.query_params.get("radius_km") or DEFAULT_RADIUS_KM)
+        except (TypeError, ValueError):
+            radius_km = DEFAULT_RADIUS_KM
+        # S16 · the same query the shelter dashboard's Rescue card counts (sagip/queries.py).
+        qs = reports_near_city(request.query_params.get("city"), radius_km)
+        if qs is None:
             # ⚠️ Not a bare empty list (S15). "No reports" and "this city can't be searched"
             # used to be the same `{"reports": []}`, and the app told people in an uncovered
             # city "No strays reported near you — that's good news". `city_supported` lets the
             # client say the true thing; additive, so older clients are unaffected.
             return Response({"reports": [], "city_supported": False})
-        lat, lng = centroid_ll
-        centroid = Point(lng, lat, srid=4326)
-        try:
-            radius_km = float(request.query_params.get("radius_km") or DEFAULT_RADIUS_KM)
-        except (TypeError, ValueError):
-            radius_km = DEFAULT_RADIUS_KM
-        qs = (StrayReport.objects
-              .filter(geom__dwithin=(centroid, D(km=radius_km)))
-              .annotate(_distance=Distance("geom", centroid))
-              .order_by("_distance"))
         status = request.query_params.get("status")
         if status:
             qs = qs.filter(status=status)

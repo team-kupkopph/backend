@@ -201,6 +201,7 @@ class ShelterDashboardView(APIView):
                             "starts_at": nxt.starts_at.isoformat()} if nxt else None),
         }
         return Response({
+            "rescue": _rescue_summary(request.user),
             "verification": {"submitted": submitted,
                              "status": vr.status if vr else None, "docs": docs},
             "counts": {"draft_listings": draft_listings,
@@ -209,6 +210,28 @@ class ShelterDashboardView(APIView):
             "gates": {"can_publish": approved, "donations_enabled": donations_enabled},
             "volunteer": volunteer,
         })
+
+
+def _rescue_summary(shelter):
+    """S16 · what Sagip needs from this shelter, for its Home's Rescue card. `needs_help` is the
+    rescue map's own query (sagip.queries.reports_near_city) narrowed to unclaimed, non-lost
+    reports — the card's number is the list it opens. It is None, never 0, when the shelter has
+    no city the map can search: "0 near you" there would be a false statement."""
+    from sagip.models import ReportType, RescueCase, StrayStatus
+    from sagip.queries import reports_near_city
+
+    primary = shelter.addresses.filter(is_primary=True).first()
+    city = primary.city if primary else None
+    near = reports_near_city(city)
+    return {
+        "city": city,
+        "city_supported": near is not None,
+        "needs_help": (near.filter(status=StrayStatus.REPORTED)
+                       .exclude(report_type=ReportType.LOST).count() if near is not None else None),
+        "open_cases": (RescueCase.objects
+                       .filter(claimed_by_account=shelter, expired_at__isnull=True)
+                       .exclude(report__status=StrayStatus.RESOLVED).count()),
+    }
 
 
 class DonationQrView(APIView):
