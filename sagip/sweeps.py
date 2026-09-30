@@ -6,9 +6,11 @@ functions themselves have no opinion on when they run. Both are idempotent, and 
 touching a report the instant it is claimed (E1) or moves past `claimed` (E2).
 """
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from accounts.models import Account
+from common.cities import city_variants
 from notifications.service import notify
 from sagip.models import (
     CaseStatusHistory,
@@ -52,11 +54,19 @@ def _level1_recipients(report):
     literal radius query isn't answerable from this schema. A report with no resolved
     city has no honest scope to widen into: the level still advances (the record stays
     accurate either way), it just notifies no one."""
-    if not report.city:
+    variants = city_variants(report.city)
+    if not variants:
         return Account.objects.none()
+    # ⚠️ Not `addresses__city=report.city`. The report's city comes from the phone's
+    # reverse-geocoder ("Marikina") and an address's from the location picker ("Marikina
+    # City"); an exact match notified no one in Marikina or Pasig (S4). Same tolerant
+    # comparison the adoption feed uses — see common/cities.py.
+    same_city = Q()
+    for variant in variants:
+        same_city |= Q(addresses__city__iexact=variant)
     return Account.objects.filter(
-        capabilities__capability="rescuer", capabilities__status="approved",
-        addresses__city=report.city, addresses__is_primary=True,
+        same_city, capabilities__capability="rescuer", capabilities__status="approved",
+        addresses__is_primary=True,
     ).distinct()
 
 

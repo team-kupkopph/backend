@@ -130,6 +130,25 @@ def test_level1_notifies_verified_rescuers_in_the_same_city_only():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("report_city,address_city", [
+    ("Marikina", "Marikina City"),      # device reverse-geocode vs the location picker
+    ("Pasig City", "Pasig"),            # and the other way round
+    ("marikina", "Marikina City"),      # case never matters
+])
+def test_level1_matches_the_same_city_however_it_is_spelled(report_city, address_city):
+    # S4 · the report's city comes from the phone's reverse-geocoder, the rescuer's from the
+    # location picker — the two vocabularies common/cities.py documents. An exact match
+    # silently notified no one in Marikina or Pasig.
+    _report(condition="injured", city=report_city, created_at=NOW - timezone.timedelta(hours=3))
+    rescuer = _verified_rescuer_in(address_city)
+    elsewhere = _verified_rescuer_in("Quezon City")
+
+    escalate_reports(now=NOW)
+    assert Notification.objects.filter(account=rescuer, type="report_escalated").exists()
+    assert not Notification.objects.filter(account=elsewhere, type="report_escalated").exists()
+
+
+@pytest.mark.django_db
 def test_level1_with_no_resolved_city_still_advances_but_notifies_no_one():
     r = _report(condition="injured", city=None,
                created_at=NOW - timezone.timedelta(hours=3))
