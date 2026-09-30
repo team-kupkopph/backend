@@ -83,16 +83,14 @@ jobs:
       # US-K3 · §12.4 "Dependabot + pip-audit in CI; patch known CVEs".
       #
       # This FAILS the build on any known advisory, which is only a reasonable gate because
-      # the tree is currently clean: the 2026-09-04 baseline found 16 advisories across 5
-      # packages (7 in Django alone) and they were fixed rather than accepted. The one
-      # deliberate exception is spelled out with its reasoning in requirements.txt and
-      # passed here explicitly, so an accepted risk is a visible line in a diff rather than
-      # a silently-ignored report.
-      #
-      # PYSEC-2026-1845 · pytest 8.4.2. Fixed in pytest 9, which pytest-django 4.12 does not
-      # support. pytest is a test runner and is not installed in the deployed image.
+      # the tree is kept clean: the 2026-09-04 baseline found 16 advisories across 5 packages
+      # (7 in Django alone) and they were fixed rather than accepted. If an advisory ever has
+      # to be accepted, spell out the reasoning in requirements.txt and pass it here with
+      # --ignore-vuln, so an accepted risk is a visible line in a diff rather than a
+      # silently-ignored report. (The last one, PYSEC-2026-1845 in pytest 8.4.2, was closed
+      # by pytest 9.1.1: pytest-django 4.12 declares pytest>=7.0.0 and the suite passes.)
       - name: Dependency audit
-        run: pip-audit --ignore-vuln PYSEC-2026-1845
+        run: pip-audit
 
       # Catches a model edited without a migration — the drift that makes a green suite
       # lie about what the database will actually look like.
