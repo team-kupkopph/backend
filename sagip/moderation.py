@@ -9,6 +9,10 @@ from sagip.models import OfferStatus, ReportOffer, RescueCase, StrayReport, Stra
 
 @transaction.atomic
 def hide_report(report, by):
+    # Lock order: case, then report — the same as CaseStatusView, CaseReleaseView and _expire_case,
+    # so a takedown that overlaps a status update or a lapse can't deadlock.
+    case = (RescueCase.objects.select_for_update()
+            .filter(report_id=report.pk, expired_at__isnull=True).first())
     report = StrayReport.objects.select_for_update().get(pk=report.pk)
     if report.hidden_at is not None:
         return
@@ -18,12 +22,9 @@ def hide_report(report, by):
     ReportOffer.objects.filter(report=report, status=OfferStatus.OPEN).update(
         status=OfferStatus.EXPIRED)
     # A claim nobody has acted on ends; an animal already in someone's care stays with them.
-    if report.status == StrayStatus.CLAIMED:
-        case = (RescueCase.objects.select_for_update()
-                .filter(report=report, expired_at__isnull=True).first())
-        if case is not None:
-            case.expired_at = now
-            case.save(update_fields=["expired_at"])
-            notify(case.claimed_by_account, "report_removed", title="A report you claimed was removed",
-                   body="Our moderators removed it, so there's nothing left to do on it.",
-                   data={"report_id": str(report.pk)})
+    if report.status == StrayStatus.CLAIMED and case is not None:
+        case.expired_at = now
+        case.save(update_fields=["expired_at"])
+        notify(case.claimed_by_account, "report_removed", title="A report you claimed was removed",
+               body="Our moderators removed it, so there's nothing left to do on it.",
+               data={"report_id": str(report.pk)})
