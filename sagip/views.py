@@ -290,16 +290,22 @@ class CaseStatusView(APIView):
         s.is_valid(raise_exception=True)
         target = s.validated_data["status"]
 
-        report = case.report
-        current_rank = CASE_STATUS_ORDER.get(report.status, -1)
-        if report.status == StrayStatus.RESOLVED:
-            return Response({"error": {"code": "case_resolved",
-                                       "message": "This case is already resolved"}}, status=409)
-        if CASE_STATUS_ORDER[target] <= current_rank:
-            return Response({"error": {"code": "not_forward",
-                                       "message": "A case can only move forward"}}, status=409)
-
+        # C10a · the checks above were unlocked. Lock the case, then the report (the order
+        # CaseReleaseView uses), and re-check both: a lapse or a release may have committed in
+        # between, and writing `rescued` onto a reopened report strands it with no claimer.
         with transaction.atomic():
+            case = RescueCase.objects.select_for_update().get(pk=case.pk)
+            if case.expired_at is not None:
+                return Response({"error": {"code": "case_expired",
+                                           "message": "This claim has lapsed"}}, status=409)
+            report = StrayReport.objects.select_for_update().get(pk=case.report_id)
+            case.report = report
+            if report.status == StrayStatus.RESOLVED:
+                return Response({"error": {"code": "case_resolved",
+                                           "message": "This case is already resolved"}}, status=409)
+            if CASE_STATUS_ORDER[target] <= CASE_STATUS_ORDER.get(report.status, -1):
+                return Response({"error": {"code": "not_forward",
+                                           "message": "A case can only move forward"}}, status=409)
             set_report_status(report, target, request.user, note=s.validated_data.get("note", ""))
             if target == StrayStatus.RESOLVED:
                 if "outcome_notes" in s.validated_data:
