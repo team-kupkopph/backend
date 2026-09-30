@@ -13,6 +13,8 @@ blanked before any app's `ready()` runs. These tests hold that in place: the fir
 fail the moment someone points pytest back at `config.settings`, and the last one fails if
 a resend ever leaves the process, regardless of how it got there.
 """
+import os
+
 import pytest
 from django.conf import settings
 
@@ -29,7 +31,9 @@ OUTBOUND_SEAMS = [
 
 
 def test_the_suite_runs_on_the_test_settings():
-    assert settings.SETTINGS_MODULE == "config.settings_test"
+    # `settings.SETTINGS_MODULE` is None under pytest-django's LazySettings, so we assert
+    # against DJANGO_SETTINGS_MODULE — the env var pytest.ini sets and Django reads.
+    assert os.environ.get("DJANGO_SETTINGS_MODULE") == "config.settings_test"
 
 
 @pytest.mark.parametrize("name", OUTBOUND_SEAMS)
