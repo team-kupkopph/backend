@@ -65,22 +65,50 @@ def alert_at_report(report, now=None):
     their map). Callers treat this as best-effort — a failure here must never lose a report."""
     if not alerts_at_report_apply(report):
         return None
+    species = report.get_species_display().lower()
+    condition = report.get_condition_display().lower()
+    return _page(verified_in_city(report.city).exclude(pk=report.reporter_account_id),
+                 title=f"A {condition} {species} near you needs help",
+                 body=f"Just reported in {report.city}. Open it to claim it or offer help.",
+                 data={"report_id": str(report.pk)}, now=now)
+
+
+def alert_on_reopen(report, released_by=None, now=None):
+    """Re-alert · a claimed report went back on the map (its claimer released it, D3, or the claim
+    lapsed). Page the city's verified rescuers and shelters who have NOT been asked about this
+    report yet — not at report time, not by escalation, not by an earlier reopen — never the
+    reporter or the claimer who just let go. Same policy and cap as the first alert (urgent
+    strays and found animals only); rows carry `reopened: True` so the reporter's counts keep
+    "alerted right away" true. Returns the number paged, or None when the policy doesn't apply."""
+    if not alerts_at_report_apply(report):
+        return None
+    asked = set(already_alerted_ids(report)) | set(
+        Notification.objects.filter(type="report_escalated", data__report_id=str(report.pk))
+        .values_list("account_id", flat=True))
+    skip = asked | {report.reporter_account_id, getattr(released_by, "pk", released_by)}
+    species = report.get_species_display().lower()
+    condition = report.get_condition_display().lower()
+    return _page(verified_in_city(report.city).exclude(pk__in=[s for s in skip if s]),
+                 title=f"A {condition} {species} near you needs help again",
+                 body=f"The rescuer who claimed it in {report.city} couldn't go. "
+                      f"Open it to claim it or offer help.",
+                 data={"report_id": str(report.pk), "reopened": True}, now=now)
+
+
+def _page(recipients_qs, *, title, body, data, now=None):
+    """Send one report_nearby to each recipient still under DAILY_CAP for the rolling 24 h."""
     now = now or timezone.now()
-    recipients = list(verified_in_city(report.city).exclude(pk=report.reporter_account_id))
+    recipients = list(recipients_qs)
     if not recipients:
         return 0
     used = dict(Notification.objects
                 .filter(account__in=recipients, type=ALERT_TYPE,
                         created_at__gte=now - timezone.timedelta(hours=24))
                 .values("account").annotate(n=Count("pk")).values_list("account", "n"))
-    species = report.get_species_display().lower()
-    condition = report.get_condition_display().lower()
     sent = 0
     for account in recipients:
         if used.get(account.pk, 0) >= DAILY_CAP:
             continue
-        notify(account, ALERT_TYPE, title=f"A {condition} {species} near you needs help",
-               body=f"Just reported in {report.city}. Open it to claim it or offer help.",
-               data={"report_id": str(report.pk)})
+        notify(account, ALERT_TYPE, title=title, body=body, data=data)
         sent += 1
     return sent
