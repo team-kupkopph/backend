@@ -1,10 +1,12 @@
 import pytest
 from django.contrib.gis.geos import Point
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
+from notifications.models import Notification
 from sagip.models import CaseStatusHistory, RescueCase, StrayReport
-from sagip.sweeps import reopen_case
+from sagip.sweeps import _expire_case, _stalled_case_ids, reopen_case
 from verifications.models import AccountCapability
 
 
@@ -56,3 +58,41 @@ def test_a_claim_that_lapses_mid_request_is_not_moved_forward(monkeypatch):
     report.refresh_from_db()
     assert report.status == "reported"
     assert not CaseStatusHistory.objects.filter(report=report, status="rescued").exists()
+
+
+def _age_claim(report, hours):
+    CaseStatusHistory.objects.filter(report=report).update(
+        changed_at=timezone.now() - timezone.timedelta(hours=hours))
+
+
+@pytest.mark.django_db
+def test_a_claim_updated_after_the_scan_is_not_lapsed():
+    """C10b · the sweep found the claim stalled, then the rescuer posted "Rescued" before the
+    sweep got to it. Reopening from the stale row would put an animal in custody back on the map."""
+    report, case, claimer = _claimed()
+    _age_claim(report, 7)
+    now = timezone.now()
+    assert _stalled_case_ids(now) == [case.pk]
+
+    res = _c(claimer).post(f"/api/v1/cases/{case.pk}/status", {"status": "rescued"}, format="json")
+    assert res.status_code == 200
+
+    assert _expire_case(case.pk, now) is None
+    report.refresh_from_db(); case.refresh_from_db()
+    assert report.status == "rescued" and case.expired_at is None
+    assert not Notification.objects.filter(type="claim_lapsed").exists()
+
+
+@pytest.mark.django_db
+def test_a_claim_released_after_the_scan_is_not_lapsed_twice():
+    report, case, claimer = _claimed()
+    _age_claim(report, 7)
+    now = timezone.now()
+    assert _stalled_case_ids(now) == [case.pk]
+    assert _c(claimer).post(f"/api/v1/cases/{case.pk}/release",
+                            {"reason": "cant_get_there"}, format="json").status_code == 200
+
+    assert _expire_case(case.pk, now) is None
+    assert CaseStatusHistory.objects.filter(report=report, status="reported").count() == 1
+    assert Notification.objects.filter(account=report.reporter_account,
+                                       type="case_reopened").count() == 1
