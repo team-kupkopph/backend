@@ -3,7 +3,7 @@
 (`manage.py run_sweeps`, invoked by cron — see US-F0's decision to record: cron over
 Celery-beat, no new infra, revisit when Sprint 5 needs workers anyway) calls these; the
 functions themselves have no opinion on when they run. Both are idempotent, and both stop
-touching a report the instant it is claimed (E1) or resolved (E2).
+touching a report the instant it is claimed (E1) or moves past `claimed` (E2).
 """
 from django.db import transaction
 from django.utils import timezone
@@ -118,11 +118,17 @@ def expire_stalled_claims(now=None):
     (re-claimable; `expired_at` makes lapses countable per claimer). Every account that
     ever offered on the report — matched or not — is notified `case_reopened`; a MATCHED
     offer whose own 48h window hasn't separately lapsed reverts to OPEN, since the claim
-    it was matched to just failed and that support is genuinely available again."""
+    it was matched to just failed and that support is genuinely available again.
+
+    ⚠️ Only `claimed` cases can stall. Expiry answers "the claimer never showed up"; once the
+    report is `rescued` or `safe` the animal is in someone's custody, and reverting it would
+    put an animal in a rescuer's home back on the public map — re-claimable, with the exact
+    spot handed to the next claimer (S1, dev/sagip-build-review.md). This used to exclude
+    only `resolved`, which let a `safe` case lapse after its condition window."""
     now = now or timezone.now()
     expired = []
-    active = (RescueCase.objects.filter(expired_at__isnull=True)
-              .exclude(report__status=StrayStatus.RESOLVED)
+    active = (RescueCase.objects.filter(expired_at__isnull=True,
+                                        report__status=StrayStatus.CLAIMED)
               .select_related("report"))
     for case in active:
         latest = (CaseStatusHistory.objects.filter(report=case.report)

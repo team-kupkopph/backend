@@ -268,6 +268,28 @@ def test_resolved_cases_are_never_touched():
     assert case.expired_at is None
 
 
+# S1 · expiry is for a claimer who never showed up — the `claimed` state only. Once the
+# animal is rescued it is in someone's custody, and reverting the report would put an
+# animal in a rescuer's home back on the public map, re-claimable, with its exact spot.
+@pytest.mark.django_db
+@pytest.mark.parametrize("custody_status", ["rescued", "safe"])
+def test_a_case_in_custody_is_never_expired(custody_status):
+    case, report, claimer = _stale_claim(hours_ago=1)
+    ReportOffer.objects.create(report=report, account=AccountFactory(), offer_type="transport",
+                               status=OfferStatus.MATCHED,
+                               expires_at=NOW + timezone.timedelta(hours=40))
+    set_report_status(report, custody_status, claimer)
+    CaseStatusHistory.objects.filter(report=report).update(
+        changed_at=NOW - timezone.timedelta(hours=100))   # far past every condition window
+
+    assert expire_stalled_claims(now=NOW) == []
+
+    case.refresh_from_db(); report.refresh_from_db()
+    assert case.expired_at is None
+    assert report.status == custody_status
+    assert not Notification.objects.filter(type="case_reopened").exists()
+
+
 @pytest.mark.django_db
 def test_idempotent_a_second_pass_does_not_reexpire_the_same_case():
     case, report, _ = _stale_claim(hours_ago=7)
