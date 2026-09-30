@@ -29,13 +29,14 @@ from sagip.models import (
 from sagip.permissions import is_active_claimer
 from sagip.serializers import (
     CaseStatusUpdateSerializer,
+    ClaimReleaseSerializer,
     ContactConsentSerializer,
     OfferCreateSerializer,
     ReportCloseSerializer,
     ReportCreateSerializer,
 )
 from sagip.status import set_report_status
-from sagip.sweeps import claim_due_at
+from sagip.sweeps import claim_due_at, reopen_case
 
 DEFAULT_RADIUS_KM = 10.0
 # decision 14: offers must outlive the longest claim window (24h) so a reopened case
@@ -614,6 +615,54 @@ class ReportContactConsentView(APIView):
                                        "message": "An anonymous report can't share contact details"}},
                             status=409)
         return Response(contact.set_consent(report, share))
+
+
+# D3 · a release is recorded on the status history's reopen row, like a reporter's close
+# (S11), so a lapse and a release stay distinguishable without a new column.
+RELEASE_NOTE_PREFIX = "released_by_claimer:"
+
+
+class CaseReleaseView(APIView):
+    """D3 · POST /cases/{id}/release {reason} — the claimer can't make it. The report reopens
+    AT ONCE (instead of waiting out a 6–24 h claim window), the reporter and the helpers are
+    told, and the case is kept with `expired_at` set, so it counts like a lapse — no penalty.
+
+    Only while `claimed`. Once the animal is rescued the claimer has custody, and releasing
+    would put it back on the street; the way out of custody is a handoff (list or place). The
+    case and report rows are locked so a release can't race a status update or a second tap."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, case_id):
+        s = ClaimReleaseSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        reason = s.validated_data["reason"]
+        with transaction.atomic():
+            case = (RescueCase.objects.select_for_update().select_related("report")
+                    .filter(pk=case_id).first())
+            if case is None:
+                return Response({"error": {"code": "not_found", "message": "No such case"}},
+                                status=404)
+            if case.claimed_by_account_id != request.user.pk:
+                return Response({"error": {"code": "not_your_case",
+                                           "message": "Only the claimer can release this case"}},
+                                status=403)
+            if case.expired_at is not None:
+                return Response({"error": {"code": "case_expired",
+                                           "message": "This claim has already lapsed"}}, status=409)
+            report = StrayReport.objects.select_for_update().get(pk=case.report_id)
+            if report.status == StrayStatus.RESOLVED:
+                return Response({"error": {"code": "case_resolved",
+                                           "message": "This case is already resolved"}}, status=409)
+            if report.status != StrayStatus.CLAIMED:
+                return Response({"error": {"code": "in_custody",
+                                           "message": "The animal is in your care — hand it off "
+                                                      "instead of releasing the claim"}},
+                                status=409)
+            case.report = report
+            reopen_case(case, request.user, f"{RELEASE_NOTE_PREFIX}{reason}")
+            notices.claim_released(case, reason)
+        emit("claim_released", reason=reason)
+        return Response({"status": report.status})
 
 
 class CaseContactConsentView(APIView):

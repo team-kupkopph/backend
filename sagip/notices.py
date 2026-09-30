@@ -75,3 +75,27 @@ def placement_decided(listing, inquiry, decision):
     notify(listing.posted_by, "placement_decided", title=title, body=body,
            data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk),
                  "decision": decision})
+
+
+# D3 · what the reporter is told when the claimer releases. Keyed by
+# serializers.ClaimReleaseSerializer's reasons.
+RELEASE_REASON_TEXT = {
+    "cant_get_there": "they can't get there",
+    "cant_find": "they couldn't find the animal",
+    "no_capacity": "they can't take the animal in",
+    "something_came_up": "something came up",
+}
+
+
+def claim_released(case, reason):
+    """D3 · the reporter hears at once that the rescuer couldn't make it and the report is open
+    again — the release exists so nobody waits out a claim window for a claimer who knows
+    they aren't coming. (Offerers are told by sweeps.reopen_case.)"""
+    report = case.report
+    if not report.reporter_account_id:
+        return
+    why = RELEASE_REASON_TEXT.get(reason, "something came up")
+    notify(report.reporter_account, "case_reopened", title="Your report is open again",
+           body=f"The rescuer couldn't make it ({why}), so your report is back on the map "
+                f"for someone else to claim.",
+           data={"report_id": str(report.pk)})

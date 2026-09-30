@@ -188,27 +188,40 @@ def expire_stalled_claims(now=None):
         if stalled_hours < window:
             continue
 
-        report = case.report
         with transaction.atomic():
-            case.expired_at = now
-            case.save(update_fields=["expired_at"])
-            set_report_status(report, StrayStatus.REPORTED, None,
-                              note="Auto-expired: no update within the claim window")
-
-            offerers = list(Account.objects.filter(report_offers__report=report).distinct())
-            for offer in ReportOffer.objects.filter(report=report, status=OfferStatus.MATCHED):
-                offer.status = OfferStatus.OPEN if offer.expires_at > now else OfferStatus.EXPIRED
-                offer.save(update_fields=["status"])
-            for acc in offerers:
-                notify(acc, "case_reopened", title="A case you offered to help with reopened",
-                      body=f"The {report.get_species_display().lower()} in "
-                           f"{report.city or 'the area'} needs help again.",
-                      data={"report_id": str(report.pk)})
+            reopen_case(case, None, "Auto-expired: no update within the claim window", now)
             # S9 · the claimer and the reporter were never told. Inside the transaction, so
             # a rolled-back expiry tells no one.
             notices.claim_lapsed(case, window)
         expired.append(case)
     return expired
+
+
+@transaction.atomic
+def reopen_case(case, by, note, now=None):
+    """Put a claimed report back on the map — shared by the stalled-claim sweep (US-E2) and a
+    claimer's own release (D3), so both reopen a report the same way.
+
+    The `RescueCase` row is KEPT with `expired_at` set, so the report can be re-claimed at once
+    and the lapse stays countable per claimer (a release counts like a lapse, without penalty).
+    A MATCHED offer whose own 48 h window hasn't separately lapsed reverts to OPEN — the claim it
+    was matched to just ended and that help is available again — and every account that ever
+    offered is told. Telling the claimer and the reporter is the CALLER's job: a lapse and a
+    release say different things to them."""
+    now = now or timezone.now()
+    report = case.report
+    case.expired_at = now
+    case.save(update_fields=["expired_at"])
+    set_report_status(report, StrayStatus.REPORTED, by, note=note)
+    offerers = list(Account.objects.filter(report_offers__report=report).distinct())
+    for offer in ReportOffer.objects.filter(report=report, status=OfferStatus.MATCHED):
+        offer.status = OfferStatus.OPEN if offer.expires_at > now else OfferStatus.EXPIRED
+        offer.save(update_fields=["status"])
+    for acc in offerers:
+        notify(acc, "case_reopened", title="A case you offered to help with reopened",
+               body=f"The {report.get_species_display().lower()} in "
+                    f"{report.city or 'the area'} needs help again.",
+               data={"report_id": str(report.pk)})
 
 
 def warn_due_claims(now=None):
