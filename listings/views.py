@@ -34,6 +34,7 @@ from listings.serializers import (
 from listings.stages import set_stage_state
 from listings.visibility import account_is_verified_rescuer, public_poster_q
 from notifications.service import notify
+from sagip import notices
 from sagip.models import RescueCase, StrayStatus
 from sagip.status import resolve_report
 from shelter.models import ShelterProfile
@@ -518,8 +519,12 @@ class PlacementDecisionView(APIView):
                 # case in the same transaction, or the rescuer's Home keeps asking them to
                 # find a home for an animal that has one. The recipient is the actor.
                 if inq.listing.source_report_id is not None:
-                    resolve_report(inq.listing.source_report, request.user,
-                                   note="direct placement accepted")
+                    report = inq.listing.source_report
+                    if resolve_report(report, request.user, note="direct placement accepted"):
+                        case = report.cases.filter(expired_at__isnull=True).first()
+                        if case is not None:
+                            notices.case_progress(report, case, StrayStatus.RESOLVED)   # S10
+                notices.placement_decided(inq.listing, inq, "accepted")   # S18
                 # US-B1 · rehoming a pet can earn a badge for the lister (idempotent +
                 # reconciled nightly; deferred import avoids a cycle).
                 from community.badges import award_badges_for
@@ -537,6 +542,7 @@ class PlacementDecisionView(APIView):
             # also frees the case for its next handoff (S20's guard ignores withdrawn rows).
             inq.listing.status = ListingStatus.WITHDRAWN
             inq.listing.save(update_fields=["status"])
+            notices.placement_decided(inq.listing, inq, "declined")   # S18
             from common.analytics import emit
             emit("inquiry_decided", outcome="declined")
             return Response(status=200)

@@ -36,10 +36,19 @@ def test_map_excludes_reports_outside_the_radius(client):
 
 @pytest.mark.django_db
 def test_map_response_is_city_level_never_the_precise_point(client):
+    from sagip.geo import coarsen_point
+
     _report(14.65, 121.10)
     r = client.get("/api/v1/reports/map?city=Marikina").json()["reports"][0]
-    assert set(r.keys()) == {"report_id", "species", "condition", "status", "city", "reported_at"}
+    # S14 added `approx_location` to this allow-list deliberately: it is the ~500 m grid point
+    # GET /reports/{id} already gives anyone, so the map can draw each report. It must be
+    # exactly that coarsened point — never the stored one.
+    assert set(r.keys()) == {"report_id", "species", "condition", "status", "city", "reported_at",
+                             "approx_location"}
     assert "lat" not in r and "lng" not in r and "geom" not in r  # §12.5 — no exact spot
+    lat, lng = coarsen_point(14.65, 121.10)
+    assert r["approx_location"] == {"lat": lat, "lng": lng}
+    assert r["approx_location"] != {"lat": 14.65, "lng": 121.10}
 
 
 @pytest.mark.django_db

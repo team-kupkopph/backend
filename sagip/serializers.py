@@ -53,3 +53,9 @@ class CaseStatusUpdateSerializer(serializers.Serializer):
 
 class OfferCreateSerializer(serializers.Serializer):
     offer_type = serializers.ChoiceField(choices=[c.value for c in OfferType])
+
+
+class ReportCloseSerializer(serializers.Serializer):
+    """S11 · why a reporter closed their own report. A fixed list, so the reason can be
+    counted and shown back without free text anyone else could read."""
+    reason = serializers.ChoiceField(choices=["gone", "duplicate", "handled_myself", "mistake"])

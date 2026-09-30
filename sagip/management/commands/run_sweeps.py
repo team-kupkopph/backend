@@ -19,7 +19,7 @@ instead. See common/locks.py for why it is a database advisory lock and not `flo
 """
 from common.management_base import SingletonCommand
 from community.sweeps import award_badges
-from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims
+from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims, warn_due_claims
 from volunteer.sweeps import nudge_attendance, remind_shifts
 
 # (label, callable) — each returns a list of the rows it touched.
@@ -34,6 +34,7 @@ from volunteer.sweeps import nudge_attendance, remind_shifts
 # The rule this encodes: a sweep joins this list only if a one-hour delay would hurt someone.
 SWEEPS = [
     ("escalated", escalate_reports),
+    ("warned", warn_due_claims),         # S9 · before `expired`, so a warning can't trail it
     ("expired", expire_stalled_claims),
     ("reminded", remind_shifts),
     ("attendance_nudged", nudge_attendance),
