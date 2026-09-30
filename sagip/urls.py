@@ -3,6 +3,7 @@ from django.urls import path
 from sagip.views import (
                          CaseContactConsentView,
                          CaseDetailView,
+                         CaseReleaseView,
                          CaseStatusView,
                          MyOffersView,
                          MyReportsView,
@@ -31,6 +32,7 @@ urlpatterns = [
     path("reports/<uuid:report_id>/offers/<uuid:offer_id>/contact",
          OfferContactConsentView.as_view()),
     path("cases/<uuid:case_id>/contact", CaseContactConsentView.as_view()),
+    path("cases/<uuid:case_id>/release", CaseReleaseView.as_view()),   # D3
     path("reports/<uuid:report_id>/matches", ReportMatchesView.as_view()),
     path("reports/<uuid:report_id>/matches/<uuid:match_id>/confirm",
          ReportMatchDecisionView.as_view(), {"action": "confirm"}),

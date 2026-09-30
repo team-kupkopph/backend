@@ -78,3 +78,10 @@ class ReportCloseSerializer(serializers.Serializer):
     """S11 · why a reporter closed their own report. A fixed list, so the reason can be
     counted and shown back without free text anyone else could read."""
     reason = serializers.ChoiceField(choices=["gone", "duplicate", "handled_myself", "mistake"])
+
+
+class ClaimReleaseSerializer(serializers.Serializer):
+    """D3 · why a claimer is letting go. A fixed list so the reason can be shown to the reporter
+    and counted — sagip.notices.RELEASE_REASON_TEXT words each one."""
+    reason = serializers.ChoiceField(
+        choices=["cant_get_there", "cant_find", "no_capacity", "something_came_up"])
