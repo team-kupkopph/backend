@@ -133,3 +133,81 @@ def test_verifying_an_already_verified_qr_is_409(client, auth):
 def test_shelters_need_a_staff_token(client):
     assert client.get("/admin-api/shelters").status_code in (401, 403)
     assert client.get("/admin-api/donation-qrs").status_code in (401, 403)
+
+
+# ── S5 · escalation partners ──────────────────────────────────────────────────────────
+# Level-2 escalation pages partner shelters, but nothing could make a shelter one: the flag
+# had no write path, so level 2 reached no one while reporters were told partners had been
+# notified. These are that write path.
+def _partner_url(profile, remove=False):
+    return (f"/admin-api/shelters/{profile.shelter_profile_id}/escalation-partner"
+            + ("/remove" if remove else ""))
+
+
+def _in_city(profile, city="Marikina City"):
+    from accounts.models import Address
+    Address.objects.create(account=profile.account, city=city, is_primary=True)
+    return profile
+
+
+@pytest.mark.django_db
+def test_staff_can_make_a_verified_shelter_an_escalation_partner(client, auth):
+    profile = _in_city(make_shelter("Partner Org", verified=True))
+    res = client.post(_partner_url(profile), {}, content_type="application/json", **auth)
+    assert res.status_code == 200
+    assert res.json()["is_escalation_partner"] is True
+    profile.refresh_from_db()
+    assert profile.is_escalation_partner is True
+
+
+@pytest.mark.django_db
+def test_an_unverified_shelter_cannot_be_a_partner(client, auth):
+    """Level 2 only pages approved shelters, so the flag on an unverified one would be
+    silently inert — refused, with the reason, rather than accepted and ignored."""
+    profile = _in_city(make_shelter("Pending Org"))
+    res = client.post(_partner_url(profile), {}, content_type="application/json", **auth)
+    assert res.status_code == 409 and res.json()["error"]["code"] == "not_verified"
+    profile.refresh_from_db()
+    assert profile.is_escalation_partner is False
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("city", [None, "Somewhere Unmapped"])
+def test_a_shelter_sagip_cannot_place_cannot_be_a_partner(client, auth, city):
+    """Level 2 pages partners NEAR a report. One with no primary address, or a city with no
+    known centre, would never be paged — the reviewer is told why instead."""
+    profile = make_shelter("Nowhere Org", verified=True)
+    if city:
+        _in_city(profile, city)
+    res = client.post(_partner_url(profile), {}, content_type="application/json", **auth)
+    assert res.status_code == 409 and res.json()["error"]["code"] == "no_known_city"
+
+
+@pytest.mark.django_db
+def test_making_a_partner_twice_is_409(client, auth):
+    profile = _in_city(make_shelter("Partner Org", verified=True))
+    client.post(_partner_url(profile), {}, content_type="application/json", **auth)
+    res = client.post(_partner_url(profile), {}, content_type="application/json", **auth)
+    assert res.status_code == 409 and res.json()["error"]["code"] == "already_decided"
+
+
+@pytest.mark.django_db
+def test_removing_a_partner_requires_a_reason(client, auth):
+    profile = _in_city(make_shelter("Partner Org", verified=True))
+    client.post(_partner_url(profile), {}, content_type="application/json", **auth)
+
+    res = client.post(_partner_url(profile, remove=True), {},
+                      content_type="application/json", **auth)
+    assert res.status_code == 422 and res.json()["error"]["code"] == "reason_required"
+
+    ok = client.post(_partner_url(profile, remove=True), {"notes": "Stopped answering pages."},
+                     content_type="application/json", **auth)
+    assert ok.status_code == 200 and ok.json()["is_escalation_partner"] is False
+
+
+@pytest.mark.django_db
+def test_partner_changes_need_a_staff_token(client):
+    profile = _in_city(make_shelter("Partner Org", verified=True))
+    assert client.post(_partner_url(profile), {}, content_type="application/json").status_code in (401, 403)
+    profile.refresh_from_db()
+    assert profile.is_escalation_partner is False

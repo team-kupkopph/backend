@@ -67,4 +67,23 @@ def test_map_unknown_city_returns_empty(client):
 
 @pytest.mark.django_db
 def test_map_no_reports_returns_the_empty_shape(client):
-    assert client.get("/api/v1/reports/map?city=Marikina").json() == {"reports": []}
+    assert client.get("/api/v1/reports/map?city=Marikina").json() == {
+        "reports": [], "city_supported": True}
+
+
+# S15 · "no reports" and "we don't cover this city" were the same empty list, and the app
+# read both as "No strays reported near <city> right now — that's good news". For a city the
+# map can't search, that is a false statement about whether an animal needs help — the same
+# class as the 2026-09-04 map bug. The two answers are now distinguishable.
+@pytest.mark.django_db
+@pytest.mark.parametrize("query", ["?city=Atlantis", "?city=", ""])
+def test_map_says_when_it_cannot_search_a_city(client, query):
+    _report(14.65, 121.10)
+    body = client.get(f"/api/v1/reports/map{query}").json()
+    assert body == {"reports": [], "city_supported": False}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("city", ["Marikina", "Marikina City", "quezon city"])
+def test_a_covered_city_is_supported_however_it_is_spelled(client, city):
+    assert client.get(f"/api/v1/reports/map?city={city}").json()["city_supported"] is True

@@ -6,8 +6,9 @@ change without a `case_status_history` row recording who moved it and why — th
 audit row commit (or roll back) together.
 """
 from django.db import transaction
+from django.utils import timezone
 
-from .models import CaseStatusHistory, StrayStatus
+from .models import CaseStatusHistory, RescueCase, StrayStatus
 
 
 class StatusError(ValueError):
@@ -29,3 +30,21 @@ def set_report_status(report, status, by, note=""):
     return CaseStatusHistory.objects.create(
         report=report, status=status, changed_by_account=by, note=note or "",
     )
+
+
+@transaction.atomic
+def resolve_report(report, by, note=""):
+    """Close a rescue: move `report` to `resolved` AND stamp its active case resolved, together.
+
+    For the resolutions that happen OUTSIDE the claimer's own status screen — a direct
+    placement accepted by its recipient (S2, dev/sagip-build-review.md). Moving only the
+    status left the case open (`resolved_at` NULL), so the rescuer's Home kept offering to
+    "Find them a home" for an animal that already had one. Idempotent: an already-resolved
+    report is left alone and None is returned; otherwise the new history row is.
+    """
+    if report.status == StrayStatus.RESOLVED:
+        return None
+    history = set_report_status(report, StrayStatus.RESOLVED, by, note=note)
+    RescueCase.objects.filter(report=report, expired_at__isnull=True,
+                              resolved_at__isnull=True).update(resolved_at=timezone.now())
+    return history

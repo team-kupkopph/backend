@@ -18,6 +18,8 @@ from adminapi.moderation_views import (
 )
 from adminapi.shelters_views import (
     DonationQrQueueView,
+    MakeEscalationPartnerView,
+    RemoveEscalationPartnerView,
     ShelterDetailView,
     ShelterQueueView,
     UnverifyQrView,
@@ -83,6 +85,11 @@ urlpatterns = [
     # US-S1 · shelters.
     path("shelters", ShelterQueueView.as_view()),
     path("shelters/<uuid:shelter_profile_id>", ShelterDetailView.as_view()),
+    # S5 · the escalation-partner flag had no write path; level 2 paged no one.
+    path("shelters/<uuid:shelter_profile_id>/escalation-partner",
+         MakeEscalationPartnerView.as_view()),
+    path("shelters/<uuid:shelter_profile_id>/escalation-partner/remove",
+         RemoveEscalationPartnerView.as_view()),
 
     # P6 · G21 — staff take a bad shift down; same cascade as the shelter's own cancel.
     path("shifts/<uuid:shift_id>/close", ShiftCloseView.as_view()),

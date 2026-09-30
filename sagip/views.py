@@ -2,6 +2,7 @@ from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.geos import Point
 from django.contrib.gis.measure import D
 from django.db import IntegrityError, transaction
+from django.db.models import Count
 from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -10,6 +11,7 @@ from rest_framework.views import APIView
 from common.analytics import emit
 from common.throttles import OfferCreateThrottle, ReportCreateThrottle
 from listings.permissions import IsVerifiedRescuer
+from notifications.models import Notification
 from notifications.service import notify
 from sagip.geo import centroid_for, coarsen_point
 from sagip.models import (
@@ -394,7 +396,11 @@ class RescueMapView(APIView):
     def get(self, request):
         centroid_ll = centroid_for(request.query_params.get("city"))
         if centroid_ll is None:
-            return Response({"reports": []})  # the map is city-scoped; no known city, nothing to show
+            # ⚠️ Not a bare empty list (S15). "No reports" and "this city can't be searched"
+            # used to be the same `{"reports": []}`, and the app told people in an uncovered
+            # city "No strays reported near you — that's good news". `city_supported` lets the
+            # client say the true thing; additive, so older clients are unaffected.
+            return Response({"reports": [], "city_supported": False})
         lat, lng = centroid_ll
         centroid = Point(lng, lat, srid=4326)
         try:
@@ -414,7 +420,7 @@ class RescueMapView(APIView):
                     "city": r.city or city,   # coarse label; precise geom deliberately withheld
                     "reported_at": r.created_at.isoformat()}
                    for r in qs]
-        return Response({"reports": reports})
+        return Response({"reports": reports, "city_supported": True})
 
 
 class MyReportsView(APIView):
@@ -439,7 +445,8 @@ class ReportDetailView(APIView):
       - Public (anyone, including a guest): report_id, species, condition, status, notes,
         city, reported_at, photos, `approx_location` (coarsened — see sagip.geo.coarsen_point;
         deterministic ~500m grid, never the real point).
-      - Reporter only: `escalation_level`, `offers_count`, `status_history` (US-O3).
+      - Reporter only: `escalation_level`, `offers_count`, `status_history` (US-O3),
+        `escalation_notified` (S5 · people each level actually reached).
       - Reporter OR the report's active claimer only: `precise_location` — the real point.
         A reporter always gets it (it's their own report); a claimer needs it to actually
         find the animal, which is the entire reason the app's one GPS exception exists
@@ -469,11 +476,24 @@ class ReportDetailView(APIView):
             body["status_history"] = [
                 {"status": h.status, "changed_at": h.changed_at.isoformat()}
                 for h in r.status_history.order_by("changed_at")]
+            body["escalation_notified"] = _escalation_notified(r)
 
         if is_reporter or is_active_claimer(r, request.user):
             body["precise_location"] = {"lat": r.geom.y, "lng": r.geom.x}
 
         return Response(body)
+
+
+def _escalation_notified(report):
+    """S5 · how many people each escalation level actually reached — counted from the
+    notification rows the sweep wrote, never inferred from the level. The waiting view used to
+    say "partner shelters notified" at level 2 when no partner could exist; with these counts
+    the client can only claim what happened."""
+    rows = (Notification.objects
+            .filter(type="report_escalated", data__report_id=str(report.pk))
+            .values("data__escalation_level").annotate(n=Count("pk")))
+    reached = {row["data__escalation_level"]: row["n"] for row in rows}
+    return {"level_1": reached.get(1, 0), "level_2": reached.get(2, 0)}
 
 
 def _match_repr(match, viewer_report):

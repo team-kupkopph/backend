@@ -30,12 +30,15 @@ def test_accept_creates_pet_and_marks_adopted():
 
 
 @pytest.mark.django_db
-def test_decline_creates_no_pet_and_frees_listing():
+def test_decline_creates_no_pet_and_withdraws_the_listing():
+    # Was `available`: a decline used to publish a placement listing the rescuer never chose
+    # to make public. Withdrawn keeps it private and frees the case for another handoff
+    # (S18/S20, dev/sagip-build-review.md).
     recipient = AccountFactory(); listing, inq = _placement(recipient)
     res = _c(recipient).post(f"/api/v1/inquiries/{inq.pk}/decline")
     assert res.status_code == 200
     inq.refresh_from_db(); listing.refresh_from_db()
-    assert inq.status == "declined" and listing.status == "available"
+    assert inq.status == "declined" and listing.status == "withdrawn"
     assert not Pet.objects.filter(owner_account=recipient).exists()
 
 

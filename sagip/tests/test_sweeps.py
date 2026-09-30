@@ -35,11 +35,13 @@ def _verified_rescuer_in(city):
     return acc
 
 
-def _escalation_partner_shelter():
+def _escalation_partner_shelter(city="Marikina City"):
     acc = AccountFactory(account_type="shelter")
     VerificationRequest.objects.create(account=acc, type="shelter_org", status="approved")
     ShelterProfile.objects.create(account=acc, org_name="Partner Org", org_type="shelter",
                                   tier="registered_ngo", is_escalation_partner=True)
+    if city:
+        Address.objects.create(account=acc, city=city, is_primary=True)
     return acc
 
 
@@ -130,6 +132,25 @@ def test_level1_notifies_verified_rescuers_in_the_same_city_only():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("report_city,address_city", [
+    ("Marikina", "Marikina City"),      # device reverse-geocode vs the location picker
+    ("Pasig City", "Pasig"),            # and the other way round
+    ("marikina", "Marikina City"),      # case never matters
+])
+def test_level1_matches_the_same_city_however_it_is_spelled(report_city, address_city):
+    # S4 · the report's city comes from the phone's reverse-geocoder, the rescuer's from the
+    # location picker — the two vocabularies common/cities.py documents. An exact match
+    # silently notified no one in Marikina or Pasig.
+    _report(condition="injured", city=report_city, created_at=NOW - timezone.timedelta(hours=3))
+    rescuer = _verified_rescuer_in(address_city)
+    elsewhere = _verified_rescuer_in("Quezon City")
+
+    escalate_reports(now=NOW)
+    assert Notification.objects.filter(account=rescuer, type="report_escalated").exists()
+    assert not Notification.objects.filter(account=elsewhere, type="report_escalated").exists()
+
+
+@pytest.mark.django_db
 def test_level1_with_no_resolved_city_still_advances_but_notifies_no_one():
     r = _report(condition="injured", city=None,
                created_at=NOW - timezone.timedelta(hours=3))
@@ -153,6 +174,46 @@ def test_level2_notifies_only_approved_escalation_partner_shelters():
     escalate_reports(now=NOW)
     assert Notification.objects.filter(account=partner, type="report_escalated").exists()
     assert not Notification.objects.filter(account=non_partner, type="report_escalated").exists()
+
+
+# S5 · level 2 used to page every partner in the country for every report. It now goes to
+# partners whose city lies within LEVEL2_RADIUS_KM of the report's own point.
+CEBU = Point(123.8854, 10.3157, srid=4326)
+
+
+@pytest.mark.django_db
+def test_level2_does_not_page_a_partner_in_another_region():
+    _report(condition="injured", city="Cebu City", geom=CEBU,
+            created_at=NOW - timezone.timedelta(hours=5))
+    marikina_partner = _escalation_partner_shelter("Marikina City")
+
+    escalate_reports(now=NOW)
+    assert not Notification.objects.filter(account=marikina_partner,
+                                           type="report_escalated").exists()
+
+
+@pytest.mark.django_db
+def test_level2_reaches_a_partner_in_a_neighbouring_city():
+    # The report sits in Quezon City territory; the partner's primary address is in Pasig.
+    _report(condition="injured", city="Quezon City",
+            created_at=NOW - timezone.timedelta(hours=5))
+    pasig_partner = _escalation_partner_shelter("Pasig City")
+
+    escalate_reports(now=NOW)
+    assert Notification.objects.filter(account=pasig_partner, type="report_escalated").exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("city", [None, "Somewhere Unmapped"])
+def test_level2_skips_a_partner_it_cannot_place(city):
+    # No primary address, or a city with no known centre: there is no honest way to say the
+    # partner is near, so it is not paged (the console refuses to set the flag on such a
+    # shelter in the first place).
+    _report(condition="injured", city="Marikina", created_at=NOW - timezone.timedelta(hours=5))
+    partner = _escalation_partner_shelter(city)
+
+    escalate_reports(now=NOW)
+    assert not Notification.objects.filter(account=partner, type="report_escalated").exists()
 
 
 # ── US-E2 · stalled-claim auto-expiry ───────────────────────────────────────────────
@@ -266,6 +327,28 @@ def test_resolved_cases_are_never_touched():
     expire_stalled_claims(now=NOW)
     case.refresh_from_db()
     assert case.expired_at is None
+
+
+# S1 · expiry is for a claimer who never showed up — the `claimed` state only. Once the
+# animal is rescued it is in someone's custody, and reverting the report would put an
+# animal in a rescuer's home back on the public map, re-claimable, with its exact spot.
+@pytest.mark.django_db
+@pytest.mark.parametrize("custody_status", ["rescued", "safe"])
+def test_a_case_in_custody_is_never_expired(custody_status):
+    case, report, claimer = _stale_claim(hours_ago=1)
+    ReportOffer.objects.create(report=report, account=AccountFactory(), offer_type="transport",
+                               status=OfferStatus.MATCHED,
+                               expires_at=NOW + timezone.timedelta(hours=40))
+    set_report_status(report, custody_status, claimer)
+    CaseStatusHistory.objects.filter(report=report).update(
+        changed_at=NOW - timezone.timedelta(hours=100))   # far past every condition window
+
+    assert expire_stalled_claims(now=NOW) == []
+
+    case.refresh_from_db(); report.refresh_from_db()
+    assert case.expired_at is None
+    assert report.status == custody_status
+    assert not Notification.objects.filter(type="case_reopened").exists()
 
 
 @pytest.mark.django_db

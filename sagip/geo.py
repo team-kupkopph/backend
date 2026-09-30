@@ -66,3 +66,13 @@ def coarsen_point(lat, lng, cell_size_m=COARSEN_CELL_SIZE_M):
     centroid_lat = (lat_cell + 0.5) * cell_size_m / m_per_deg_lat
     centroid_lng = (lng_cell + 0.5) * cell_size_m / m_per_deg_lng
     return centroid_lat, centroid_lng
+
+
+def distance_km(lat1, lng1, lat2, lng2):
+    """Great-circle distance in km (haversine). For the handful of city-centre comparisons
+    the sweeps make (S5 · level-2 partners), where a PostGIS query has nothing to run on — a
+    shelter's location is a city, not a stored point."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(a)) / 1000
