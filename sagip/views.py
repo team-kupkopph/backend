@@ -12,7 +12,7 @@ from listings.permissions import IsVerifiedRescuer
 from notifications.models import Notification
 from notifications.service import notify
 from sagip import alerts, contact, notices
-from sagip.geo import coarsen_point
+from sagip.geo import city_from_point, coarsen_point
 from sagip.models import (
     MatchStatus,
     OfferStatus,
@@ -156,7 +156,11 @@ class ReportsCreateView(APIView):
                 species=species, condition=d["condition"], notes=d.get("notes", ""),
                 geom=Point(d["lng"], d["lat"], srid=4326),   # PostGIS: (x=lng, y=lat)
                 location_text=d.get("location_text", ""),
-                city=(d.get("city") or "").strip() or None,   # client-resolved city label, or NULL
+                # The phone's reverse-geocoded city; C8 · when it sent none (geocoder failed,
+                # usually an offline-queued report), the nearest known city by point, so the
+                # city-scoped alerts still reach someone.
+                city=((d.get("city") or "").strip()
+                      or city_from_point(d["lat"], d["lng"])),
                 status="reported", escalation_level=0,
                 idempotency_key=idem or None, **describables)
             photos = [p["file_url"] for p in d.get("photos", [])]
@@ -830,7 +834,8 @@ def _match_counterpart(other):
     if other.is_anonymous or other.reporter_account is None:
         return {"anonymous": True}
     person = {"display_name": other.reporter_account.display_name}
-    if other.contact_share_consent:
+    # C2 · the same week-after-resolution window as a rescue's people.
+    if other.contact_share_consent and contact.contact_window_open(other):
         person["contact"] = contact.contact_of(other.reporter_account)
     return person
 

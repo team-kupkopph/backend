@@ -14,6 +14,7 @@ from common.cities import city_variants
 from notifications.models import Notification
 from notifications.service import notify
 from sagip.models import ReportType, StrayCondition
+from sagip.notices import with_article
 
 URGENT_CONDITIONS = {StrayCondition.INJURED, StrayCondition.SICK, StrayCondition.PREGNANT}
 # A found animal is loose and needs holding, like a stray. A lost pet is its owner's to find
@@ -68,7 +69,7 @@ def alert_at_report(report, now=None):
     species = report.get_species_display().lower()
     condition = report.get_condition_display().lower()
     return _page(verified_in_city(report.city).exclude(pk=report.reporter_account_id),
-                 title=f"A {condition} {species} near you needs help",
+                 title=f"{with_article(f'{condition} {species}')} near you needs help",
                  body=f"Just reported in {report.city}. Open it to claim it or offer help.",
                  data={"report_id": str(report.pk)}, now=now)
 
@@ -89,7 +90,7 @@ def alert_on_reopen(report, released_by=None, now=None):
     species = report.get_species_display().lower()
     condition = report.get_condition_display().lower()
     return _page(verified_in_city(report.city).exclude(pk__in=[s for s in skip if s]),
-                 title=f"A {condition} {species} near you needs help again",
+                 title=f"{with_article(f'{condition} {species}')} near you needs help again",
                  body=f"The rescuer who claimed it in {report.city} couldn't go. "
                       f"Open it to claim it or offer help.",
                  data={"report_id": str(report.pk), "reopened": True}, now=now)

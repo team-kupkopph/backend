@@ -24,7 +24,22 @@ CITY_CENTROIDS = {
     "Mandaluyong": (14.5794, 121.0359),
     "San Juan": (14.6019, 121.0355),
     "Caloocan": (14.6577, 120.9842),
+    # C8 (2026-10-01) · the other seven Metro Manila cities the app's location picker offers
+    # (same centres as mobile `src/cityCentroids.ts`). With only ten, a Parañaque user was told
+    # the map "doesn't cover" their city, and a report there couldn't be placed by point.
+    "Parañaque": (14.4793, 121.0198),
+    "Las Piñas": (14.4499, 120.9833),
+    "Muntinlupa": (14.4081, 121.0415),
+    "Valenzuela": (14.7011, 120.9830),
+    "Malabon": (14.6570, 120.9567),
+    "Navotas": (14.6667, 120.9417),
+    "Pateros": (14.5443, 121.0699),
 }
+
+# C8 · how far a point may be from a city's centre and still be placed in that city when the
+# phone sent no city. Metro Manila cities are roughly 3–8 km across; 5 km places a point in the
+# NEAREST centre only when one is plausibly its own. A fallback, never an override.
+CITY_FROM_POINT_MAX_KM = 5
 
 
 def centroid_for(city):
@@ -76,3 +91,18 @@ def distance_km(lat1, lng1, lat2, lng2):
     dp, dl = p2 - p1, math.radians(lng2 - lng1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(a)) / 1000
+
+
+def city_from_point(lat, lng, max_km=CITY_FROM_POINT_MAX_KM):
+    """C8 · the known city whose centre is nearest (lat, lng), within `max_km`; else None.
+
+    Only for a report that arrived WITHOUT a city — the phone's reverse-geocode failed, most
+    likely because it was queued offline. Without a city every city-scoped alert (report-time,
+    level 1, the re-alert) silently skipped the report. The phone's own city, when sent, always
+    wins: it comes from Apple's geocoder, which knows real boundaries; this knows only centres."""
+    best, best_km = None, None
+    for name, (clat, clng) in CITY_CENTROIDS.items():
+        km = distance_km(lat, lng, clat, clng)
+        if best_km is None or km < best_km:
+            best, best_km = name, km
+    return best if best_km is not None and best_km <= max_km else None

@@ -17,6 +17,12 @@ _PROGRESS = {
 }
 
 
+def with_article(phrase):
+    """C9 · "An injured dog", not "A injured dog". Condition words here start with a vowel only
+    for "injured" (and species "other"), so a vowel test is enough — no English-grammar library."""
+    return f"{'An' if phrase[:1].lower() in 'aeiou' else 'A'} {phrase}"
+
+
 def _species(report):
     return report.get_species_display().lower()
 
