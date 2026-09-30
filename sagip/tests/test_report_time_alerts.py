@@ -44,7 +44,8 @@ def _shelter(city="Marikina City"):
 
 def _file(reporter, condition="injured", city="Marikina", **extra):
     body = {"species": "dog", "condition": condition, "lat": 14.6507, "lng": 121.1029,
-            "city": city, **extra}
+            "city": city}
+    body.update(extra)
     res = _c(reporter).post("/api/v1/reports", body, format="json")
     assert res.status_code in (200, 201), res.content
     return StrayReport.objects.get(pk=res.json()["report_id"])
@@ -127,8 +128,11 @@ def test_an_offline_retry_of_the_same_report_alerts_once():
 
 @pytest.mark.django_db
 def test_a_report_with_no_city_alerts_no_one_and_still_files():
+    # C8: only when no known city is near the point (here, Cebu). Near one, the server derives
+    # the city and the alert goes out — test_city_resolution.py.
     rescuer = _rescuer()
-    _file(AccountFactory(), city="")
+    report = _file(AccountFactory(), city="", lat=10.3157, lng=123.8854)
+    assert report.city is None
     assert not _alerted(rescuer).exists()
 
 

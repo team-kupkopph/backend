@@ -26,6 +26,7 @@ from sagip.models import (
     StrayReport,
     StrayStatus,
 )
+from sagip.notices import with_article
 from sagip.status import set_report_status
 
 # Condition -> hours a CLAIM may go without a status update before it's stalled (decision
@@ -122,6 +123,10 @@ def _level2_recipients(report):
     return near
 
 
+def _condition_species(report):
+    return f"{report.get_condition_display().lower()} {report.get_species_display().lower()}"
+
+
 def escalate_reports(now=None):
     """US-E1 · widen the net on unclaimed reports. Only `reported` rows are ever
     considered — claiming (or resolving) a report removes it from the very next pass.
@@ -143,8 +148,7 @@ def escalate_reports(now=None):
             report.save(update_fields=["escalation_level"])
             for acc in _level1_recipients(report):
                 notify(acc, "report_escalated", title="A stray nearby needs a rescuer",
-                      body=f"A {report.get_condition_display().lower()} "
-                           f"{report.get_species_display().lower()} in {report.city} "
+                      body=f"{with_article(_condition_species(report))} in {report.city} "
                            f"still needs someone to claim it.",
                       data={"report_id": str(report.pk), "escalation_level": 1})
             moved = True
@@ -154,8 +158,7 @@ def escalate_reports(now=None):
             report.save(update_fields=["escalation_level"])
             for acc in _level2_recipients(report):
                 notify(acc, "report_escalated", title="An unclaimed stray needs a partner",
-                      body=f"A {report.get_condition_display().lower()} "
-                           f"{report.get_species_display().lower()} has gone unclaimed "
+                      body=f"{with_article(_condition_species(report))} has gone unclaimed "
                            f"and could use your organization's reach.",
                       data={"report_id": str(report.pk), "escalation_level": 2})
             moved = True

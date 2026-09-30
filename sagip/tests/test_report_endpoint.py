@@ -54,9 +54,11 @@ def test_client_resolved_city_is_stored_on_the_report(client):
 
 @pytest.mark.django_db
 def test_report_without_a_city_stays_null(client):
-    # No city (or blank) → NULL, so the map falls back to the queried city and detail omits it.
+    # No city (or blank) AND no known city near the point → NULL, so the map falls back to the
+    # queried city and detail omits it. (C8: near a known city centre the server now derives the
+    # city from the point instead — sagip/tests/test_city_resolution.py.)
     acc = AccountFactory()
-    res = client.post("/api/v1/reports", {**VALID, "city": "  "},
+    res = client.post("/api/v1/reports", {**VALID, "city": "  ", "lat": 10.3157, "lng": 123.8854},
                       content_type="application/json", **_hdr(acc))
     r = StrayReport.objects.get(report_id=res.json()["report_id"])
     assert r.city is None

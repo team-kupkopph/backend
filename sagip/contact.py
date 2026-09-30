@@ -17,10 +17,33 @@ The field-authorization table this module enforces for `GET /reports/{id}`'s `pe
 
 A `contact` key appears on an entry only when THAT person consented; otherwise it is absent,
 never null (the volunteer roster's rule). A phone is shared only once verified.
+
+C2 · owner decision 2026-10-01: consent was given for a rescue, not forever. Contact stays for
+CONTACT_AFTER_RESOLVED once the rescue is resolved — long enough to settle follow-ups (vet receipts,
+a helper's supplies, checking in on the animal) — then only names remain. The same window covers
+the owner/finder contact on a resolved lost<->found match (`views._match_counterpart`).
 """
 from django.utils import timezone
 
-from sagip.models import OfferStatus
+from sagip.models import OfferStatus, StrayStatus
+
+CONTACT_AFTER_RESOLVED = timezone.timedelta(days=7)
+
+
+def contact_window_open(report, case=None, now=None):
+    """C2 · may consented contact still be shown for this rescue? Always while it's open; for
+    CONTACT_AFTER_RESOLVED after it resolved. The resolution time is the case's `resolved_at`,
+    else the report's latest `resolved` history row (a reporter's close, a confirmed match)."""
+    if report.status != StrayStatus.RESOLVED:
+        return True
+    resolved_at = case.resolved_at if case is not None and case.resolved_at else None
+    if resolved_at is None:
+        row = (report.status_history.filter(status=StrayStatus.RESOLVED)
+               .order_by("-changed_at").first())
+        resolved_at = row.changed_at if row else None
+    if resolved_at is None:
+        return True
+    return (now or timezone.now()) - resolved_at <= CONTACT_AFTER_RESOLVED
 
 
 def contact_of(account):
@@ -46,7 +69,8 @@ def people_for(report, user):
             .select_related("claimed_by_account").first())
     if case is None:
         return None
-    claimer = _entry("claimer", case.claimed_by_account, case.contact_share_consent)
+    open_ = contact_window_open(report, case)          # C2 · names stay, contact expires
+    claimer = _entry("claimer", case.claimed_by_account, case.contact_share_consent and open_)
 
     if user.pk == case.claimed_by_account_id:
         people = []
@@ -56,10 +80,10 @@ def people_for(report, user):
                 people.append({"role": "reporter", "anonymous": True})   # D8
             else:
                 people.append(_entry("reporter", report.reporter_account,
-                                     report.contact_share_consent))
+                                     report.contact_share_consent and open_))
         for offer in (report.offers.filter(status=OfferStatus.MATCHED)
                       .select_related("account").order_by("created_at")):
-            helper = _entry("helper", offer.account, offer.contact_share_consent)
+            helper = _entry("helper", offer.account, offer.contact_share_consent and open_)
             helper.update(offer_type=offer.offer_type, note=offer.note or None)
             people.append(helper)
         return people
