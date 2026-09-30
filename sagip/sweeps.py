@@ -12,6 +12,7 @@ from django.utils import timezone
 from accounts.models import Account
 from common.cities import city_variants
 from notifications.service import notify
+from sagip.geo import centroid_for, distance_km
 from sagip.models import (
     CaseStatusHistory,
     OfferStatus,
@@ -34,6 +35,12 @@ CLAIM_WINDOW_HOURS = {
     StrayCondition.HEALTHY: 24,
 }
 _DEFAULT_WINDOW = CLAIM_WINDOW_HOURS[StrayCondition.HEALTHY]
+
+# S5 · how far level 2 reaches: a partner is paged when its city's centre is within this
+# distance of the report's own point. Wide enough to cross into neighbouring Metro Manila
+# cities (level 1 already covered the report's own city), narrow enough that a Cebu partner
+# is never paged for a Marikina dog. A policy number — move it deliberately.
+LEVEL2_RADIUS_KM = 15
 
 
 def _claim_window_hours(condition):
@@ -70,14 +77,26 @@ def _level1_recipients(report):
     ).distinct()
 
 
-def _level2_recipients():
-    """Tier-2-eligible escalation partners (decision 4 / §3.5). Checks the
+def _level2_recipients(report):
+    """Tier-2-eligible escalation partners (decision 4 / §3.5) NEAR the report. Checks the
     `is_escalation_partner` flag, not the tier column directly — tier-1 can hold it too,
-    by admin exception."""
-    return Account.objects.filter(
+    by admin exception.
+
+    ⚠️ Near, not everywhere (S5). This used to page every partner in the country for every
+    report. A partner's location is its primary address's city (a shelter has no stored
+    point), placed by that city's centre; one that can't be placed isn't paged, because
+    there is no honest way to call it nearby. Partners are few, so this filters in Python."""
+    partners = (Account.objects.filter(
         shelter_profile__is_escalation_partner=True,
         verifications__type="shelter_org", verifications__status="approved",
-    ).distinct()
+    ).distinct().prefetch_related("addresses"))
+    near = []
+    for acc in partners:
+        primary = next((a for a in acc.addresses.all() if a.is_primary), None)
+        centre = centroid_for(primary.city) if primary else None
+        if centre and distance_km(report.geom.y, report.geom.x, *centre) <= LEVEL2_RADIUS_KM:
+            near.append(acc)
+    return near
 
 
 def escalate_reports(now=None):
@@ -108,7 +127,7 @@ def escalate_reports(now=None):
         if report.escalation_level < 2 and age_hours >= level2_at:
             report.escalation_level = 2
             report.save(update_fields=["escalation_level"])
-            for acc in _level2_recipients():
+            for acc in _level2_recipients(report):
                 notify(acc, "report_escalated", title="An unclaimed stray needs a partner",
                       body=f"A {report.get_condition_display().lower()} "
                            f"{report.get_species_display().lower()} has gone unclaimed "

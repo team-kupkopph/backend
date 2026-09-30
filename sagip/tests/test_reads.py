@@ -68,6 +68,7 @@ def test_an_anonymous_caller_never_sees_the_reporter_only_fields(client):
     assert "escalation_level" not in body
     assert "offers_count" not in body
     assert "status_history" not in body
+    assert "escalation_notified" not in body
 
 
 @pytest.mark.django_db
@@ -81,6 +82,7 @@ def test_a_signed_in_non_reporter_never_sees_the_reporter_only_fields(client):
     assert "escalation_level" not in body
     assert "offers_count" not in body
     assert "status_history" not in body
+    assert "escalation_notified" not in body
 
 
 @pytest.mark.django_db
@@ -107,3 +109,38 @@ def test_the_reporter_still_gets_no_precise_geom_in_their_own_view(client):
     r = _report(reporter, city="Pasig", status="reported")
     body = client.get(f"/api/v1/reports/{r.report_id}", **_hdr(reporter)).json()
     assert "lat" not in body and "lng" not in body and "geom" not in body
+
+
+# S5 · the reporter's waiting view said "partner shelters notified" whenever the level was 2 —
+# including when nobody was, because no partner could exist. It now carries how many people
+# each level actually reached, counted from the notification rows the sweep wrote, so the
+# client can say "3 rescuers nearby were alerted" or "no one could be reached yet".
+@pytest.mark.django_db
+def test_the_reporter_sees_how_many_people_each_escalation_level_reached(client):
+    from django.utils import timezone
+
+    from accounts.models import Address
+    from sagip.sweeps import escalate_reports
+    from verifications.models import AccountCapability
+
+    reporter = AccountFactory()
+    r = _report(reporter, city="Marikina", status="reported")
+    for _ in range(2):
+        rescuer = AccountFactory()
+        AccountCapability.objects.create(account=rescuer, capability="rescuer", status="approved")
+        Address.objects.create(account=rescuer, city="Marikina City", is_primary=True)
+    _report(AccountFactory(), city="Marikina", status="reported")   # another report: not counted
+
+    escalate_reports(now=timezone.now() + timezone.timedelta(hours=5))   # injured: past both
+
+    body = client.get(f"/api/v1/reports/{r.report_id}", **_hdr(reporter)).json()
+    assert body["escalation_level"] == 2
+    assert body["escalation_notified"] == {"level_1": 2, "level_2": 0}   # no partner exists
+
+
+@pytest.mark.django_db
+def test_an_unescalated_report_has_reached_no_one_yet(client):
+    reporter = AccountFactory()
+    r = _report(reporter, city="Marikina", status="reported")
+    body = client.get(f"/api/v1/reports/{r.report_id}", **_hdr(reporter)).json()
+    assert body["escalation_notified"] == {"level_1": 0, "level_2": 0}

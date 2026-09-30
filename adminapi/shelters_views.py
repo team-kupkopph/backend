@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from adminapi.pagination import decode_cursor, paginate
 from adminapi.verifications_views import StaffView
 from listings.models import AdoptionListing
+from sagip.geo import centroid_for
 from shelter.models import DonationQr, ShelterProfile, ShelterTier
 from verifications.models import VerificationRequest
 
@@ -118,6 +119,68 @@ class ShelterDetailView(StaffView):
         if profile is None:
             return Response({"error": {"code": "not_found"}}, status=404)
         return Response(shelter_detail(profile))
+
+
+class EscalationPartnerDecisionView(StaffView):
+    """POST /admin-api/shelters/{id}/escalation-partner[/remove] · S5.
+
+    Level-2 escalation pages partner shelters near an unclaimed report, but until this view
+    nothing could make a shelter one — the flag had no write path, so level 2 reached no one
+    while the reporter's app said partners had been notified.
+
+    Making a partner refuses the two cases where the flag would be silently inert: a shelter
+    that isn't verified (level 2 only pages approved orgs) and one Sagip can't place (no
+    primary address, or a city with no known centre — level 2 pages partners NEAR the report).
+    Removing needs a reason, like unverifying a QR: dropping an org from the escalation net is
+    the decision most likely to be asked about later."""
+    partner = None
+
+    def post(self, request, shelter_profile_id):
+        notes = (request.data.get("notes") or "").strip()
+        if not self.partner and not notes:
+            return Response({"error": {"code": "reason_required"}}, status=422)
+
+        with transaction.atomic():
+            profile = (ShelterProfile.objects.select_for_update()
+                       .filter(shelter_profile_id=shelter_profile_id).first())
+            if profile is None:
+                return Response({"error": {"code": "not_found"}}, status=404)
+            if profile.is_escalation_partner == self.partner:
+                return Response({"error": {"code": "already_decided",
+                                           "is_escalation_partner": self.partner}}, status=409)
+            if self.partner:
+                blocked = _partner_blocker(profile)
+                if blocked:
+                    return Response({"error": blocked}, status=409)
+            profile.is_escalation_partner = self.partner
+            profile.save(update_fields=["is_escalation_partner"])
+
+        request._audit_body = {"notes": notes}
+        profile = (ShelterProfile.objects.annotate(is_verified=Exists(_approved_shelter_org()))
+                   .get(shelter_profile_id=shelter_profile_id))
+        return Response(shelter_detail(profile))
+
+
+def _partner_blocker(profile):
+    """Why this shelter can't usefully be an escalation partner, or None."""
+    if not VerificationRequest.objects.filter(account=profile.account, type="shelter_org",
+                                              status="approved").exists():
+        return {"code": "not_verified",
+                "message": "Only a verified shelter is paged by escalation."}
+    primary = profile.account.addresses.filter(is_primary=True).first()
+    if primary is None or centroid_for(primary.city) is None:
+        return {"code": "no_known_city",
+                "message": "Sagip can't place this shelter: it needs a primary address in a "
+                           "city Sagip covers."}
+    return None
+
+
+class MakeEscalationPartnerView(EscalationPartnerDecisionView):
+    partner = True
+
+
+class RemoveEscalationPartnerView(EscalationPartnerDecisionView):
+    partner = False
 
 
 # -- US-Q1 · donation QRs ------------------------------------------------------------------

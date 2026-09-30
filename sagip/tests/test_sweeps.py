@@ -35,11 +35,13 @@ def _verified_rescuer_in(city):
     return acc
 
 
-def _escalation_partner_shelter():
+def _escalation_partner_shelter(city="Marikina City"):
     acc = AccountFactory(account_type="shelter")
     VerificationRequest.objects.create(account=acc, type="shelter_org", status="approved")
     ShelterProfile.objects.create(account=acc, org_name="Partner Org", org_type="shelter",
                                   tier="registered_ngo", is_escalation_partner=True)
+    if city:
+        Address.objects.create(account=acc, city=city, is_primary=True)
     return acc
 
 
@@ -172,6 +174,46 @@ def test_level2_notifies_only_approved_escalation_partner_shelters():
     escalate_reports(now=NOW)
     assert Notification.objects.filter(account=partner, type="report_escalated").exists()
     assert not Notification.objects.filter(account=non_partner, type="report_escalated").exists()
+
+
+# S5 · level 2 used to page every partner in the country for every report. It now goes to
+# partners whose city lies within LEVEL2_RADIUS_KM of the report's own point.
+CEBU = Point(123.8854, 10.3157, srid=4326)
+
+
+@pytest.mark.django_db
+def test_level2_does_not_page_a_partner_in_another_region():
+    _report(condition="injured", city="Cebu City", geom=CEBU,
+            created_at=NOW - timezone.timedelta(hours=5))
+    marikina_partner = _escalation_partner_shelter("Marikina City")
+
+    escalate_reports(now=NOW)
+    assert not Notification.objects.filter(account=marikina_partner,
+                                           type="report_escalated").exists()
+
+
+@pytest.mark.django_db
+def test_level2_reaches_a_partner_in_a_neighbouring_city():
+    # The report sits in Quezon City territory; the partner's primary address is in Pasig.
+    _report(condition="injured", city="Quezon City",
+            created_at=NOW - timezone.timedelta(hours=5))
+    pasig_partner = _escalation_partner_shelter("Pasig City")
+
+    escalate_reports(now=NOW)
+    assert Notification.objects.filter(account=pasig_partner, type="report_escalated").exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("city", [None, "Somewhere Unmapped"])
+def test_level2_skips_a_partner_it_cannot_place(city):
+    # No primary address, or a city with no known centre: there is no honest way to say the
+    # partner is near, so it is not paged (the console refuses to set the flag on such a
+    # shelter in the first place).
+    _report(condition="injured", city="Marikina", created_at=NOW - timezone.timedelta(hours=5))
+    partner = _escalation_partner_shelter(city)
+
+    escalate_reports(now=NOW)
+    assert not Notification.objects.filter(account=partner, type="report_escalated").exists()
 
 
 # ── US-E2 · stalled-claim auto-expiry ───────────────────────────────────────────────
