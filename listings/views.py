@@ -300,6 +300,10 @@ class ListingDetailView(APIView):
         if listing is None:
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
+        # D7 · a draft is private to its poster — to anyone else it doesn't exist yet.
+        if listing.status == ListingStatus.DRAFT and listing.posted_by_id != getattr(request.user, "pk", None):
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
         return Response({
             "listing_id": str(listing.pk), "pet": _pet_fields(listing),
             "description": listing.story or None, "adoption_fee": str(listing.adoption_fee),
@@ -347,6 +351,9 @@ class ListingInquiriesView(APIView):
     def post(self, request, listing_id):
         listing = AdoptionListing.objects.filter(pk=listing_id).first()
         if listing is None:
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
+        if listing.status == ListingStatus.DRAFT:          # D7 · not public yet
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
         if request.user.phone_verified_at is None:
@@ -464,6 +471,48 @@ class InquiryStageView(APIView):
         return Response({"stage_key": stage_key, "state": stage.state})
 
 
+def _shelter_draft_from(placed, shelter):
+    """D7 · the shelter's own listing for an animal it just took in from a rescue: a private
+    DRAFT posted by the shelter, carrying what is known — species, name, the rescue it came from
+    (provenance), the shelter's own city (where the animal now is), and the photos (the
+    placement's, else the stray report's; the first is primary). Story, fee and requirements
+    are the shelter's to write before it publishes."""
+    primary = shelter.addresses.filter(is_primary=True).first()
+    draft = AdoptionListing.objects.create(
+        posted_by=shelter, source_report=placed.source_report, species=placed.species,
+        name=placed.name or "", city=(primary.city if primary else placed.city) or "",
+        status=ListingStatus.DRAFT)
+    urls = [p.url for p in placed.photos.order_by("-is_primary")]
+    if not urls and placed.source_report_id:
+        urls = [p.url for p in placed.source_report.photos.order_by("uploaded_at")]
+    for i, url in enumerate(urls):
+        AdoptionListingPhoto.objects.create(listing=draft, url=url, is_primary=(i == 0))
+    return draft
+
+
+class ListingPublishView(APIView):
+    """D7 · POST /listings/{id}/publish — the poster puts a DRAFT on the Adopt feed. Poster only,
+    and only from draft; the public feed's own gates (a verified poster) still apply after."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, listing_id):
+        with transaction.atomic():
+            listing = AdoptionListing.objects.select_for_update().filter(pk=listing_id).first()
+            if listing is None:
+                return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                                status=404)
+            if listing.posted_by_id != request.user.pk:
+                return Response({"error": {"code": "not_your_listing",
+                                           "message": "Only the poster can publish this listing"}},
+                                status=403)
+            if listing.status != ListingStatus.DRAFT:
+                return Response({"error": {"code": "not_draft",
+                                           "message": "Only a draft can be published"}}, status=409)
+            listing.status = ListingStatus.AVAILABLE
+            listing.save(update_fields=["status", "updated_at"])
+        return Response({"listing_id": str(listing.pk), "status": listing.status})
+
+
 class PlacementDecisionView(APIView):
     """POST /inquiries/{id}/accept | /decline — US-H3. The recipient of a direct
     placement (all stages skipped) accepts or declines it. Accept is the first code
@@ -506,11 +555,17 @@ class PlacementDecisionView(APIView):
                 inq.status = InquiryStatus.ADOPTED
                 inq.decided_at = now
                 inq.save(update_fields=["status", "decided_at"])
-                pet = Pet.objects.create(owner_account=request.user,
-                                         name=inq.listing.name or "Pet",
-                                         species=inq.listing.species)
-                for ph in inq.listing.photos.all():
-                    PetPhoto.objects.create(pet=pet, url=ph.url, is_primary=ph.is_primary)
+                # D7 · a SHELTER taking in a rescue gets the animal as a draft in its own
+                # Animals tab, to describe and publish; a person adopts it as a Pet.
+                if request.user.account_type == "shelter":
+                    pet, draft = None, _shelter_draft_from(inq.listing, request.user)
+                else:
+                    draft = None
+                    pet = Pet.objects.create(owner_account=request.user,
+                                             name=inq.listing.name or "Pet",
+                                             species=inq.listing.species)
+                    for ph in inq.listing.photos.all():
+                        PetPhoto.objects.create(pet=pet, url=ph.url, is_primary=ph.is_primary)
                 inq.listing.status = ListingStatus.ADOPTED
                 inq.listing.adopted_pet = pet
                 inq.listing.adopted_by_account = request.user
@@ -532,6 +587,8 @@ class PlacementDecisionView(APIView):
                 from common.analytics import emit
                 emit("inquiry_decided", outcome="accepted")
                 emit("adoption_completed")
+                if draft is not None:
+                    return Response({"listing_id": str(draft.pk), "draft": True}, status=200)
                 return Response({"pet_id": str(pet.pk)}, status=200)
             # decline
             inq.status = InquiryStatus.DECLINED
