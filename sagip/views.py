@@ -13,7 +13,7 @@ from common.throttles import OfferCreateThrottle, ReportCreateThrottle
 from listings.permissions import IsVerifiedRescuer
 from notifications.models import Notification
 from notifications.service import notify
-from sagip import notices
+from sagip import alerts, notices
 from sagip.geo import centroid_for, coarsen_point
 from sagip.models import (
     MatchStatus,
@@ -142,6 +142,14 @@ class ReportsCreateView(APIView):
                 run_matching(report)
             except Exception:
                 logging.getLogger("kupkop.match").exception("matching failed on report create")
+        # D2 / S6 · page nearby verified rescuers + shelters about an urgent animal NOW, not two
+        # hours from now. Best-effort, like the matcher: a push failure must never lose a
+        # welfare report. After the idempotency return above, so an outbox replay pages no one.
+        try:
+            alerts.alert_at_report(report)
+        except Exception:
+            import logging
+            logging.getLogger("kupkop.alerts").exception("report-time alert failed")
         emit("report_created", type=report.report_type, species=report.species)
         return Response({"report_id": str(report.report_id), "status": "reported"}, status=201)
 
@@ -601,7 +609,13 @@ def _escalation_notified(report):
             .filter(type="report_escalated", data__report_id=str(report.pk))
             .values("data__escalation_level").annotate(n=Count("pk")))
     reached = {row["data__escalation_level"]: row["n"] for row in rows}
-    return {"level_1": reached.get(1, 0), "level_2": reached.get(2, 0)}
+    # D2 · the report-time alert. None when the policy sends nothing (a healthy stray, a lost
+    # pet), so the client never reads "no one there to alert" when the truth is "we don't
+    # alert for this".
+    at_report = (Notification.objects.filter(type=alerts.ALERT_TYPE,
+                                             data__report_id=str(report.pk)).count()
+                 if alerts.alerts_at_report_apply(report) else None)
+    return {"level_1": reached.get(1, 0), "level_2": reached.get(2, 0), "at_report": at_report}
 
 
 def _match_repr(match, viewer_report):

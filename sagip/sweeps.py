@@ -8,14 +8,13 @@ touching a report the instant it is claimed (E1) or moves past `claimed` (E2).
 import math
 
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from accounts.models import Account
-from common.cities import city_variants
 from notifications.models import Notification
 from notifications.service import notify
 from sagip import notices
+from sagip.alerts import already_alerted_ids, verified_in_city
 from sagip.geo import centroid_for, distance_km
 from sagip.models import (
     CaseStatusHistory,
@@ -88,21 +87,16 @@ def _level1_recipients(report):
     is city-only by design (decision 11 — no precise geom is stored for a person), so a
     literal radius query isn't answerable from this schema. A report with no resolved
     city has no honest scope to widen into: the level still advances (the record stays
-    accurate either way), it just notifies no one."""
-    variants = city_variants(report.city)
-    if not variants:
-        return Account.objects.none()
-    # ⚠️ Not `addresses__city=report.city`. The report's city comes from the phone's
-    # reverse-geocoder ("Marikina") and an address's from the location picker ("Marikina
-    # City"); an exact match notified no one in Marikina or Pasig (S4). Same tolerant
-    # comparison the adoption feed uses — see common/cities.py.
-    same_city = Q()
-    for variant in variants:
-        same_city |= Q(addresses__city__iexact=variant)
-    return Account.objects.filter(
-        same_city, capabilities__capability="rescuer", capabilities__status="approved",
-        addresses__is_primary=True,
-    ).distinct()
+    accurate either way), it just notifies no one.
+
+    Since D2 the audience is sagip.alerts.verified_in_city — verified rescuers AND verified
+    shelters (S16: a shelter in the report's own city used to be skipped until level 2), active
+    accounts only, city spelling tolerated (S4). It skips the reporter, and anyone the
+    report-time alert already asked about this same report: level 1 is for the people that
+    alert didn't reach (a healthy stray, a daily cap, someone verified since)."""
+    return (verified_in_city(report.city)
+            .exclude(pk=report.reporter_account_id)
+            .exclude(pk__in=already_alerted_ids(report)))
 
 
 def _level2_recipients(report):

@@ -91,7 +91,10 @@ def test_a_single_pass_can_cross_both_thresholds_and_fires_both_notifications():
     assert r.escalation_level == 2
     types = list(Notification.objects.filter(account=partner).values_list("data", flat=True))
     levels = sorted(t["escalation_level"] for t in types)
-    assert levels == [2]  # partner only qualifies for level 2's audience, not level 1's
+    # Was [2]. Since D2/S16 level 1 reaches verified SHELTERS in the report's city too, and
+    # this partner is one (Marikina City), so it hears both levels: once as a local shelter,
+    # once as a partner asked for its reach.
+    assert levels == [1, 2]
 
 
 @pytest.mark.django_db
