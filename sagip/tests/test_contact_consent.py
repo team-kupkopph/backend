@@ -253,6 +253,17 @@ def test_only_the_owner_can_change_a_consent():
 
 
 @pytest.mark.django_db
+def test_the_reporter_is_told_whether_their_report_is_anonymous():
+    """So the app can disable the contact toggle up front instead of failing on tap."""
+    reporter = _person()
+    anon = _report(reporter, is_anonymous=True)
+    named = _report(reporter)
+    assert _c(reporter).get(f"/api/v1/reports/{anon.pk}").json()["is_anonymous"] is True
+    assert _c(reporter).get(f"/api/v1/reports/{named.pk}").json()["is_anonymous"] is False
+    assert "is_anonymous" not in _c(_person()).get(f"/api/v1/reports/{anon.pk}").json()
+
+
+@pytest.mark.django_db
 def test_an_anonymous_reporter_cannot_turn_sharing_on_later():
     reporter = _person()
     report = _report(reporter, is_anonymous=True)

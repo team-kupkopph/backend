@@ -544,6 +544,7 @@ class ReportDetailView(APIView):
                                if case and case.resolved_at else None)
             body["close_reason"] = _close_reason(r, history)
             body["contact_shared"] = r.contact_share_consent        # D1 · their own consent
+            body["is_anonymous"] = r.is_anonymous                   # D8 · their own choice
 
         claimer = is_active_claimer(r, request.user)
         if is_reporter or claimer:
