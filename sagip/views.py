@@ -409,25 +409,33 @@ class ReportOffersView(APIView):
         s = OfferCreateSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         offer_type = s.validated_data["offer_type"]
-        if ReportOffer.objects.filter(report=report, account=request.user,
-                                      offer_type=offer_type).exists():
-            return Response({"error": {"code": "already_offered",
-                                       "message": "You already offered this"}}, status=409)
 
-        expires_at = timezone.now() + timezone.timedelta(hours=OFFER_WINDOW_HOURS)
-        try:
-            offer = ReportOffer.objects.create(
-                report=report, account=request.user, offer_type=offer_type,
-                status=OfferStatus.OPEN, expires_at=expires_at,
-                note=s.validated_data.get("note", ""),
-                contact_share_consent=s.validated_data["contact_share_consent"],
-                contact_share_consent_at=(timezone.now()
-                                          if s.validated_data["contact_share_consent"] else None))
-        except IntegrityError:
-            # Backstop for the UNIQUE(report, account, offer_type) constraint, same
-            # belt-and-suspenders shape as the claim's IntegrityError handling.
-            return Response({"error": {"code": "already_offered",
-                                       "message": "You already offered this"}}, status=409)
+        with transaction.atomic():
+            # C22 · a claim may have landed since the check above; it locks this row too.
+            report = StrayReport.objects.select_for_update().get(pk=report.pk)
+            if report.status != StrayStatus.REPORTED:
+                return Response({"error": {"code": "report_not_open",
+                                           "message": "This report is no longer open for offers"}},
+                                status=409)
+            if ReportOffer.objects.filter(report=report, account=request.user,
+                                          offer_type=offer_type).exists():
+                return Response({"error": {"code": "already_offered",
+                                           "message": "You already offered this"}}, status=409)
+            expires_at = timezone.now() + timezone.timedelta(hours=OFFER_WINDOW_HOURS)
+            try:
+                with transaction.atomic():   # savepoint: an IntegrityError must not poison the outer block
+                    offer = ReportOffer.objects.create(
+                        report=report, account=request.user, offer_type=offer_type,
+                        status=OfferStatus.OPEN, expires_at=expires_at,
+                        note=s.validated_data.get("note", ""),
+                        contact_share_consent=s.validated_data["contact_share_consent"],
+                        contact_share_consent_at=(timezone.now()
+                                                  if s.validated_data["contact_share_consent"] else None))
+            except IntegrityError:
+                # Backstop for the UNIQUE(report, account, offer_type) constraint, same
+                # belt-and-suspenders shape as the claim's IntegrityError handling.
+                return Response({"error": {"code": "already_offered",
+                                           "message": "You already offered this"}}, status=409)
 
         if report.reporter_account_id:
             notify(report.reporter_account, "offer_received",

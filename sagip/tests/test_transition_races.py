@@ -5,7 +5,7 @@ from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
 from notifications.models import Notification
-from sagip.models import CaseStatusHistory, RescueCase, StrayReport
+from sagip.models import CaseStatusHistory, ReportOffer, RescueCase, StrayReport
 from sagip.sweeps import _expire_case, _stalled_case_ids, reopen_case
 from verifications.models import AccountCapability
 
@@ -96,3 +96,24 @@ def test_a_claim_released_after_the_scan_is_not_lapsed_twice():
     assert CaseStatusHistory.objects.filter(report=report, status="reported").count() == 1
     assert Notification.objects.filter(account=report.reporter_account,
                                        type="case_reopened").count() == 1
+
+
+@pytest.mark.django_db
+def test_an_offer_racing_a_claim_is_refused(monkeypatch):
+    report = _report()
+    rescuer, helper = _verified(), AccountFactory()
+    import sagip.views as v
+    real = v.OfferCreateSerializer
+
+    class ClaimedWhileValidating(real):
+        def is_valid(self, *a, **kw):
+            ok = super().is_valid(*a, **kw)
+            assert _c(rescuer).post(f"/api/v1/reports/{report.pk}/claim").status_code == 201
+            return ok
+
+    monkeypatch.setattr(v, "OfferCreateSerializer", ClaimedWhileValidating)
+    res = _c(helper).post(f"/api/v1/reports/{report.pk}/offers",
+                          {"offer_type": "transport"}, format="json")
+
+    assert res.status_code == 409 and res.json()["error"]["code"] == "report_not_open"
+    assert not ReportOffer.objects.filter(report=report).exists()
