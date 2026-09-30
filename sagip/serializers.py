@@ -38,6 +38,16 @@ class ReportCreateSerializer(serializers.Serializer):
     # back to the queried city, and report-detail simply omits it.
     city = serializers.CharField(required=False, allow_blank=True, max_length=80)
     photos = PhotoSerializer(many=True, required=False)
+    # D1 · let whoever claims this contact me (phone + email). Off unless given.
+    contact_share_consent = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, data):
+        # D8 · anonymous means the claimer isn't told who reported — handing them a phone
+        # number would undo that, so the two can't be combined.
+        if data.get("is_anonymous") and data.get("contact_share_consent"):
+            raise serializers.ValidationError(
+                {"contact_share_consent": "An anonymous report can't share contact details."})
+        return data
 
 
 class CaseStatusUpdateSerializer(serializers.Serializer):
@@ -53,6 +63,15 @@ class CaseStatusUpdateSerializer(serializers.Serializer):
 
 class OfferCreateSerializer(serializers.Serializer):
     offer_type = serializers.ChoiceField(choices=[c.value for c in OfferType])
+    # D1 · what the helper can do ("I have a car, free after 6pm") — the column always
+    # existed, nothing could write it — and whether the claimer may contact them.
+    note = serializers.CharField(required=False, allow_blank=True, max_length=200)
+    contact_share_consent = serializers.BooleanField(required=False, default=False)
+
+
+class ContactConsentSerializer(serializers.Serializer):
+    """D1 · turn one person's contact sharing on or off for one rescue."""
+    share = serializers.BooleanField()
 
 
 class ReportCloseSerializer(serializers.Serializer):

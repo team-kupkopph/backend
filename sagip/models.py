@@ -68,6 +68,11 @@ class StrayReport(models.Model):
     # Django model yet — kept as a nullable id column so the schema stays faithful.
     pet_id = models.UUIDField(null=True, blank=True)
     is_anonymous = models.BooleanField(default=False)
+    # D1 · a §12.5 exception to masked_contact, like volunteer_signup's: this person lets the
+    # other people on THIS rescue see their phone and email once it's claimed. Opt-in,
+    # timestamped when given, cleared when withdrawn. See sagip/contact.py.
+    contact_share_consent = models.BooleanField(default=False)
+    contact_share_consent_at = models.DateTimeField(null=True, blank=True)
     # US-O3 · set by the client at COMPOSE time so every retry of a queued report carries the
     # same value. Scoped to the reporter by the constraint below, never globally unique — a
     # global key would hand another person's report (precise coordinates included) to whoever
@@ -139,6 +144,11 @@ class RescueCase(models.Model):
     # Set when a stalled claim auto-expires (Sprint 3); the report reverts to reported and can be
     # re-claimed while this row is kept. NULL = active claim.
     expired_at = models.DateTimeField(null=True, blank=True)
+    # D1 · a §12.5 exception to masked_contact, like volunteer_signup's: this person lets the
+    # other people on THIS rescue see their phone and email once it's claimed. Opt-in,
+    # timestamped when given, cleared when withdrawn. See sagip/contact.py.
+    contact_share_consent = models.BooleanField(default=False)
+    contact_share_consent_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "rescue_case"
@@ -175,6 +185,11 @@ class ReportOffer(models.Model):
     status = models.CharField(max_length=10, choices=OfferStatus.choices,
                               default=OfferStatus.OPEN)
     note = models.CharField(max_length=200, blank=True)
+    # D1 · a §12.5 exception to masked_contact, like volunteer_signup's: this person lets the
+    # other people on THIS rescue see their phone and email once it's claimed. Opt-in,
+    # timestamped when given, cleared when withdrawn. See sagip/contact.py.
+    contact_share_consent = models.BooleanField(default=False)
+    contact_share_consent_at = models.DateTimeField(null=True, blank=True)
     # created_at + 48h (decision 14: must exceed the longest claim window, 24h) — set by the
     # US-O1 create endpoint, not defaulted here (the model has no opinion on the policy number).
     expires_at = models.DateTimeField()

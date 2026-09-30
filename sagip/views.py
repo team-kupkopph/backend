@@ -13,7 +13,7 @@ from common.throttles import OfferCreateThrottle, ReportCreateThrottle
 from listings.permissions import IsVerifiedRescuer
 from notifications.models import Notification
 from notifications.service import notify
-from sagip import alerts, notices
+from sagip import alerts, contact, notices
 from sagip.geo import centroid_for, coarsen_point
 from sagip.models import (
     MatchStatus,
@@ -29,6 +29,7 @@ from sagip.models import (
 from sagip.permissions import is_active_claimer
 from sagip.serializers import (
     CaseStatusUpdateSerializer,
+    ContactConsentSerializer,
     OfferCreateSerializer,
     ReportCloseSerializer,
     ReportCreateSerializer,
@@ -124,6 +125,9 @@ class ReportsCreateView(APIView):
                 report_type=d.get("report_type", "stray"),
                 pet_id=pet_id,
                 is_anonymous=d.get("is_anonymous", False),
+                contact_share_consent=d.get("contact_share_consent", False),
+                contact_share_consent_at=(timezone.now() if d.get("contact_share_consent")
+                                          else None),
                 species=d["species"], condition=d["condition"], notes=d.get("notes", ""),
                 geom=Point(d["lng"], d["lat"], srid=4326),   # PostGIS: (x=lng, y=lat)
                 location_text=d.get("location_text", ""),
@@ -364,7 +368,11 @@ class ReportOffersView(APIView):
         try:
             offer = ReportOffer.objects.create(
                 report=report, account=request.user, offer_type=offer_type,
-                status=OfferStatus.OPEN, expires_at=expires_at)
+                status=OfferStatus.OPEN, expires_at=expires_at,
+                note=s.validated_data.get("note", ""),
+                contact_share_consent=s.validated_data["contact_share_consent"],
+                contact_share_consent_at=(timezone.now()
+                                          if s.validated_data["contact_share_consent"] else None))
         except IntegrityError:
             # Backstop for the UNIQUE(report, account, offer_type) constraint, same
             # belt-and-suspenders shape as the claim's IntegrityError handling.
@@ -535,6 +543,8 @@ class ReportDetailView(APIView):
                                 "resolved_at": case.resolved_at.isoformat()}
                                if case and case.resolved_at else None)
             body["close_reason"] = _close_reason(r, history)
+            body["contact_shared"] = r.contact_share_consent        # D1 · their own consent
+            body["is_anonymous"] = r.is_anonymous                   # D8 · their own choice
 
         claimer = is_active_claimer(r, request.user)
         if is_reporter or claimer:
@@ -546,7 +556,21 @@ class ReportDetailView(APIView):
             # S27 · a claimer reading their report (from a push, or the map) can find the
             # case; S9 · and see when it lapses.
             mine = r.cases.get(claimed_by_account=request.user, expired_at__isnull=True)
-            body["my_case"] = {"case_id": str(mine.pk), "claim_due_at": _iso(claim_due_at(mine))}
+            body["my_case"] = {"case_id": str(mine.pk), "claim_due_at": _iso(claim_due_at(mine)),
+                               "contact_shared": mine.contact_share_consent}   # D1
+
+        if request.user.is_authenticated:
+            # D1 · the viewer's own offers here, so a helper can see (and change) their consent.
+            mine = [{"offer_id": str(o.pk), "offer_type": o.offer_type, "status": o.status,
+                     "contact_shared": o.contact_share_consent}
+                    for o in r.offers.filter(account=request.user).order_by("created_at")]
+            if mine:
+                body["my_offers"] = mine
+        # D1 + D8 · the other people on this rescue, and how to reach those who agreed. Absent
+        # for anyone not on it — see sagip/contact.py for the table.
+        people = contact.people_for(r, request.user)
+        if people is not None:
+            body["people"] = people
 
         return Response(body)
 
@@ -564,6 +588,67 @@ def _close_reason(report, history):
             and last.note.startswith(CLOSE_NOTE_PREFIX)):
         return last.note[len(CLOSE_NOTE_PREFIX):]
     return None
+
+
+def _consent_share(request):
+    s = ContactConsentSerializer(data=request.data)
+    s.is_valid(raise_exception=True)
+    return s.validated_data["share"]
+
+
+class ReportContactConsentView(APIView):
+    """D1 · POST /reports/{id}/contact {share} — the reporter lets whoever claims this report
+    see their phone and email, or withdraws that. D8 · not for an anonymous report."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, report_id):
+        share = _consent_share(request)
+        report = StrayReport.objects.filter(pk=report_id).first()
+        if report is None:
+            return Response({"error": {"code": "not_found", "message": "No such report"}}, status=404)
+        if report.reporter_account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_report",
+                                       "message": "Only the reporter can change this"}}, status=403)
+        if share and report.is_anonymous:
+            return Response({"error": {"code": "anonymous_report",
+                                       "message": "An anonymous report can't share contact details"}},
+                            status=409)
+        return Response(contact.set_consent(report, share))
+
+
+class CaseContactConsentView(APIView):
+    """D1 · POST /cases/{id}/contact {share} — the claimer lets the reporter and the matched
+    helpers see their phone and email, or withdraws that. Only while the claim is live."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, case_id):
+        share = _consent_share(request)
+        case = RescueCase.objects.filter(pk=case_id).first()
+        if case is None:
+            return Response({"error": {"code": "not_found", "message": "No such case"}}, status=404)
+        if case.claimed_by_account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_case",
+                                       "message": "Only the claimer can change this"}}, status=403)
+        if case.expired_at is not None:
+            return Response({"error": {"code": "case_expired",
+                                       "message": "This claim has lapsed"}}, status=409)
+        return Response(contact.set_consent(case, share))
+
+
+class OfferContactConsentView(APIView):
+    """D1 · POST /reports/{id}/offers/{offer_id}/contact {share} — a helper lets whoever claims
+    the report see their phone and email, or withdraws that."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, report_id, offer_id):
+        share = _consent_share(request)
+        offer = ReportOffer.objects.filter(pk=offer_id, report_id=report_id).first()
+        if offer is None:
+            return Response({"error": {"code": "not_found", "message": "No such offer"}}, status=404)
+        if offer.account_id != request.user.pk:
+            return Response({"error": {"code": "not_your_offer",
+                                       "message": "Only the helper can change this"}}, status=403)
+        return Response(contact.set_consent(offer, share))
 
 
 class ReportCloseView(APIView):
