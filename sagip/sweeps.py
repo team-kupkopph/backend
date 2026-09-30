@@ -136,7 +136,8 @@ def escalate_reports(now=None):
     now = now or timezone.now()
     touched = []
     # D6 · a lost pet is its owner's to find and nobody's to claim — it never pages rescuers.
-    reports = (StrayReport.objects.filter(status=StrayStatus.REPORTED, escalation_level__lt=2)
+    reports = (StrayReport.objects.filter(status=StrayStatus.REPORTED, escalation_level__lt=2,
+                                     hidden_at__isnull=True)
                .exclude(report_type=ReportType.LOST))
     for report in reports:
         level1_at, level2_at = _escalation_cadence_hours(report.condition)
@@ -177,7 +178,8 @@ def _stalled_case_ids(now):
     """The scan: claims that LOOK stalled. Unlocked and possibly stale by the time it's acted on —
     `_expire_case` decides for real."""
     active = (RescueCase.objects.filter(expired_at__isnull=True,
-                                        report__status=StrayStatus.CLAIMED)
+                                        report__status=StrayStatus.CLAIMED,
+                                        report__hidden_at__isnull=True)
               .select_related("report"))
     return [case.pk for case in active if _is_stalled(case, now)]
 
@@ -268,7 +270,8 @@ def warn_due_claims(now=None):
     now = now or timezone.now()
     warned = []
     active = (RescueCase.objects.filter(expired_at__isnull=True,
-                                        report__status=StrayStatus.CLAIMED)
+                                        report__status=StrayStatus.CLAIMED,
+                                        report__hidden_at__isnull=True)
               .select_related("report", "claimed_by_account"))
     for case in active:
         window = _claim_window_hours(case.report.condition)

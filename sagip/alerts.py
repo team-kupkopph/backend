@@ -81,6 +81,8 @@ def alert_on_reopen(report, released_by=None, now=None):
     reporter or the claimer who just let go. Same policy and cap as the first alert (urgent
     strays and found animals only); rows carry `reopened: True` so the reporter's counts keep
     "alerted right away" true. Returns the number paged, or None when the policy doesn't apply."""
+    if report.hidden_at is not None:
+        return None
     if not alerts_at_report_apply(report):
         return None
     asked = set(already_alerted_ids(report)) | set(

@@ -121,7 +121,7 @@ class ReportsCreateView(APIView):
         if d.get("sighting_of"):
             sighted = StrayReport.objects.filter(pk=d["sighting_of"]).first()
             if (sighted is None or sighted.report_type != ReportType.LOST
-                    or sighted.status == StrayStatus.RESOLVED):
+                    or sighted.status == StrayStatus.RESOLVED or sighted.hidden_at is not None):
                 return Response({"error": {"code": "not_a_lost_report",
                                            "message": "That isn't an open lost-pet report"}},
                                 status=422)
@@ -219,7 +219,7 @@ class ReportClaimView(APIView):
         try:
             with transaction.atomic():
                 report = (StrayReport.objects.select_for_update()
-                          .filter(pk=report_id).first())
+                          .filter(pk=report_id, hidden_at__isnull=True).first())
                 if report is None:
                     return Response({"error": {"code": "not_found",
                                                "message": "No such report"}}, status=404)
@@ -395,7 +395,7 @@ class ReportOffersView(APIView):
     throttle_classes = [OfferCreateThrottle]  # US-SEC2 · per-account, 20/hour
 
     def post(self, request, report_id):
-        report = StrayReport.objects.filter(pk=report_id).first()
+        report = StrayReport.objects.filter(pk=report_id, hidden_at__isnull=True).first()
         if report is None:
             return Response({"error": {"code": "not_found", "message": "No such report"}},
                             status=404)
@@ -569,6 +569,12 @@ class ReportDetailView(APIView):
         if r is None:
             return Response({"error": {"code": "not_found", "message": "No such report"}},
                             status=404)
+        # C13 · a moderation takedown: only the reporter (who sees why) and an active claimer
+        # (an animal already in their care) can still open it.
+        if r.hidden_at is not None and not (
+                request.user.is_authenticated
+                and (request.user.pk == r.reporter_account_id or is_active_claimer(r, request.user))):
+            return Response({"error": {"code": "not_found", "message": "No such report"}}, status=404)
         body = {
             "report_id": str(r.report_id), "report_type": r.report_type,
             "species": r.species, "condition": r.condition,
@@ -589,6 +595,7 @@ class ReportDetailView(APIView):
 
         is_reporter = request.user.is_authenticated and request.user.pk == r.reporter_account_id
         if is_reporter:
+            body["hidden"] = r.hidden_at is not None               # C13 · removed by moderation
             body["escalation_level"] = r.escalation_level
             body["offers_count"] = r.offers.count()
             history = list(r.status_history.order_by("changed_at"))

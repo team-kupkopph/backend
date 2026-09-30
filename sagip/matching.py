@@ -79,7 +79,8 @@ def _candidates(report):
     return (StrayReport.objects
             .filter(report_type=opposite, species=report.species,
                     geom__dwithin=(report.geom, D(km=RADIUS_KM)),
-                    created_at__gte=window_lo, created_at__lte=window_hi)
+                    created_at__gte=window_lo, created_at__lte=window_hi,
+                    hidden_at__isnull=True)
             .exclude(status=StrayStatus.RESOLVED)
             .exclude(pk=report.pk)
             .annotate(_distance=Distance("geom", report.geom)))
@@ -127,7 +128,7 @@ def sweep_matches():
     cutoff = timezone.now() - timezone.timedelta(days=WINDOW_DAYS)
     reports = (StrayReport.objects
                .filter(report_type__in=(ReportType.LOST, ReportType.FOUND),
-                       created_at__gte=cutoff)
+                       created_at__gte=cutoff, hidden_at__isnull=True)
                .exclude(status=StrayStatus.RESOLVED))
     persisted = []
     for report in reports:

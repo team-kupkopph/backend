@@ -95,6 +95,10 @@ class StrayReport(models.Model):
     status = models.CharField(max_length=10, choices=StrayStatus.choices,
                               default=StrayStatus.REPORTED)
     escalation_level = models.SmallIntegerField(default=0)  # 0 as-reported · 1 ~5km · 2 partners
+    # C13 / D10 · set when staff action a moderation flag on this report. Hidden from the map, the
+    # shelter dashboard's count and public detail; never escalated, alerted or matched again. The row
+    # survives (audit), and its reporter sees "removed by moderation".
+    hidden_at = models.DateTimeField(null=True, blank=True)
     # Derived from geom (reverse-geocode) at write; NULL if unresolved — out of MVP scope.
     city = models.CharField(max_length=80, null=True, blank=True)
     barangay = models.CharField(max_length=80, null=True, blank=True)
