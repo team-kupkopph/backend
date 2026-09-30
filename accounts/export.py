@@ -90,18 +90,21 @@ def build_export(account):
              "species": r.species, "condition": r.condition, "status": r.status,
              "notes": r.notes or None, "city": r.city or None,
              "lat": r.geom.y if r.geom else None, "lng": r.geom.x if r.geom else None,
+             "contact_shared": r.contact_share_consent,
              "created_at": _dt(r.created_at)}
             for r in StrayReport.objects.filter(reporter_account=account)
         ],
         "rescue_offers": [
             {"offer_id": str(o.offer_id), "report_id": str(o.report_id),
              "offer_type": o.offer_type, "status": o.status, "note": o.note or None,
+             "contact_shared": o.contact_share_consent,
              "created_at": _dt(o.created_at)}
             for o in ReportOffer.objects.filter(account=account)
         ],
         "rescue_claims": [
             {"case_id": str(c.case_id), "report_id": str(c.report_id),
-             "claimed_at": _dt(c.claimed_at), "resolved_at": _dt(c.resolved_at)}
+             "claimed_at": _dt(c.claimed_at), "resolved_at": _dt(c.resolved_at),
+             "contact_shared": c.contact_share_consent}
             for c in RescueCase.objects.filter(claimed_by_account=account)
         ],
         "listings": [
