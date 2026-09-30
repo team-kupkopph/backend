@@ -143,3 +143,25 @@ def _notify_pair(report, candidate):
                title="Possible match",
                body="We found a possible match for your lost & found report.",
                data={"report_id": str(own.pk)})
+
+
+def link_sighting(found, lost):
+    """D6 · someone who has seen a lost pet says so directly ("I've seen this pet"). Their FOUND
+    report is linked to the lost one as a SUGGESTED match whatever the heuristic score — a person
+    looking at the pet beats a weighted guess — and both reporters are told, once. If the
+    matcher already paired them (either direction) that match is returned untouched. A human
+    still confirms or dismisses; this never resolves anything (§11)."""
+    from django.db.models import Q
+
+    existing = (ReportMatch.objects
+                .filter(Q(report=found, matched_report=lost) | Q(report=lost, matched_report=found))
+                .first())
+    if existing is not None:
+        return existing
+    distance_m = found.geom.distance(lost.geom) * 111195   # rough deg->m, as _match_repr does
+    total = total_score(score_signals(found, lost, distance_m))
+    match = ReportMatch.objects.create(report=found, matched_report=lost,
+                                       score=round(total, 3), status=MatchStatus.SUGGESTED)
+    _notify_pair(found, lost)
+    emit("match_suggested", score_bucket="sighting")
+    return match

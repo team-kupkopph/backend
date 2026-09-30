@@ -61,6 +61,14 @@ def _already_claimed():
                     status=409)
 
 
+def _not_claimable():
+    """D6 / S13 · a lost pet is its owner's to find — there is nothing to claim or offer on.
+    Someone who has seen it files a sighting instead (POST /reports with sighting_of)."""
+    return Response({"error": {"code": "not_claimable",
+                               "message": "A lost pet can't be claimed — report a sighting instead"}},
+                    status=409)
+
+
 def _report_not_open():
     return Response({"error": {"code": "report_not_open",
                                "message": "This report is no longer open"}}, status=409)
@@ -107,12 +115,30 @@ class ReportsCreateView(APIView):
             if existing is not None:
                 return Response({"report_id": str(existing.report_id),
                                  "status": existing.status}, status=200)
+        # D6 · "I've seen this pet". The sighting is a FOUND report of the lost pet's species,
+        # linked to it below. Only someone else's still-open LOST report can be sighted.
+        report_type = d.get("report_type", ReportType.STRAY)
+        species = d["species"]
+        sighted = None
+        if d.get("sighting_of"):
+            sighted = StrayReport.objects.filter(pk=d["sighting_of"]).first()
+            if (sighted is None or sighted.report_type != ReportType.LOST
+                    or sighted.status == StrayStatus.RESOLVED):
+                return Response({"error": {"code": "not_a_lost_report",
+                                           "message": "That isn't an open lost-pet report"}},
+                                status=422)
+            if sighted.reporter_account_id == request.user.pk:
+                return Response({"error": {"code": "own_report",
+                                           "message": "You can't report a sighting of your own pet"}},
+                                status=422)
+            report_type, species = ReportType.FOUND, sighted.species
         # US-L1 · describable fields (lost/found). A pet_id the caller owns prefills any the
         # caller left blank — but the values are STORED on the report (D-S6-1), so a later pet
         # edit can't rewrite what was reported. Ownership-checked: another user's pet is ignored.
         describables = {k: (d.get(k) or None) for k in ("breed", "color_markings",
                                                         "size_category", "sex")}
         pet_id = d.get("pet_id")
+        pet = None
         if pet_id is not None:
             from listings.models import Pet
             pet = Pet.objects.filter(pk=pet_id, owner_account=request.user).first()
@@ -123,20 +149,25 @@ class ReportsCreateView(APIView):
         with transaction.atomic():
             report = StrayReport.objects.create(
                 reporter_account=request.user,
-                report_type=d.get("report_type", "stray"),
+                report_type=report_type,
                 pet_id=pet_id,
                 is_anonymous=d.get("is_anonymous", False),
                 contact_share_consent=d.get("contact_share_consent", False),
                 contact_share_consent_at=(timezone.now() if d.get("contact_share_consent")
                                           else None),
-                species=d["species"], condition=d["condition"], notes=d.get("notes", ""),
+                species=species, condition=d["condition"], notes=d.get("notes", ""),
                 geom=Point(d["lng"], d["lat"], srid=4326),   # PostGIS: (x=lng, y=lat)
                 location_text=d.get("location_text", ""),
                 city=(d.get("city") or "").strip() or None,   # client-resolved city label, or NULL
                 status="reported", escalation_level=0,
                 idempotency_key=idem or None, **describables)
-            for photo in d.get("photos", []):
-                StrayReportPhoto.objects.create(report=report, url=photo["file_url"])
+            photos = [p["file_url"] for p in d.get("photos", [])]
+            # D6 · a lost report shows the owner's own photo of their pet when they attached
+            # none — the picture a stranger needs to recognise them. Primary first.
+            if not photos and pet is not None and report_type == ReportType.LOST:
+                photos = [p.url for p in pet.photos.order_by("-is_primary", "uploaded_at")]
+            for url in photos:
+                StrayReportPhoto.objects.create(report=report, url=url)
         # US-L2 · a new lost/found report triggers matching (§11). Best-effort: a matcher
         # failure must never break a welfare report submission. Inert for plain strays.
         if report.report_type in (ReportType.LOST, ReportType.FOUND):
@@ -147,6 +178,12 @@ class ReportsCreateView(APIView):
                 run_matching(report)
             except Exception:
                 logging.getLogger("kupkop.match").exception("matching failed on report create")
+            if sighted is not None:
+                try:
+                    from sagip.matching import link_sighting
+                    link_sighting(report, sighted)
+                except Exception:
+                    logging.getLogger("kupkop.match").exception("sighting link failed")
         # D2 / S6 · page nearby verified rescuers + shelters about an urgent animal NOW, not two
         # hours from now. Best-effort, like the matcher: a push failure must never lose a
         # welfare report. After the idempotency return above, so an outbox replay pages no one.
@@ -184,6 +221,8 @@ class ReportClaimView(APIView):
                 if report is None:
                     return Response({"error": {"code": "not_found",
                                                "message": "No such report"}}, status=404)
+                if report.report_type == ReportType.LOST:
+                    return _not_claimable()
                 if RescueCase.objects.filter(report=report, expired_at__isnull=True).exists():
                     return _already_claimed()
                 # S21 · a report resolved WITHOUT a case — a confirmed lost & found match, or
@@ -352,6 +391,8 @@ class ReportOffersView(APIView):
         if report is None:
             return Response({"error": {"code": "not_found", "message": "No such report"}},
                             status=404)
+        if report.report_type == ReportType.LOST:
+            return _not_claimable()
         if report.status != StrayStatus.REPORTED:
             return Response({"error": {"code": "report_not_open",
                                        "message": "This report is no longer open for offers"}},
@@ -468,7 +509,8 @@ class RescueMapView(APIView):
         if status:
             qs = qs.filter(status=status)
         city = request.query_params.get("city")
-        reports = [{"report_id": str(r.report_id), "species": r.species,
+        reports = [{"report_id": str(r.report_id), "report_type": r.report_type,   # D6
+                    "species": r.species,
                     "condition": r.condition, "status": r.status,
                     "city": r.city or city,   # coarse label; precise geom deliberately withheld
                     "reported_at": r.created_at.isoformat(),
@@ -523,6 +565,16 @@ class ReportDetailView(APIView):
             "reported_at": r.created_at.isoformat(),
             "photos": [p.url for p in r.photos.order_by("uploaded_at")],
             "approx_location": _approx_location(r)}
+        if r.report_type in (ReportType.LOST, ReportType.FOUND):
+            # D6 · what a stranger needs to recognise the animal. Stored on the report at filing
+            # time (D-S6-1), never re-read from the pet.
+            body["describe"] = {"breed": r.breed, "color_markings": r.color_markings,
+                                "size_category": r.size_category, "sex": r.sex}
+        if r.report_type == ReportType.LOST and r.pet_id:
+            from listings.models import Pet
+            pet = Pet.objects.filter(pk=r.pet_id).only("name").first()
+            if pet is not None:
+                body["pet_name"] = pet.name    # "Have you seen Bruno?" — the owner published this
 
         is_reporter = request.user.is_authenticated and request.user.pk == r.reporter_account_id
         if is_reporter:
@@ -768,7 +820,20 @@ def _match_repr(match, viewer_report):
             "report": {"report_id": str(other.pk), "report_type": other.report_type,
                        "species": other.species, "breed": other.breed,
                        "color_markings": other.color_markings, "city": other.city,
-                       "created_at": other.created_at.isoformat()}}
+                       "created_at": other.created_at.isoformat()},
+            "reporter": _match_counterpart(other)}
+
+
+def _match_counterpart(other):
+    """D6 + D1 · who filed the other half of a lost<->found pair, so an owner and a finder can
+    reunite. Named unless they filed anonymously (D8); phone and email only if they consented
+    on that report (D1). Only ever shown to the reporter on the other side of the pair."""
+    if other.is_anonymous or other.reporter_account is None:
+        return {"anonymous": True}
+    person = {"display_name": other.reporter_account.display_name}
+    if other.contact_share_consent:
+        person["contact"] = contact.contact_of(other.reporter_account)
+    return person
 
 
 class ReportMatchesView(APIView):
