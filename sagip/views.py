@@ -396,7 +396,11 @@ class RescueMapView(APIView):
     def get(self, request):
         centroid_ll = centroid_for(request.query_params.get("city"))
         if centroid_ll is None:
-            return Response({"reports": []})  # the map is city-scoped; no known city, nothing to show
+            # ⚠️ Not a bare empty list (S15). "No reports" and "this city can't be searched"
+            # used to be the same `{"reports": []}`, and the app told people in an uncovered
+            # city "No strays reported near you — that's good news". `city_supported` lets the
+            # client say the true thing; additive, so older clients are unaffected.
+            return Response({"reports": [], "city_supported": False})
         lat, lng = centroid_ll
         centroid = Point(lng, lat, srid=4326)
         try:
@@ -416,7 +420,7 @@ class RescueMapView(APIView):
                     "city": r.city or city,   # coarse label; precise geom deliberately withheld
                     "reported_at": r.created_at.isoformat()}
                    for r in qs]
-        return Response({"reports": reports})
+        return Response({"reports": reports, "city_supported": True})
 
 
 class MyReportsView(APIView):

@@ -8,8 +8,9 @@ from verifications.models import VerificationRequest
 
 @pytest.mark.django_db
 def test_reports_map_is_public_and_returns_contract_shape(client):
+    # No city given: the map can't search anywhere, and now says so (S15).
     res = client.get("/api/v1/reports/map")
-    assert res.status_code == 200 and res.json() == {"reports": []}
+    assert res.status_code == 200 and res.json() == {"reports": [], "city_supported": False}
 
 
 @pytest.mark.django_db
