@@ -6,7 +6,7 @@ botocore==1.43.78
 cffi==2.1.0
 certifi==2026.7.22
 charset_normalizer==3.5.1
-cryptography==50.0.0
+cryptography==50.0.1
 # US-K3 · security upgrades, 2026-09-04. Django 5.1.15 carried SEVEN advisories
 # (PYSEC-2026-3717, CVE-2026-48587/6873/8404/48588/53877/53878); 5.2 is the current LTS line.
 Django==5.2.17
