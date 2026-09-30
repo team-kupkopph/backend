@@ -14,7 +14,12 @@ class ReportCreateSerializer(serializers.Serializer):
     report_type = serializers.ChoiceField(choices=[c.value for c in ReportType],
                                           required=False, default=ReportType.STRAY)
     species = serializers.ChoiceField(choices=[c.value for c in Species])
-    condition = serializers.ChoiceField(choices=[c.value for c in StrayCondition])
+    # D6 · optional for a LOST pet (its owner is describing a pet at home, not an animal in
+    # front of them); required for a stray or a found animal, whose condition sets urgency.
+    condition = serializers.ChoiceField(choices=[c.value for c in StrayCondition], required=False)
+    # D6 · "I've seen this pet": the lost report this sighting is of. Makes this a FOUND report
+    # of the lost pet's species, linked to it as a suggested match (sagip.matching.link_sighting).
+    sighting_of = serializers.UUIDField(required=False)
     notes = serializers.CharField(required=False, allow_blank=True)
     breed = serializers.CharField(required=False, allow_blank=True, max_length=80)
     color_markings = serializers.CharField(required=False, allow_blank=True, max_length=120)
@@ -44,6 +49,11 @@ class ReportCreateSerializer(serializers.Serializer):
     def validate(self, data):
         # D8 · anonymous means the claimer isn't told who reported — handing them a phone
         # number would undo that, so the two can't be combined.
+        if not data.get("condition"):
+            if data.get("report_type") == ReportType.LOST:
+                data["condition"] = StrayCondition.HEALTHY
+            else:
+                raise serializers.ValidationError({"condition": "This field is required."})
         if data.get("is_anonymous") and data.get("contact_share_consent"):
             raise serializers.ValidationError(
                 {"contact_share_consent": "An anonymous report can't share contact details."})
@@ -77,7 +87,9 @@ class ContactConsentSerializer(serializers.Serializer):
 class ReportCloseSerializer(serializers.Serializer):
     """S11 · why a reporter closed their own report. A fixed list, so the reason can be
     counted and shown back without free text anyone else could read."""
-    reason = serializers.ChoiceField(choices=["gone", "duplicate", "handled_myself", "mistake"])
+    # "reunited" (D6) is how an owner closes a lost report once their pet is home.
+    reason = serializers.ChoiceField(
+        choices=["gone", "duplicate", "handled_myself", "mistake", "reunited"])
 
 
 class ClaimReleaseSerializer(serializers.Serializer):

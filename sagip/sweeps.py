@@ -20,6 +20,7 @@ from sagip.models import (
     CaseStatusHistory,
     OfferStatus,
     ReportOffer,
+    ReportType,
     RescueCase,
     StrayCondition,
     StrayReport,
@@ -129,7 +130,9 @@ def escalate_reports(now=None):
     notification per level, never a duplicate."""
     now = now or timezone.now()
     touched = []
-    reports = StrayReport.objects.filter(status=StrayStatus.REPORTED, escalation_level__lt=2)
+    # D6 · a lost pet is its owner's to find and nobody's to claim — it never pages rescuers.
+    reports = (StrayReport.objects.filter(status=StrayStatus.REPORTED, escalation_level__lt=2)
+               .exclude(report_type=ReportType.LOST))
     for report in reports:
         level1_at, level2_at = _escalation_cadence_hours(report.condition)
         age_hours = (now - report.created_at).total_seconds() / 3600
