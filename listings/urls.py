@@ -6,6 +6,7 @@ from listings.views import (
     InquiryStageView,
     ListingDetailView,
     ListingInquiriesView,
+    ListingPublishView,
     ListingsView,
     MyInquiriesView,
     MyPetsView,
@@ -17,6 +18,7 @@ from listings.views import (
 urlpatterns = [
     path("listings", ListingsView.as_view()),
     path("listings/<uuid:listing_id>", ListingDetailView.as_view()),
+    path("listings/<uuid:listing_id>/publish", ListingPublishView.as_view()),   # D7
     path("listings/<uuid:listing_id>/inquiries", ListingInquiriesView.as_view()),
     path("me/inquiries", MyInquiriesView.as_view()),
     path("me/pets", MyPetsView.as_view()),

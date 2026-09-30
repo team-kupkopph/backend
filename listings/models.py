@@ -23,6 +23,10 @@ class ListingStatus(models.TextChoices):
     PENDING = "pending"
     ADOPTED = "adopted"
     WITHDRAWN = "withdrawn"
+    # D7 · private to its poster until published (POST /listings/{id}/publish). Born when a
+    # shelter accepts a rescuer's placement: the animal lands in the shelter's Animals tab to
+    # be described and priced before it goes on the Adopt feed.
+    DRAFT = "draft"
 
 
 class InquiryStatus(models.TextChoices):
