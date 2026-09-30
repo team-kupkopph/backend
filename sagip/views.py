@@ -13,6 +13,7 @@ from common.throttles import OfferCreateThrottle, ReportCreateThrottle
 from listings.permissions import IsVerifiedRescuer
 from notifications.models import Notification
 from notifications.service import notify
+from sagip import notices
 from sagip.geo import centroid_for, coarsen_point
 from sagip.models import (
     MatchStatus,
@@ -26,8 +27,14 @@ from sagip.models import (
     StrayStatus,
 )
 from sagip.permissions import is_active_claimer
-from sagip.serializers import CaseStatusUpdateSerializer, OfferCreateSerializer, ReportCreateSerializer
+from sagip.serializers import (
+    CaseStatusUpdateSerializer,
+    OfferCreateSerializer,
+    ReportCloseSerializer,
+    ReportCreateSerializer,
+)
 from sagip.status import set_report_status
+from sagip.sweeps import claim_due_at
 
 DEFAULT_RADIUS_KM = 10.0
 # decision 14: offers must outlive the longest claim window (24h) so a reopened case
@@ -50,6 +57,22 @@ def _already_claimed():
     return Response({"error": {"code": "already_claimed",
                                "message": "This report already has an active claim"}},
                     status=409)
+
+
+def _report_not_open():
+    return Response({"error": {"code": "report_not_open",
+                               "message": "This report is no longer open"}}, status=409)
+
+
+def _iso(dt):
+    return dt.isoformat() if dt else None
+
+
+def _approx_location(report):
+    """The public, coarsened point (US-SEC1 · a deterministic ~500 m grid) — never the real
+    one. The only form of a report's position anyone but its reporter and claimer receives."""
+    lat, lng = coarsen_point(report.geom.y, report.geom.x)
+    return {"lat": lat, "lng": lng}
 
 
 class ReportsCreateView(APIView):
@@ -150,6 +173,12 @@ class ReportClaimView(APIView):
                                                "message": "No such report"}}, status=404)
                 if RescueCase.objects.filter(report=report, expired_at__isnull=True).exists():
                     return _already_claimed()
+                # S21 · a report resolved WITHOUT a case — a confirmed lost & found match, or
+                # (S11) its reporter closing it — has no active case, so the check above let it
+                # be claimed straight back to `claimed`. After the case check so a lost race
+                # still reads as "someone else got there first".
+                if report.status != StrayStatus.REPORTED:
+                    return _report_not_open()
 
                 case = RescueCase.objects.create(report=report, claimed_by_account=request.user)
                 set_report_status(report, StrayStatus.CLAIMED, request.user)
@@ -226,6 +255,9 @@ class CaseStatusView(APIView):
                 case.resolved_at = timezone.now()
                 case.save(update_fields=["outcome_notes", "outcome_photo_url", "resolved_at"])
 
+        # S10 · the reporter hears every step; matched offerers hear the ending.
+        notices.case_progress(report, case, target)
+
         if target == StrayStatus.RESOLVED:
             # US-B1 · a resolved rescue can earn a badge (idempotent + reconciled nightly).
             from community.badges import award_badges_for
@@ -264,9 +296,12 @@ class CaseDetailView(APIView):
             "status": report.status,
             "claimed_at": case.claimed_at.isoformat(),
             "expired_at": case.expired_at.isoformat() if case.expired_at else None,
+            "claim_due_at": _iso(claim_due_at(case)),
         }
         if case.expired_at is None:
             body["report"]["precise_location"] = {"lat": report.geom.y, "lng": report.geom.x}
+            # S8 · the landmark is as precise as the pin, so it follows the pin.
+            body["report"]["location_text"] = report.location_text or None
         return Response(body)
 
 
@@ -285,6 +320,7 @@ class MyRescuesView(APIView):
             "status": c.report.status,
             "claimed_at": c.claimed_at.isoformat(),
             "expired_at": c.expired_at.isoformat() if c.expired_at else None,
+            "claim_due_at": _iso(claim_due_at(c)),   # S9 · null once it can't lapse
         } for c in qs]
         return Response({"cases": cases})
 
@@ -418,7 +454,10 @@ class RescueMapView(APIView):
         reports = [{"report_id": str(r.report_id), "species": r.species,
                     "condition": r.condition, "status": r.status,
                     "city": r.city or city,   # coarse label; precise geom deliberately withheld
-                    "reported_at": r.created_at.isoformat()}
+                    "reported_at": r.created_at.isoformat(),
+                    # S14 · the same ~500 m grid point GET /reports/{id} already publishes,
+                    # so the map can draw each report without exposing anything new.
+                    "approx_location": _approx_location(r)}
                    for r in qs]
         return Response({"reports": reports, "city_supported": True})
 
@@ -460,28 +499,97 @@ class ReportDetailView(APIView):
         if r is None:
             return Response({"error": {"code": "not_found", "message": "No such report"}},
                             status=404)
-        approx_lat, approx_lng = coarsen_point(r.geom.y, r.geom.x)
         body = {
             "report_id": str(r.report_id), "report_type": r.report_type,
             "species": r.species, "condition": r.condition,
             "status": r.status, "notes": r.notes or None, "city": r.city,
             "reported_at": r.created_at.isoformat(),
             "photos": [p.url for p in r.photos.order_by("uploaded_at")],
-            "approx_location": {"lat": approx_lat, "lng": approx_lng}}
+            "approx_location": _approx_location(r)}
 
         is_reporter = request.user.is_authenticated and request.user.pk == r.reporter_account_id
         if is_reporter:
             body["escalation_level"] = r.escalation_level
             body["offers_count"] = r.offers.count()
+            history = list(r.status_history.order_by("changed_at"))
             body["status_history"] = [
-                {"status": h.status, "changed_at": h.changed_at.isoformat()}
-                for h in r.status_history.order_by("changed_at")]
+                {"status": h.status, "changed_at": h.changed_at.isoformat(), "note": h.note}
+                for h in history]
             body["escalation_notified"] = _escalation_notified(r)
+            # S10 · who has it, and how it ended. A lapsed claimer is not named: they are no
+            # longer the one helping. Closed-by-reporter reports have no case, so no outcome.
+            case = r.cases.filter(expired_at__isnull=True).select_related(
+                "claimed_by_account").first()
+            body["claimer"] = ({"display_name": case.claimed_by_account.display_name}
+                               if case else None)
+            body["outcome"] = ({"notes": case.outcome_notes or None,
+                                "photo_url": case.outcome_photo_url or None,
+                                "resolved_at": case.resolved_at.isoformat()}
+                               if case and case.resolved_at else None)
+            body["close_reason"] = _close_reason(r, history)
 
-        if is_reporter or is_active_claimer(r, request.user):
+        claimer = is_active_claimer(r, request.user)
+        if is_reporter or claimer:
             body["precise_location"] = {"lat": r.geom.y, "lng": r.geom.x}
+            # S8 · the landmark the reporter typed is as precise as the pin, so it follows
+            # the pin's rule. It used to be stored and returned by no endpoint at all.
+            body["location_text"] = r.location_text or None
+        if claimer:
+            # S27 · a claimer reading their report (from a push, or the map) can find the
+            # case; S9 · and see when it lapses.
+            mine = r.cases.get(claimed_by_account=request.user, expired_at__isnull=True)
+            body["my_case"] = {"case_id": str(mine.pk), "claim_due_at": _iso(claim_due_at(mine))}
 
         return Response(body)
+
+
+# S11 · a reporter's close is recorded on the status history (the single writer's note), so
+# no column is needed and the reason survives in the audit trail where it belongs.
+CLOSE_NOTE_PREFIX = "closed_by_reporter:"
+
+
+def _close_reason(report, history):
+    if report.status != StrayStatus.RESOLVED or not history:
+        return None
+    last = history[-1]
+    if (last.changed_by_account_id == report.reporter_account_id
+            and last.note.startswith(CLOSE_NOTE_PREFIX)):
+        return last.note[len(CLOSE_NOTE_PREFIX):]
+    return None
+
+
+class ReportCloseView(APIView):
+    """S11 · POST /reports/{id}/close {reason} — the reporter says the report no longer needs
+    anyone: the animal is gone, it's a duplicate, they handled it themselves, or it was a
+    mistake. Only while `reported`: once claimed, a rescuer is on the way and closing would
+    strand them (the claim either progresses or lapses back to `reported`).
+
+    Closing resolves the report through the single status writer (so escalation stops on the
+    next sweep and the map greys it) and expires its open offers, which have nothing left to
+    attach to. The report row is locked, so a close and a claim can't both win."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, report_id):
+        s = ReportCloseSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        reason = s.validated_data["reason"]
+        with transaction.atomic():
+            report = StrayReport.objects.select_for_update().filter(pk=report_id).first()
+            if report is None:
+                return Response({"error": {"code": "not_found", "message": "No such report"}},
+                                status=404)
+            if report.reporter_account_id != request.user.pk:
+                return Response({"error": {"code": "not_your_report",
+                                           "message": "Only the reporter can close this report"}},
+                                status=403)
+            if report.status != StrayStatus.REPORTED:
+                return _report_not_open()
+            set_report_status(report, StrayStatus.RESOLVED, request.user,
+                              note=f"{CLOSE_NOTE_PREFIX}{reason}")
+            ReportOffer.objects.filter(report=report, status=OfferStatus.OPEN).update(
+                status=OfferStatus.EXPIRED)
+        emit("report_closed", reason=reason)
+        return Response({"report_id": str(report.pk), "status": report.status})
 
 
 def _escalation_notified(report):

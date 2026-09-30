@@ -54,6 +54,14 @@ _TYPES = [
     # P4 · G11/K16.
     NotificationType("signup_cancelled_by_shelter", "{shift_id, signup_id}", True, "kupkop://shifts"),
     NotificationType("attendance_due", "{shift_id, window}", True, "kupkop://shelter/shifts/{shift_id}"),
+    # Sagip loop closure (dev/sagip-build-review.md). S10: the reporter (every step) and the
+    # matched offerers (the ending only) hear how the rescue went.
+    NotificationType("case_progress", "{report_id, case_id, status}", True, "kupkop://reports/{report_id}"),
+    # S9: the claimer is warned before a claim lapses, and told when it has.
+    NotificationType("claim_due", "{report_id, case_id}", True, "kupkop://cases/{case_id}"),
+    NotificationType("claim_lapsed", "{report_id, case_id}", True, "kupkop://reports/{report_id}"),
+    # S18: the rescuer hears whether a direct placement was accepted.
+    NotificationType("placement_decided", "{listing_id, inquiry_id, decision}", True, "kupkop://rescues"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}

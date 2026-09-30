@@ -5,13 +5,17 @@ Celery-beat, no new infra, revisit when Sprint 5 needs workers anyway) calls the
 functions themselves have no opinion on when they run. Both are idempotent, and both stop
 touching a report the instant it is claimed (E1) or moves past `claimed` (E2).
 """
+import math
+
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
 from accounts.models import Account
 from common.cities import city_variants
+from notifications.models import Notification
 from notifications.service import notify
+from sagip import notices
 from sagip.geo import centroid_for, distance_km
 from sagip.models import (
     CaseStatusHistory,
@@ -45,6 +49,30 @@ LEVEL2_RADIUS_KM = 15
 
 def _claim_window_hours(condition):
     return CLAIM_WINDOW_HOURS.get(condition, _DEFAULT_WINDOW)
+
+
+# S9 · the claimer is warned once this share of the window has passed (4.5 h of an injured
+# animal's 6). On the hourly tick that lands between 75% and 75% + 1 h — still before expiry
+# for every window in CLAIM_WINDOW_HOURS.
+WARN_AT_FRACTION = 0.75
+
+
+def _claim_anchor(case):
+    """The moment a claim's clock started: its latest status row (a claim always writes one,
+    US-K1), falling back to `claimed_at` for a case seeded with no history."""
+    latest = (CaseStatusHistory.objects.filter(report=case.report)
+              .order_by("-changed_at").first())
+    return latest.changed_at if latest else case.claimed_at
+
+
+def claim_due_at(case):
+    """S9 · when this claim lapses if nothing is posted, or None when it can't lapse — it
+    already did, or the animal is in custody (S1: only a `claimed` case can stall). The API
+    shows this and the sweeps act on it, so both read the same rule."""
+    if case.expired_at is not None or case.report.status != StrayStatus.CLAIMED:
+        return None
+    return _claim_anchor(case) + timezone.timedelta(
+        hours=_claim_window_hours(case.report.condition))
 
 
 def _escalation_cadence_hours(condition):
@@ -160,11 +188,7 @@ def expire_stalled_claims(now=None):
                                         report__status=StrayStatus.CLAIMED)
               .select_related("report"))
     for case in active:
-        latest = (CaseStatusHistory.objects.filter(report=case.report)
-                  .order_by("-changed_at").first())
-        # A claim always writes at least one history row (US-K1); this fallback only
-        # matters for a case seeded directly in the DB with no history at all.
-        anchor = latest.changed_at if latest else case.claimed_at
+        anchor = _claim_anchor(case)
         window = _claim_window_hours(case.report.condition)
         stalled_hours = (now - anchor).total_seconds() / 3600
         if stalled_hours < window:
@@ -186,8 +210,34 @@ def expire_stalled_claims(now=None):
                       body=f"The {report.get_species_display().lower()} in "
                            f"{report.city or 'the area'} needs help again.",
                       data={"report_id": str(report.pk)})
+            # S9 · the claimer and the reporter were never told. Inside the transaction, so
+            # a rolled-back expiry tells no one.
+            notices.claim_lapsed(case, window)
         expired.append(case)
     return expired
+
+
+def warn_due_claims(now=None):
+    """S9 · warn a claimer once WARN_AT_FRACTION of their window has passed with no update,
+    while there is still time to post one. Idempotent: one `claim_due` per case, ever — a
+    claim that moves on to `rescued` leaves this sweep's scope, and a re-claim after expiry
+    is a new case with its own warning."""
+    now = now or timezone.now()
+    warned = []
+    active = (RescueCase.objects.filter(expired_at__isnull=True,
+                                        report__status=StrayStatus.CLAIMED)
+              .select_related("report", "claimed_by_account"))
+    for case in active:
+        window = _claim_window_hours(case.report.condition)
+        elapsed = (now - _claim_anchor(case)).total_seconds() / 3600
+        if not (window * WARN_AT_FRACTION <= elapsed < window):
+            continue
+        if Notification.objects.filter(account=case.claimed_by_account, type="claim_due",
+                                       data__case_id=str(case.pk)).exists():
+            continue
+        notices.claim_due(case, max(1, math.ceil(window - elapsed)))
+        warned.append(case)
+    return warned
 
 
 def expire_offers(now=None):

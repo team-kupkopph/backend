@@ -7,6 +7,7 @@ from sagip.views import (
                          MyReportsView,
                          MyRescuesView,
                          ReportClaimView,
+                         ReportCloseView,
                          ReportDetailView,
                          ReportMatchDecisionView,
                          ReportMatchesView,
@@ -21,6 +22,7 @@ urlpatterns = [
     path("reports/map", RescueMapView.as_view()),
     path("reports/<uuid:report_id>", ReportDetailView.as_view()),
     path("reports/<uuid:report_id>/claim", ReportClaimView.as_view()),
+    path("reports/<uuid:report_id>/close", ReportCloseView.as_view()),   # S11
     path("reports/<uuid:report_id>/matches", ReportMatchesView.as_view()),
     path("reports/<uuid:report_id>/matches/<uuid:match_id>/confirm",
          ReportMatchDecisionView.as_view(), {"action": "confirm"}),
