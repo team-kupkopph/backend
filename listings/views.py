@@ -35,16 +35,29 @@ from listings.stages import set_stage_state
 from listings.visibility import account_is_verified_rescuer, public_poster_q
 from notifications.service import notify
 from sagip.models import RescueCase, StrayStatus
+from sagip.status import resolve_report
 from shelter.models import ShelterProfile
 
 PAGE_SIZE = 20
 
 
+# S20 · a listing in any of these states is the animal's live handoff; a WITHDRAWN one
+# (a declined placement, or a listing its poster took down) no longer is.
+LIVE_HANDOFF_STATUSES = (ListingStatus.AVAILABLE, ListingStatus.PENDING, ListingStatus.ADOPTED)
+
+
 def _load_safe_own_case(case_id, user):
     """H1's safe/own-case gate, shared by `CaseListView` and `CasePlaceView`: the case
-    must exist, be claimed by the requesting user, and its report must be SAFE. Returns
-    (case, None) on success or (None, Response) with the appropriate error status."""
-    case = RescueCase.objects.select_related("report").filter(pk=case_id).first()
+    must exist, be claimed by the requesting user, its report must be SAFE, and it must
+    not already have a live handoff. Returns (case, None) on success or (None, Response)
+    with the appropriate error status.
+
+    ⚠️ Call inside `transaction.atomic()`: the case row is locked so two taps on "Place"
+    (or a List racing a Place) serialize here and the second one sees the first's listing.
+    Without the lock and the handoff check, one case could be listed AND placed, or placed
+    twice (S20, dev/sagip-build-review.md)."""
+    case = (RescueCase.objects.select_for_update().select_related("report")
+            .filter(pk=case_id).first())
     if case is None:
         return None, Response({"error": {"code": "not_found", "message": "No such case"}}, status=404)
     if case.claimed_by_account_id != user.pk:
@@ -54,6 +67,12 @@ def _load_safe_own_case(case_id, user):
     if case.report.status != StrayStatus.SAFE:
         return None, Response({"error": {"code": "case_not_safe",
                                          "message": "The animal must be safe before listing"}},
+                              status=409)
+    if AdoptionListing.objects.filter(source_report=case.report,
+                                      status__in=LIVE_HANDOFF_STATUSES).exists():
+        return None, Response({"error": {"code": "already_handed_off",
+                                         "message": "This animal is already listed or offered "
+                                                    "to someone"}},
                               status=409)
     return case, None
 
@@ -196,24 +215,26 @@ class CaseListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, case_id):
-        case, error = _load_safe_own_case(case_id, request.user)
-        if error:
-            return error
-        fee = request.data.get("adoption_fee") or "0"
-        try:
-            fee_dec = Decimal(str(fee))
-        except (InvalidOperation, ValueError):
-            return Response({"error": {"code": "bad_request", "message": "Invalid adoption_fee"}}, status=422)
-        cap = fee_cap_for(request.user)
-        if cap is not None and fee_dec > cap:
-            return Response({"error": {"code": "fee_over_cap",
-                                       "message": f"The adoption fee can't exceed ₱{cap}",
-                                       "details": {"cap": cap}}}, status=422)
-        listing = AdoptionListing.objects.create(
-            posted_by=request.user, source_report=case.report, species=case.report.species,
-            name=request.data.get("name") or "",
-            city=request.data.get("city") or case.report.city or "",
-            adoption_fee=fee_dec, status=ListingStatus.AVAILABLE)
+        with transaction.atomic():
+            case, error = _load_safe_own_case(case_id, request.user)
+            if error:
+                return error
+            fee = request.data.get("adoption_fee") or "0"
+            try:
+                fee_dec = Decimal(str(fee))
+            except (InvalidOperation, ValueError):
+                return Response({"error": {"code": "bad_request", "message": "Invalid adoption_fee"}},
+                                status=422)
+            cap = fee_cap_for(request.user)
+            if cap is not None and fee_dec > cap:
+                return Response({"error": {"code": "fee_over_cap",
+                                           "message": f"The adoption fee can't exceed ₱{cap}",
+                                           "details": {"cap": cap}}}, status=422)
+            listing = AdoptionListing.objects.create(
+                posted_by=request.user, source_report=case.report, species=case.report.species,
+                name=request.data.get("name") or "",
+                city=request.data.get("city") or case.report.city or "",
+                adoption_fee=fee_dec, status=ListingStatus.AVAILABLE)
         return Response({"listing_id": str(listing.pk)}, status=201)
 
 
@@ -225,27 +246,31 @@ class CasePlaceView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, case_id):
-        case, error = _load_safe_own_case(case_id, request.user)
-        if error:
-            return error
-        recipient = Account.objects.filter(email=request.data.get("recipient_email")).first()
-        if recipient is None:
-            return Response({"error": {"code": "recipient_not_found", "message": "No such account"}}, status=404)
-        if not account_is_verified_rescuer(recipient):
-            return Response({"error": {"code": "recipient_not_verified",
-                                       "message": "The recipient must be a verified member or shelter"}},
-                            status=422)
-        fee = request.data.get("adoption_fee") or "0"
-        try:
-            fee_dec = Decimal(str(fee))
-        except (InvalidOperation, ValueError):
-            return Response({"error": {"code": "bad_request", "message": "Invalid adoption_fee"}}, status=422)
-        cap = fee_cap_for(request.user)
-        if cap is not None and fee_dec > cap:
-            return Response({"error": {"code": "fee_over_cap",
-                                       "message": f"The adoption fee can't exceed ₱{cap}",
-                                       "details": {"cap": cap}}}, status=422)
+        # One transaction from the gate to the notify: the gate locks the case row, so a
+        # second Place (or a List) waits here and then sees this listing (S20).
         with transaction.atomic():
+            case, error = _load_safe_own_case(case_id, request.user)
+            if error:
+                return error
+            recipient = Account.objects.filter(email=request.data.get("recipient_email")).first()
+            if recipient is None:
+                return Response({"error": {"code": "recipient_not_found", "message": "No such account"}},
+                                status=404)
+            if not account_is_verified_rescuer(recipient):
+                return Response({"error": {"code": "recipient_not_verified",
+                                           "message": "The recipient must be a verified member or shelter"}},
+                                status=422)
+            fee = request.data.get("adoption_fee") or "0"
+            try:
+                fee_dec = Decimal(str(fee))
+            except (InvalidOperation, ValueError):
+                return Response({"error": {"code": "bad_request", "message": "Invalid adoption_fee"}},
+                                status=422)
+            cap = fee_cap_for(request.user)
+            if cap is not None and fee_dec > cap:
+                return Response({"error": {"code": "fee_over_cap",
+                                           "message": f"The adoption fee can't exceed ₱{cap}",
+                                           "details": {"cap": cap}}}, status=422)
             listing = AdoptionListing.objects.create(
                 posted_by=request.user, source_report=case.report, species=case.report.species,
                 name=request.data.get("name") or "",
@@ -489,6 +514,12 @@ class PlacementDecisionView(APIView):
                 inq.listing.adopted_pet = pet
                 inq.listing.adopted_by_account = request.user
                 inq.listing.save(update_fields=["status", "adopted_pet", "adopted_by_account"])
+                # S2 · a placed rescue is a finished rescue: resolve the report and close the
+                # case in the same transaction, or the rescuer's Home keeps asking them to
+                # find a home for an animal that has one. The recipient is the actor.
+                if inq.listing.source_report_id is not None:
+                    resolve_report(inq.listing.source_report, request.user,
+                                   note="direct placement accepted")
                 # US-B1 · rehoming a pet can earn a badge for the lister (idempotent +
                 # reconciled nightly; deferred import avoids a cycle).
                 from community.badges import award_badges_for
@@ -501,7 +532,10 @@ class PlacementDecisionView(APIView):
             inq.status = InquiryStatus.DECLINED
             inq.decided_at = now
             inq.save(update_fields=["status", "decided_at"])
-            inq.listing.status = ListingStatus.AVAILABLE
+            # ⚠️ WITHDRAWN, not AVAILABLE. A placement listing was never public — the rescuer
+            # chose one person, not the adoption feed — so a decline must not publish it. It
+            # also frees the case for its next handoff (S20's guard ignores withdrawn rows).
+            inq.listing.status = ListingStatus.WITHDRAWN
             inq.listing.save(update_fields=["status"])
             from common.analytics import emit
             emit("inquiry_decided", outcome="declined")
