@@ -480,6 +480,18 @@ class ListingInquiriesView(APIView):
                             status=409)
         try:
             with transaction.atomic():
+                # Final review #1 · only an AVAILABLE listing takes inquiries. A take-back (D15)
+                # leaves WITHDRAWN, a placement is PENDING for its one recipient, ADOPTED has a
+                # home — a stale card or deep link must not strand a new ACTIVE inquiry (and a
+                # notification) on any of them. The status is re-read under the row lock
+                # (listing -> inquiry, R1's order; nothing is held before this) so a take-back
+                # or accept that committed after the read above is seen, and one still running
+                # queues behind us.
+                locked = AdoptionListing.objects.select_for_update().get(pk=listing.pk)
+                if locked.status != ListingStatus.AVAILABLE:
+                    return Response({"error": {"code": "listing_unavailable",
+                                               "message": "This animal is no longer available "
+                                                          "for adoption."}}, status=409)
                 inquiry = AdoptionInquiry.objects.create(
                     listing=listing, adopter_account=request.user,
                     message=s.validated_data.get("message", ""))
