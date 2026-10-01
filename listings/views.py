@@ -82,11 +82,17 @@ def _load_safe_own_case(case_id, user):
         return None, Response({"error": {"code": "case_not_safe",
                                          "message": "The animal must be safe before listing"}},
                               status=409)
-    if AdoptionListing.objects.filter(source_report=case.report,
-                                      status__in=LIVE_HANDOFF_STATUSES).exists():
+    live = (AdoptionListing.objects.filter(source_report=case.report,
+                                           status__in=LIVE_HANDOFF_STATUSES)
+            .only("pk", "status").first())
+    if live is not None:
+        # The details are the client's way back to the handoff it already started (a second
+        # "List" tap would otherwise strand the rescuer outside their own draft).
         return None, Response({"error": {"code": "already_handed_off",
                                          "message": "This animal is already listed or offered "
-                                                    "to someone"}},
+                                                    "to someone",
+                                         "details": {"listing_id": str(live.pk),
+                                                     "listing_status": live.status}}},
                               status=409)
     return case, None
 

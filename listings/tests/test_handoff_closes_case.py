@@ -95,6 +95,10 @@ def test_a_second_handoff_while_one_is_live_is_refused(first, second):
     res = do[second]()
     assert res.status_code == 409 and res.json()["error"]["code"] == "already_handed_off"
     assert AdoptionListing.objects.filter(source_report=case.report).count() == 1
+    # The way back to the live handoff (e.g. the draft a "List" already made).
+    live = AdoptionListing.objects.get(source_report=case.report)
+    assert res.json()["error"]["details"] == {"listing_id": str(live.pk),
+                                              "listing_status": live.status}
 
 
 @pytest.mark.django_db
