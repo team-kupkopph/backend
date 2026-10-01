@@ -24,10 +24,14 @@ def impact_counts(account):
     from volunteer.reliability import reliability_for
     return {
         "shifts_completed": reliability_for(account)["shifts_completed"],
-        "rescues_helped": RescueCase.objects.filter(claimed_by_account=account,
-                                                    resolved_at__isnull=False).count(),
-        "pets_rehomed": AdoptionListing.objects.filter(posted_by=account,
-                                                       status=ListingStatus.ADOPTED).count(),
+        # D13 · a rescue of your own report, or an animal "placed" with yourself, is real work but
+        # not a badge: otherwise report → claim → resolve mints one in a minute.
+        "rescues_helped": (RescueCase.objects.filter(claimed_by_account=account,
+                                                     resolved_at__isnull=False)
+                           .exclude(report__reporter_account=account).count()),
+        "pets_rehomed": (AdoptionListing.objects.filter(posted_by=account,
+                                                        status=ListingStatus.ADOPTED)
+                         .exclude(adopted_by_account=account).count()),
         "pledges_delivered": NeedPledge.objects.filter(pledger_account=account,
                                                        status=PledgeStatus.DELIVERED).count(),
     }

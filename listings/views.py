@@ -257,6 +257,10 @@ class CasePlaceView(APIView):
             if recipient is None:
                 return Response({"error": {"code": "recipient_not_found", "message": "No such account"}},
                                 status=404)
+            if recipient.pk == request.user.pk:
+                return Response({"error": {"code": "recipient_is_you",
+                                           "message": "Choose someone other than yourself"}},
+                                status=422)
             if not account_is_verified_rescuer(recipient):
                 return Response({"error": {"code": "recipient_not_verified",
                                            "message": "The recipient must be a verified member or shelter"}},
