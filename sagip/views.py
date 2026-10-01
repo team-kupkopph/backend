@@ -1,3 +1,4 @@
+import math
 from django.contrib.gis.geos import Point
 from django.db import IntegrityError, transaction
 from django.db.models import Count
@@ -40,6 +41,9 @@ from sagip.sweeps import claim_due_at, reopen_case
 # decision 14: offers must outlive the longest claim window (24h) so a reopened case
 # still has people to re-ask — if either number moves, move both.
 OFFER_WINDOW_HOURS = 48
+
+MIN_RADIUS_KM = 1.0
+MAX_RADIUS_KM = 25.0
 
 # US-K2 · a case can only move forward through this order; `resolved` is terminal.
 # `claimed` is included as the baseline so a target's index can be compared against
@@ -148,7 +152,7 @@ class ReportsCreateView(APIView):
             report = StrayReport.objects.create(
                 reporter_account=request.user,
                 report_type=report_type,
-                pet_id=pet_id,
+                pet_id=pet.pk if pet is not None else None,   # C20 · only the caller's own pet
                 is_anonymous=d.get("is_anonymous", False),
                 contact_share_consent=d.get("contact_share_consent", False),
                 contact_share_consent_at=(timezone.now() if d.get("contact_share_consent")
@@ -508,6 +512,11 @@ class RescueMapView(APIView):
             radius_km = float(request.query_params.get("radius_km") or DEFAULT_RADIUS_KM)
         except (TypeError, ValueError):
             radius_km = DEFAULT_RADIUS_KM
+        # C21 · a radius is a map zoom, not a query parameter for the whole country.
+        if not math.isfinite(radius_km):
+            radius_km = DEFAULT_RADIUS_KM
+        radius_km = min(max(radius_km, MIN_RADIUS_KM), MAX_RADIUS_KM)
+
         # S16 · the same query the shelter dashboard's Rescue card counts (sagip/queries.py).
         qs = reports_near_city(request.query_params.get("city"), radius_km)
         if qs is None:
