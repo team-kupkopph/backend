@@ -12,6 +12,8 @@ from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
 from moderation.actions import DECIDABLE, ModerationError, resolve_flag
 from moderation.models import FlagStatus, FlagTarget, ModerationFlag
+from sagip.models import StrayReport
+from sagip.moderation import ReportNotHidden, restore_report
 
 # `target_type`/`target_id` is a GENERIC pointer with no foreign key — the targets span
 # listings, sagip, shelter, community and accounts, so one column per type was rejected in
@@ -150,3 +152,36 @@ class FlagActionView(FlagDecisionView):
 
 class FlagDismissView(FlagDecisionView):
     action = "dismiss"
+
+
+class ReportRestoreView(StaffView):
+    """POST /admin-api/reports/{report_id}/restore {"reason"} · U1.
+
+    A takedown (C13) is one-way for everyone but staff; this is how a mistaken one is undone.
+    The reason is required, as for every staff action that reverses another's decision, and
+    is audited by length like the other decisions. Un-hiding is all it does to the public
+    surface: the report is back on the map and in public detail, and the rescuer who lost a
+    claim to the takedown is not told, so a reopened report is simply claimable again."""
+
+    def post(self, request, report_id):
+        reason = request.data.get("reason") if isinstance(request.data, dict) else None
+        reason = reason.strip() if isinstance(reason, str) else ""
+        if not reason:
+            return Response({"error": {"code": "reason_required",
+                                       "message": "Say why the report is being restored."}},
+                            status=422)
+        report = StrayReport.objects.filter(pk=report_id).first()
+        if report is None:
+            return Response({"error": {"code": "not_found", "message": "No such report."}},
+                            status=404)
+        try:
+            report = restore_report(report, admin_account_for(request), reason)
+        except ReportNotHidden:
+            return Response({"error": {"code": "not_hidden",
+                                       "message": "That report isn't hidden."}}, status=409)
+        # The audit middleware reads the Django request, and a DRF `Request` doesn't forward
+        # attribute writes to it, so the escalation-partner views' `request._audit_body = ...`
+        # never reaches it; set it on the wrapped request so `notes_len` really is recorded.
+        request._request._audit_body = {"notes": reason}
+        return Response({"report_id": str(report.pk), "status": report.status,
+                         "hidden": report.hidden_at is not None})
