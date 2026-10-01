@@ -45,7 +45,8 @@ SWEEPS = [
 
 
 class Command(SingletonCommand):
-    help = "Run every scheduled sweep: escalation, stalled claims, offer expiry, shift reminders."
+    help = ("Run every scheduled sweep: escalation, stalled claims, placement expiry, offer expiry, "
+            "shift reminders, badges.")
 
     def run(self, *args, **options):
         parts = [f"{label} {len(fn())}" for label, fn in SWEEPS]

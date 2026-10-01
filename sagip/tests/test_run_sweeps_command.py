@@ -93,3 +93,9 @@ def test_the_purge_commands_are_guarded_separately_from_the_sweeps(capsys):
         assert "anonymized" in capsys.readouterr().out
     finally:
         rival.close()
+
+
+def test_the_help_names_placement_expiry():
+    # C14 / D11 · `manage.py help run_sweeps` is how an operator learns what the cron line does.
+    from sagip.management.commands.run_sweeps import Command
+    assert "placement" in Command.help.lower()
