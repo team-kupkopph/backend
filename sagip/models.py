@@ -99,6 +99,9 @@ class StrayReport(models.Model):
     # shelter dashboard's count and public detail; never escalated, alerted or matched again. The row
     # survives (audit), and its reporter sees "removed by moderation".
     hidden_at = models.DateTimeField(null=True, blank=True)
+    # C12 / D9 · why the report-time alert was held back ("phone_unverified" | "reporter_cap"), or
+    # NULL. The report is still on the map and escalates as usual; the reporter is told why.
+    alert_held = models.CharField(max_length=20, null=True, blank=True)
     # Derived from geom (reverse-geocode) at write; NULL if unresolved — out of MVP scope.
     city = models.CharField(max_length=80, null=True, blank=True)
     barangay = models.CharField(max_length=80, null=True, blank=True)

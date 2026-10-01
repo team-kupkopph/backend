@@ -825,7 +825,8 @@ def _escalation_notified(report):
     at_report = nearby.exclude(data__has_key="reopened").count() if applies else None
     reopened = nearby.filter(data__reopened=True).count() if applies else None
     return {"level_1": reached.get(1, 0), "level_2": reached.get(2, 0),
-            "at_report": at_report, "reopened": reopened}
+            "at_report": at_report, "reopened": reopened,
+            "at_report_held": report.alert_held}
 
 
 def _match_repr(match, viewer_report):
