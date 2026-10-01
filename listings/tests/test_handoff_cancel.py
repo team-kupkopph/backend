@@ -327,3 +327,17 @@ def test_the_flag_changes_nothing_for_a_draft_or_a_placement():
     assert Notification.objects.filter(account=recipient, type="placement_withdrawn").count() == 1
     assert not Notification.objects.filter(type="listing_withdrawn").exists()
     assert AdoptionInquiry.objects.get(pk=placed["inquiry_id"]).status == InquiryStatus.WITHDRAWN
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("body", [[1], "true"])
+def test_a_take_back_body_that_is_not_an_object_is_a_plain_refusal(body):
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    lid, [inq] = _public_listing(rescuer, case, [AccountFactory()])
+    res = _cancel(rescuer, case, body)
+    assert res.status_code == 409 and res.json()["error"]["code"] == "has_active_inquiries"
+    assert res.json()["error"]["details"] == {"active_inquiries": 1}
+    assert AdoptionListing.objects.get(pk=lid).status == ListingStatus.AVAILABLE
+    inq.refresh_from_db()
+    assert inq.status == InquiryStatus.ACTIVE
+    assert not Notification.objects.filter(type="listing_withdrawn").exists()

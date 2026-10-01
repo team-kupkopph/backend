@@ -376,7 +376,9 @@ class CaseHandoffCancelView(APIView):
                 # D15 · two-step: without the flag the rescuer is told how many people asked and
                 # nothing changes; with it (a real JSON boolean — "true"/1 don't count) the listing
                 # and every open inquiry close inside these same locks.
-                if request.data.get("close_inquiries") is not True:
+                # A JSON list/string body has no .get — it is just "not true", not a 500.
+                body = request.data if isinstance(request.data, dict) else {}
+                if body.get("close_inquiries") is not True:
                     return Response({"error": {"code": "has_active_inquiries",
                                                "message": "People have asked about this animal, so it "
                                                           "can't be taken down from here.",
