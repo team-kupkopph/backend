@@ -1,13 +1,11 @@
 """C20 + C21 · input hardening: only link owned pets; clamp the map radius."""
 import pytest
 from django.contrib.gis.geos import Point
-from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
 from listings.models import Pet
 from sagip.models import StrayReport
-from verifications.models import AccountCapability
 
 
 def _c(account):

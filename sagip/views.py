@@ -1,4 +1,5 @@
 import math
+
 from django.contrib.gis.geos import Point
 from django.db import IntegrityError, transaction
 from django.db.models import Count
