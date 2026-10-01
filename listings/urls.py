@@ -1,6 +1,7 @@
 from django.urls import path
 
 from listings.views import (
+    CaseHandoffCancelView,
     CaseListView,
     CasePlaceView,
     InquiryStageView,
@@ -29,4 +30,5 @@ urlpatterns = [
     path("inquiries/<uuid:inquiry_id>/decline", PlacementDecisionView.as_view(), {"action": "decline"}),
     path("cases/<uuid:case_id>/list", CaseListView.as_view()),
     path("cases/<uuid:case_id>/place", CasePlaceView.as_view()),
+    path("cases/<uuid:case_id>/handoff/cancel", CaseHandoffCancelView.as_view()),
 ]

@@ -300,6 +300,64 @@ class CasePlaceView(APIView):
         return Response({"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)}, status=201)
 
 
+def _withdraw_placement(inquiry, now):
+    """C14 · end an unanswered direct placement: the offer is withdrawn, the listing goes back to
+    private (WITHDRAWN frees the case for its next handoff, S20), and the recipient is told."""
+    inquiry.status = InquiryStatus.WITHDRAWN
+    inquiry.decided_at = now
+    inquiry.save(update_fields=["status", "decided_at"])
+    inquiry.listing.status = ListingStatus.WITHDRAWN
+    inquiry.listing.save(update_fields=["status"])
+    notices.placement_withdrawn(inquiry.listing, inquiry)
+
+
+class CaseHandoffCancelView(APIView):
+    """C14 / D11 · POST /cases/{id}/handoff/cancel — the rescuer takes back a handoff that hasn't
+    happened yet: a draft, an unanswered placement, or a public listing nobody has inquired on.
+
+    ⚠️ Lock order is case -> listing -> inquiries; PlacementDecisionView locks the inquiry
+    first. A cancel racing an accept can therefore deadlock; Postgres aborts one side with a
+    deadlock error and rolls it back whole, so state stays consistent (see the task report)."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, case_id):
+        with transaction.atomic():
+            case = (RescueCase.objects.select_for_update().select_related("report")
+                    .filter(pk=case_id).first())
+            if case is None:
+                return Response({"error": {"code": "not_found", "message": "No such case"}}, status=404)
+            if case.claimed_by_account_id != request.user.pk:
+                return Response({"error": {"code": "not_your_case",
+                                           "message": "Only the claiming rescuer can change this"}},
+                                status=403)
+            if case.report.status != StrayStatus.SAFE:
+                return Response({"error": {"code": "case_not_safe",
+                                           "message": "There is no handoff to take back"}}, status=409)
+            listing = (AdoptionListing.objects.select_for_update()
+                       .filter(source_report=case.report, status__in=LIVE_HANDOFF_STATUSES).first())
+            if listing is None:
+                return Response({"error": {"code": "no_handoff",
+                                           "message": "This animal isn't listed or offered to anyone"}},
+                                status=404)
+            if listing.status == ListingStatus.ADOPTED:
+                return Response({"error": {"code": "already_adopted",
+                                           "message": "This animal already has a home"}}, status=409)
+            active = list(AdoptionInquiry.objects.select_for_update()
+                          .filter(listing=listing, status=InquiryStatus.ACTIVE))
+            now = timezone.now()
+            if listing.status == ListingStatus.PENDING and len(active) == 1:
+                _withdraw_placement(active[0], now)
+            elif active:
+                return Response({"error": {"code": "has_active_inquiries",
+                                           "message": "People have asked about this animal — reply "
+                                                      "to them before taking the listing down"}},
+                                status=409)
+            else:
+                listing.status = ListingStatus.WITHDRAWN
+                listing.save(update_fields=["status"])
+        return Response({"status": "withdrawn"})
+
+
 class ListingDetailView(APIView):
     """GET /listings/{id} (US-A3, Public) · PATCH /listings/{id} (US-A2, poster-only —
     ownership is the real gate here, not verification; see ListingsView's note)."""

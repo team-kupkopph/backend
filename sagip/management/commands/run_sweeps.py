@@ -19,6 +19,7 @@ instead. See common/locks.py for why it is a database advisory lock and not `flo
 """
 from common.management_base import SingletonCommand
 from community.sweeps import award_badges
+from listings.sweeps import expire_placements
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims, warn_due_claims
 from volunteer.sweeps import nudge_attendance, remind_shifts
 
@@ -36,6 +37,7 @@ SWEEPS = [
     ("escalated", escalate_reports),
     ("warned", warn_due_claims),         # S9 · before `expired`, so a warning can't trail it
     ("expired", expire_stalled_claims),
+    ("placements_expired", expire_placements),   # C14 / D11 · an unanswered placement lapses
     ("reminded", remind_shifts),
     ("attendance_nudged", nudge_attendance),
     ("badged", award_badges),
