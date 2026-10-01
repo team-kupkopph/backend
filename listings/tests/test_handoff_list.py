@@ -123,3 +123,18 @@ def test_a_report_with_no_photos_makes_a_draft_with_no_photos():
     res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {"name": "Tisoy"}, format="json")
     assert res.status_code == 201
     assert not AdoptionListing.objects.get(pk=res.json()["listing_id"]).photos.exists()
+
+
+@pytest.mark.django_db
+def test_list_unknown_case_404_not_found():
+    import uuid
+    res = _c(AccountFactory()).post(f"/api/v1/cases/{uuid.uuid4()}/list", {}, format="json")
+    assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+
+
+@pytest.mark.django_db
+def test_list_with_a_non_numeric_fee_422_bad_request_no_listing():
+    r = AccountFactory(); case = _safe_case(r)
+    res = _c(r).post(f"/api/v1/cases/{case.pk}/list", {"adoption_fee": "abc"}, format="json")
+    assert res.status_code == 422 and res.json()["error"]["code"] == "bad_request"
+    assert not AdoptionListing.objects.filter(source_report=case.report).exists()

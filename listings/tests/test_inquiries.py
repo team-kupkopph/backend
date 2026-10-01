@@ -259,3 +259,12 @@ def test_an_invalid_state_value_is_rejected(client):
                       {"state": "passed"},  # not a real StageState value
                       content_type="application/json", **_hdr(poster))
     assert res.status_code == 400
+
+
+@pytest.mark.django_db
+def test_a_non_numeric_page_falls_back_to_the_first_page(client):
+    me = _verified_member()
+    _inquire(client, _listing(AccountFactory(), name="Bantay"), me)
+    res = client.get("/api/v1/me/inquiries?page=abc", **_hdr(me))
+    assert res.status_code == 200
+    assert [r["listing"]["name"] for r in res.json()["results"]] == ["Bantay"]
