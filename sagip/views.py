@@ -556,7 +556,9 @@ class MyReportsView(APIView):
         qs = request.user.stray_reports.order_by("-created_at")
         results = [{"report_id": str(r.report_id), "species": r.species,
                     "condition": r.condition, "status": r.status,
-                    "city": r.city, "created_at": r.created_at.isoformat()} for r in qs]
+                    "city": r.city, "created_at": r.created_at.isoformat(),
+                    "hidden": r.hidden_at is not None}   # C13 · "Removed by moderation" (D10)
+                   for r in qs]
         return Response({"results": results})
 
 

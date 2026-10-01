@@ -220,3 +220,14 @@ def test_an_offer_racing_a_takedown_or_a_delete_gets_404(monkeypatch, gone):
     assert res.status_code == 404
     assert res.json()["error"]["code"] == "not_found"
     assert not ReportOffer.objects.filter(report_id=report.pk).exists()
+
+
+@pytest.mark.django_db
+def test_the_reporters_own_list_says_which_reports_were_removed():
+    """C13 / D10 · the reporter sees "Removed by moderation" in their own list."""
+    reporter = AccountFactory()
+    kept, removed = _report(reporter_account=reporter), _report(reporter_account=reporter)
+    _action(removed)
+    rows = {r["report_id"]: r for r in _c(reporter).get("/api/v1/me/reports").json()["results"]}
+    assert rows[str(removed.pk)]["hidden"] is True
+    assert rows[str(kept.pk)]["hidden"] is False
