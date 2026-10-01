@@ -443,9 +443,16 @@ class ListingDetailView(APIView):
                                            "message": f"The adoption fee can't exceed ₱{cap}",
                                            "details": {"cap": cap}}}, status=422)
         field_map = {"birthdate": "date_of_birth", "description": "story"}
+        changed = []
         for key, value in data.items():
-            setattr(listing, field_map.get(key, key), value)
-        listing.save()
+            field = field_map.get(key, key)
+            setattr(listing, field, value)
+            changed.append(field)
+        # Final review #2 · write only what the patch set. A whole-row save() would write back the
+        # status this request read, undoing an accept/decline/take-back/expiry that committed in
+        # between; the status is then re-read so the answer reports what is really there.
+        listing.save(update_fields=[*changed, "updated_at"])
+        listing.refresh_from_db(fields=["status"])
         return Response({
             "listing_id": str(listing.pk), "pet": _pet_fields(listing),
             "description": listing.story or None, "adoption_fee": str(listing.adoption_fee),

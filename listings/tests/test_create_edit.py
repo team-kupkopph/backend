@@ -210,3 +210,33 @@ def test_publishing_an_unknown_listing_is_404_not_found(client):
     import uuid
     res = client.post(f"/api/v1/listings/{uuid.uuid4()}/publish", **_hdr(AccountFactory()))
     assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+
+
+@pytest.mark.django_db
+def test_a_patch_never_reverts_a_status_written_while_it_was_in_flight(client):
+    """Final review #2 · the view loads the row, then validates; a take-back/accept/decline/expiry
+    that commits in between must survive. The old whole-row save() wrote the stale `available`
+    back over it. Simulated by flipping the status inside the serializer's validation, i.e. after
+    the view's read and before its save."""
+    from unittest import mock
+
+    from listings.serializers import ListingPatchSerializer
+
+    member = _verified_member()
+    listing_id = _create_listing(client, member)
+    real_is_valid = ListingPatchSerializer.is_valid
+
+    def flip_then_validate(self, *a, **kw):
+        AdoptionListing.objects.filter(pk=listing_id).update(status="withdrawn")
+        return real_is_valid(self, *a, **kw)
+
+    with mock.patch.object(ListingPatchSerializer, "is_valid", flip_then_validate):
+        res = client.patch(f"/api/v1/listings/{listing_id}",
+                           {"name": "Renamed", "description": "New story", "birthdate": "2022-02-02"},
+                           content_type="application/json", **_hdr(member))
+    assert res.status_code == 200, res.content
+    listing = AdoptionListing.objects.get(pk=listing_id)
+    assert listing.status == "withdrawn"
+    assert (listing.name, listing.story, str(listing.date_of_birth)) == (
+        "Renamed", "New story", "2022-02-02")
+    assert res.json()["status"] == "withdrawn"      # the answer doesn't claim the stale status
