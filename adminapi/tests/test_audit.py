@@ -114,3 +114,89 @@ def test_an_audit_write_failure_never_breaks_the_request(client, auth, monkeypat
 
     monkeypatch.setattr(AdminAuditLog.objects, "create", boom)
     assert client.get("/admin-api/verifications", **auth).status_code == 200
+
+
+# -- notes_len for the views that take a `reason` (or a note the view used to restate) -------
+# ⚠️ These views each did `request._audit_body = {...}` on the DRF Request — a no-op, because
+# DRF's Request never forwards attribute sets to the HttpRequest the middleware reads. The
+# `reason` views therefore never recorded notes_len at all. The middleware now reads `reason`
+# itself; these tests pin the row, not the assignment.
+def _decision_row(action):
+    rows = AdminAuditLog.objects.filter(action=action)
+    assert rows.count() == 1, f"expected exactly one {action} row"
+    return rows.get()
+
+
+PADDED = "  Repeated abuse reports.  "
+
+
+@pytest.mark.django_db
+def test_suspend_and_reinstate_record_the_reason_length_not_the_text(client, auth):
+    account = AccountFactory()
+    AdminAuditLog.objects.all().delete()
+    base = f"/admin-api/members/{account.account_id}"
+
+    assert client.post(f"{base}/suspend", {"reason": PADDED},
+                       content_type="application/json", **auth).status_code == 200
+    assert client.post(f"{base}/reinstate", {"reason": "Appeal upheld."},
+                       content_type="application/json", **auth).status_code == 200
+
+    # Measured as the view reads it — stripped. Whitespace is not a reason.
+    suspended = _decision_row("members/{id}/suspend")
+    assert suspended.detail["notes_len"] == len(PADDED.strip())
+    assert "abuse" not in str(suspended.detail)
+    assert _decision_row("members/{id}/reinstate").detail["notes_len"] == len("Appeal upheld.")
+
+
+@pytest.mark.django_db
+def test_closing_a_shift_records_the_reason_length(client, auth):
+    from django.utils import timezone
+
+    from volunteer.models import VolunteerShift
+    from volunteer.tests.helpers import verified_shelter
+    start = timezone.now() + timezone.timedelta(hours=48)
+    shift = VolunteerShift.objects.create(shelter_account=verified_shelter(), starts_at=start,
+                                          ends_at=start + timezone.timedelta(hours=2), capacity=3,
+                                          title="Morning dog walk", city="Marikina")
+    AdminAuditLog.objects.all().delete()
+
+    assert client.post(f"/admin-api/shifts/{shift.pk}/close", {"reason": PADDED},
+                       content_type="application/json", **auth).status_code == 200
+
+    row = _decision_row("shifts/{id}/close")
+    assert row.detail["notes_len"] == len(PADDED.strip())
+    assert "abuse" not in str(row.detail)
+
+
+@pytest.mark.django_db
+def test_escalation_partner_add_and_remove_record_the_note_length(client, auth):
+    from adminapi.tests.test_shelters import _in_city, _partner_url, make_shelter
+    profile = _in_city(make_shelter("Partner Org", verified=True))
+    AdminAuditLog.objects.all().delete()
+
+    assert client.post(_partner_url(profile), {"notes": "  Covers Marikina.  "},
+                       content_type="application/json", **auth).status_code == 200
+    assert client.post(_partner_url(profile, remove=True), {"notes": PADDED},
+                       content_type="application/json", **auth).status_code == 200
+
+    added = _decision_row("shelters/{id}/escalation-partner")
+    assert added.detail["notes_len"] == len("Covers Marikina.")
+    removed = _decision_row("shelters/{id}/escalation-partner/remove")
+    assert removed.detail["notes_len"] == len(PADDED.strip())
+    assert "abuse" not in str(removed.detail)
+
+
+@pytest.mark.django_db
+def test_unverifying_a_donation_qr_records_the_note_length(client, auth):
+    from adminapi.tests.test_shelters import make_shelter
+    from shelter.models import DonationQr
+    profile = make_shelter("Org", verified=True)
+    qr = DonationQr.objects.create(account=profile.account, provider="gcash", account_name="X",
+                                   qr_image_url="s3://qr.png", verified=True)
+    AdminAuditLog.objects.all().delete()
+
+    assert client.post(f"/admin-api/donation-qrs/{qr.donation_qr_id}/unverify", {"notes": PADDED},
+                       content_type="application/json", **auth).status_code == 200
+
+    row = _decision_row("donation-qrs/{id}/unverify")
+    assert row.detail["notes_len"] == len(PADDED.strip())

@@ -139,7 +139,6 @@ class SuspendView(StaffView):
                         status__in=[ShiftStatus.OPEN, ShiftStatus.FULL]):
                     cancel_activity(shift, by="platform", body="This activity is no longer running.")
 
-        request._audit_body = {"reason": reason}
         return Response(member_detail(account))
 
 
@@ -164,5 +163,4 @@ class ReinstateView(StaffView):
             # again is the correct cost.
             account.save(update_fields=["status"])
 
-        request._audit_body = {"reason": reason}
         return Response(member_detail(account))

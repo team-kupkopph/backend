@@ -39,9 +39,16 @@ def _detail(request):
             out[key] = value[:120]
     # The LENGTH of a decision note is useful ("was a reason given?"); the text is the
     # applicant's and belongs on the request row, not duplicated into an audit table.
+    # Suspend, reinstate and shift close call theirs `reason`; it is the same thing.
+    # Stripped, as every view reads it — whitespace is not a reason.
+    # ⚠️ Read HERE, not restated by the view: `request._audit_body = ...` inside a DRF view
+    # sets it on the DRF Request wrapper, which this middleware never sees.
     body = getattr(request, "_audit_body", None)
-    if isinstance(body, dict) and "notes" in body:
-        out["notes_len"] = len(str(body.get("notes") or ""))
+    if isinstance(body, dict):
+        for key in ("notes", "reason"):
+            if key in body:
+                out["notes_len"] = len(str(body.get(key) or "").strip())
+                break
     return out or None
 
 
