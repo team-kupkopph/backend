@@ -49,6 +49,15 @@ LIVE_HANDOFF_STATUSES = (ListingStatus.DRAFT, ListingStatus.AVAILABLE,
                          ListingStatus.PENDING, ListingStatus.ADOPTED)
 
 
+def _case_expired():
+    """A lapsed or released claim. The case row outlives it and still names its old claimer,
+    while the report can be claimed again under a NEW case — so without this check a former
+    claimer could list, place or cancel the next claimer's rescue. Same envelope as
+    sagip's CaseStatusView."""
+    return Response({"error": {"code": "case_expired", "message": "This claim has lapsed"}},
+                    status=409)
+
+
 def _load_safe_own_case(case_id, user):
     """H1's safe/own-case gate, shared by `CaseListView` and `CasePlaceView`: the case
     must exist, be claimed by the requesting user, its report must be SAFE, and it must
@@ -67,6 +76,8 @@ def _load_safe_own_case(case_id, user):
         return None, Response({"error": {"code": "not_your_case",
                                          "message": "Only the claiming rescuer can list this animal"}},
                               status=403)
+    if case.expired_at is not None:
+        return None, _case_expired()
     if case.report.status != StrayStatus.SAFE:
         return None, Response({"error": {"code": "case_not_safe",
                                          "message": "The animal must be safe before listing"}},
@@ -330,6 +341,8 @@ class CaseHandoffCancelView(APIView):
                 return Response({"error": {"code": "not_your_case",
                                            "message": "Only the claiming rescuer can change this"}},
                                 status=403)
+            if case.expired_at is not None:
+                return _case_expired()
             if case.report.status != StrayStatus.SAFE:
                 return Response({"error": {"code": "case_not_safe",
                                            "message": "There is no handoff to take back"}}, status=409)
