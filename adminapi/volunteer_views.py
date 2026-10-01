@@ -25,5 +25,4 @@ class ShiftCloseView(StaffView):
                                        "message": "This activity has already happened"}},
                             status=409)
         count = cancel_activity(shift, by="platform", body="This activity is no longer running.")
-        request._audit_body = {"reason": reason}
         return Response({"cancelled_signups": count})

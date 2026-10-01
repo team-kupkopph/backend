@@ -155,7 +155,6 @@ class EscalationPartnerDecisionView(StaffView):
             profile.is_escalation_partner = self.partner
             profile.save(update_fields=["is_escalation_partner"])
 
-        request._audit_body = {"notes": notes}
         profile = (ShelterProfile.objects.annotate(is_verified=Exists(_approved_shelter_org()))
                    .get(shelter_profile_id=shelter_profile_id))
         return Response(shelter_detail(profile))
@@ -237,7 +236,6 @@ class DonationQrDecisionView(StaffView):
             qr.verified = self.verify
             qr.save(update_fields=["verified"])
 
-        request._audit_body = {"notes": notes}
         qr.refresh_from_db()
         return Response(DonationQrQueueView.row(qr))
 
