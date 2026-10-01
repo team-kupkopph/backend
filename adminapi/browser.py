@@ -54,6 +54,8 @@ SAFE_FIELDS: dict[tuple[str, str], tuple[str, ...]] = {
     ("sagip", "StrayReport"): (
         "report_id", "reporter_account_id", "status", "city", "barangay",
         "notes", "created_at",
+        # C13 · a moderation takedown; C12 · why the report-time alert was held back.
+        "hidden_at", "alert_held",
     ),
     ("sagip", "RescueCase"): (
         "case_id", "report_id", "claimed_by_account_id", "claimed_at", "resolved_at",

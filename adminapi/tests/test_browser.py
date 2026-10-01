@@ -90,6 +90,22 @@ def test_the_document_file_url_is_not_browsable(client, auth):
     assert "file_url" not in body["fields"]
 
 
+@pytest.mark.django_db
+def test_staff_can_see_a_takedown_and_a_held_alert_on_a_stray_report(client, auth):
+    """C13 / C12 · otherwise a removed report or a held alert is invisible from the console."""
+    from django.contrib.gis.geos import Point
+    from django.utils import timezone
+
+    from sagip.models import StrayReport
+    report = StrayReport.objects.create(
+        reporter_account=AccountFactory(), species="dog", condition="injured", status="reported",
+        geom=Point(121.10, 14.65, srid=4326), hidden_at=timezone.now(),
+        alert_held="reporter_cap")
+    row = client.get(f"/admin-api/models/sagip.StrayReport/{report.pk}", **auth).json()["row"]
+    assert row["hidden_at"] is not None
+    assert row["alert_held"] == "reporter_cap"
+
+
 # -- the access log is not bypassable --------------------------------------------------------
 @pytest.mark.django_db
 def test_browsing_documents_writes_an_access_log_row(client, auth, staffer):
