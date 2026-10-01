@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account, AccountStatus, Address
+from common.analytics import emit
 from common.cities import city_variants
 from listings.fees import fee_cap_for
 from listings.models import (
@@ -329,6 +330,7 @@ def _withdraw_placement(inquiry, now, reason="cancelled"):
     inquiry.listing.status = ListingStatus.WITHDRAWN
     inquiry.listing.save(update_fields=["status"])
     notices.placement_withdrawn(inquiry.listing, inquiry, reason=reason)
+    emit("inquiry_decided", outcome="expired" if reason == "expired" else "withdrawn")
 
 
 class CaseHandoffCancelView(APIView):
@@ -693,7 +695,6 @@ class PlacementDecisionView(APIView):
                 # reconciled nightly; deferred import avoids a cycle).
                 from community.badges import award_badges_for
                 award_badges_for(inq.listing.posted_by)
-                from common.analytics import emit
                 emit("inquiry_decided", outcome="accepted")
                 emit("adoption_completed")
                 if draft is not None:
@@ -709,7 +710,6 @@ class PlacementDecisionView(APIView):
             inq.listing.status = ListingStatus.WITHDRAWN
             inq.listing.save(update_fields=["status"])
             notices.placement_decided(inq.listing, inq, "declined")   # S18
-            from common.analytics import emit
             emit("inquiry_decided", outcome="declined")
             return Response(status=200)
 

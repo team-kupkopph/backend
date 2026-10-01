@@ -142,3 +142,30 @@ def test_a_former_claimer_cannot_list_or_place_from_a_lapsed_case(action):
         res = _place(a, old_case, _verified(AccountFactory()))
     _assert_case_expired(res)
     assert AdoptionListing.objects.filter(source_report=old_case.report).count() == 1
+
+
+def _decided_outcomes(caplog):
+    import json
+    return [e["outcome"] for e in (json.loads(r.getMessage()) for r in caplog.records
+                                   if r.name == "kupkop.analytics")
+            if e["event"] == "inquiry_decided"]
+
+
+@pytest.mark.django_db
+def test_a_cancelled_placement_and_an_expired_one_are_counted_as_decisions(caplog):
+    import logging
+    rescuer = _verified(AccountFactory())
+    with caplog.at_level(logging.INFO, logger="kupkop.analytics"):
+        cancelled = _safe_case(rescuer)
+        _place(rescuer, cancelled, _verified(AccountFactory()))
+        _cancel(rescuer, cancelled)
+        assert _decided_outcomes(caplog) == ["withdrawn"]
+
+        _place(rescuer, _safe_case(rescuer), _verified(AccountFactory()))
+        expire_placements(now=timezone.now() + timezone.timedelta(days=PLACEMENT_EXPIRY_DAYS, minutes=1))
+        assert _decided_outcomes(caplog) == ["withdrawn", "expired"]
+
+        drafted = _safe_case(rescuer)                     # a draft has no inquiry to decide
+        _c(rescuer).post(f"/api/v1/cases/{drafted.pk}/list", {}, format="json")
+        _cancel(rescuer, drafted)
+        assert _decided_outcomes(caplog) == ["withdrawn", "expired"]
