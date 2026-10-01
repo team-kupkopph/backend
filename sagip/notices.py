@@ -87,11 +87,18 @@ def placement_decided(listing, inquiry, decision):
                  "decision": decision})
 
 
-def placement_withdrawn(listing, inquiry):
-    """C14 · the recipient hears that an offer they never answered is off the table."""
+def placement_withdrawn(listing, inquiry, reason="cancelled"):
+    """C14 · the recipient hears that an offer they never answered is off the table — and why:
+    the rescuer took it back (`cancelled`), or it lapsed unanswered (`expired`, D11's sweep).
+    An expiry must not read as the rescuer changing their mind."""
     name = listing.name or "the animal"
-    notify(inquiry.adopter_account, "placement_withdrawn", title="A placement offer was withdrawn",
-           body=f"{listing.posted_by.display_name} is no longer offering {name} to you.",
+    if reason == "expired":
+        title = "A placement offer expired"
+        body = f"The offer of {name} expired after 7 days without an answer."
+    else:
+        title = "A placement offer was withdrawn"
+        body = f"{listing.posted_by.display_name} is no longer offering {name} to you."
+    notify(inquiry.adopter_account, "placement_withdrawn", title=title, body=body,
            data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
 
 

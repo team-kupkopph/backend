@@ -26,7 +26,7 @@ def expire_placements(now=None):
             if states != {StageState.SKIPPED}:     # a public inquiry, not a placement
                 continue
             from listings.views import _withdraw_placement
-            _withdraw_placement(inq, now)
+            _withdraw_placement(inq, now, reason="expired")
             notices.placement_decided(inq.listing, inq, "expired")
             expired.append(inq)
     return expired

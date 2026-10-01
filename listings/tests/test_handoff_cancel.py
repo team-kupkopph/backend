@@ -46,7 +46,9 @@ def test_a_rescuer_can_take_back_an_unanswered_placement():
     assert res.status_code == 200
     inq = AdoptionInquiry.objects.get(pk=placed["inquiry_id"])
     assert inq.status == InquiryStatus.WITHDRAWN and inq.listing.status == ListingStatus.WITHDRAWN
-    assert Notification.objects.filter(account=recipient, type="placement_withdrawn").count() == 1
+    [w] = Notification.objects.filter(account=recipient, type="placement_withdrawn")
+    assert w.title == "A placement offer was withdrawn"
+    assert w.body == f"{rescuer.display_name} is no longer offering Bruno to you."
     assert _place(rescuer, case, _verified(AccountFactory())).status_code == 201   # free again
 
 
@@ -89,7 +91,10 @@ def test_an_unanswered_placement_expires_after_seven_days_and_both_sides_hear():
     assert expire_placements(now=later) == []                       # idempotent
     [n] = Notification.objects.filter(account=rescuer, type="placement_decided")
     assert n.data["decision"] == "expired"
-    assert Notification.objects.filter(account=recipient, type="placement_withdrawn").count() == 1
+    # The recipient is told it lapsed — not that the rescuer took it back.
+    [w] = Notification.objects.filter(account=recipient, type="placement_withdrawn")
+    assert w.title == "A placement offer expired"
+    assert w.body == "The offer of Bruno expired after 7 days without an answer."
 
 
 # ── A former claimer can't act on the next claimer's rescue ─────────────────────────────

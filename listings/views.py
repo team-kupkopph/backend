@@ -319,15 +319,16 @@ class CasePlaceView(APIView):
         return Response({"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)}, status=201)
 
 
-def _withdraw_placement(inquiry, now):
+def _withdraw_placement(inquiry, now, reason="cancelled"):
     """C14 · end an unanswered direct placement: the offer is withdrawn, the listing goes back to
-    private (WITHDRAWN frees the case for its next handoff, S20), and the recipient is told."""
+    private (WITHDRAWN frees the case for its next handoff, S20), and the recipient is told why
+    (`reason`: "cancelled" by the rescuer, or "expired" by D11's sweep)."""
     inquiry.status = InquiryStatus.WITHDRAWN
     inquiry.decided_at = now
     inquiry.save(update_fields=["status", "decided_at"])
     inquiry.listing.status = ListingStatus.WITHDRAWN
     inquiry.listing.save(update_fields=["status"])
-    notices.placement_withdrawn(inquiry.listing, inquiry)
+    notices.placement_withdrawn(inquiry.listing, inquiry, reason=reason)
 
 
 class CaseHandoffCancelView(APIView):
