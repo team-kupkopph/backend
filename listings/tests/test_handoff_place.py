@@ -55,3 +55,13 @@ def test_place_unknown_recipient_404():
     res = _c(r).post(f"/api/v1/cases/{case.pk}/place",
                      {"recipient_email": "nobody@example.com", "city": "X", "adoption_fee": "0"}, format="json")
     assert res.status_code == 404
+
+
+@pytest.mark.django_db
+def test_you_cannot_place_an_animal_with_yourself():
+    rescuer = _verified(AccountFactory())
+    case = _safe_case(rescuer)
+    res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/place",
+                           {"recipient_email": rescuer.email, "city": "X", "adoption_fee": "0"}, format="json")
+    assert res.status_code == 422 and res.json()["error"]["code"] == "recipient_is_you"
+    assert not AdoptionListing.objects.filter(source_report=case.report).exists()

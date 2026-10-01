@@ -23,7 +23,7 @@ from moderation.models import FlagStatus, FlagTarget, ModerationFlag
 TARGETS = {
     FlagTarget.ACCOUNT: ("accounts", "Account", lambda o: o.display_name or o.email),
     FlagTarget.LISTING: ("listings", "AdoptionListing", lambda o: getattr(o, "title", "") or str(o.pk)),
-    FlagTarget.REPORT:  ("sagip", "StrayReport", lambda o: getattr(o, "description", "") or str(o.pk)),
+    FlagTarget.REPORT:  ("sagip", "StrayReport", lambda o: getattr(o, "notes", "") or str(o.pk)),
     FlagTarget.QR:      ("shelter", "DonationQr", lambda o: str(o.pk)),
     FlagTarget.STORY:   ("community", "StoryPost", lambda o: getattr(o, "caption", "") or str(o.pk)),
     FlagTarget.SHIFT:   ("volunteer", "VolunteerShift", lambda o: getattr(o, "title", "") or str(o.pk)),

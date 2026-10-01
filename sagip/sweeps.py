@@ -136,7 +136,8 @@ def escalate_reports(now=None):
     now = now or timezone.now()
     touched = []
     # D6 · a lost pet is its owner's to find and nobody's to claim — it never pages rescuers.
-    reports = (StrayReport.objects.filter(status=StrayStatus.REPORTED, escalation_level__lt=2)
+    reports = (StrayReport.objects.filter(status=StrayStatus.REPORTED, escalation_level__lt=2,
+                                     hidden_at__isnull=True)
                .exclude(report_type=ReportType.LOST))
     for report in reports:
         level1_at, level2_at = _escalation_cadence_hours(report.condition)
@@ -168,6 +169,42 @@ def escalate_reports(now=None):
     return touched
 
 
+def _is_stalled(case, now):
+    return ((now - _claim_anchor(case)).total_seconds() / 3600
+            >= _claim_window_hours(case.report.condition))
+
+
+def _stalled_case_ids(now):
+    """The scan: claims that LOOK stalled. Unlocked and possibly stale by the time it's acted on —
+    `_expire_case` decides for real."""
+    active = (RescueCase.objects.filter(expired_at__isnull=True,
+                                        report__status=StrayStatus.CLAIMED,
+                                        report__hidden_at__isnull=True)
+              .select_related("report"))
+    return [case.pk for case in active if _is_stalled(case, now)]
+
+
+def _expire_case(case_id, now):
+    """C10b · lapse ONE claim, deciding under lock. Case, then report (the order the status and
+    release views use). Returns the lapsed case, or None when it moved on, was released, or is no
+    longer stalled."""
+    with transaction.atomic():
+        case = (RescueCase.objects.select_for_update()
+                .filter(pk=case_id, expired_at__isnull=True).first())
+        if case is None:
+            return None
+        report = StrayReport.objects.select_for_update().get(pk=case.report_id)
+        if report.status != StrayStatus.CLAIMED:
+            return None
+        case.report = report
+        if not _is_stalled(case, now):
+            return None
+        reopen_case(case, None, "Auto-expired: no update within the claim window", now)
+        # S9 · inside the transaction, so a rolled-back expiry tells no one.
+        notices.claim_lapsed(case, _claim_window_hours(report.condition))
+        return case
+
+
 def expire_stalled_claims(now=None):
     """US-E2 · a claim whose latest `case_status_history` row is older than its report's
     condition window reverts the report to `reported` — no user-facing release, the
@@ -181,26 +218,13 @@ def expire_stalled_claims(now=None):
     report is `rescued` or `safe` the animal is in someone's custody, and reverting it would
     put an animal in a rescuer's home back on the public map — re-claimable, with the exact
     spot handed to the next claimer (S1, dev/sagip-build-review.md). This used to exclude
-    only `resolved`, which let a `safe` case lapse after its condition window."""
-    now = now or timezone.now()
-    expired = []
-    active = (RescueCase.objects.filter(expired_at__isnull=True,
-                                        report__status=StrayStatus.CLAIMED)
-              .select_related("report"))
-    for case in active:
-        anchor = _claim_anchor(case)
-        window = _claim_window_hours(case.report.condition)
-        stalled_hours = (now - anchor).total_seconds() / 3600
-        if stalled_hours < window:
-            continue
+    only `resolved`, which let a `safe` case lapse after its condition window.
 
-        with transaction.atomic():
-            reopen_case(case, None, "Auto-expired: no update within the claim window", now)
-            # S9 · the claimer and the reporter were never told. Inside the transaction, so
-            # a rolled-back expiry tells no one.
-            notices.claim_lapsed(case, window)
-        expired.append(case)
-    return expired
+    C10b · the scan is unlocked; each lapse is decided under a row lock by `_expire_case`, so a
+    status update or a release that lands between the scan and the lapse wins."""
+    now = now or timezone.now()
+    lapsed = (_expire_case(case_id, now) for case_id in _stalled_case_ids(now))
+    return [case for case in lapsed if case is not None]
 
 
 @transaction.atomic
@@ -246,7 +270,8 @@ def warn_due_claims(now=None):
     now = now or timezone.now()
     warned = []
     active = (RescueCase.objects.filter(expired_at__isnull=True,
-                                        report__status=StrayStatus.CLAIMED)
+                                        report__status=StrayStatus.CLAIMED,
+                                        report__hidden_at__isnull=True)
               .select_related("report", "claimed_by_account"))
     for case in active:
         window = _claim_window_hours(case.report.condition)

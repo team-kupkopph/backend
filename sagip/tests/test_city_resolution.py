@@ -10,6 +10,7 @@ spelling. The residual risk was a report with NO city (the geocoder failed — l
 queued offline): nobody was paged at all. The server now derives the city from the point.
 """
 import pytest
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
@@ -57,7 +58,8 @@ def test_a_report_with_no_city_still_pages_its_city():
     rescuer = AccountFactory()
     AccountCapability.objects.create(account=rescuer, capability="rescuer", status="approved")
     Address.objects.create(account=rescuer, city="Marikina City", is_primary=True)
-    c = APIClient(); c.force_authenticate(user=AccountFactory())
+    # D9 · alerts need a verified phone.
+    c = APIClient(); c.force_authenticate(user=AccountFactory(phone_verified_at=timezone.now()))
     res = c.post("/api/v1/reports", {"species": "dog", "condition": "injured",
                                      "lat": 14.6507, "lng": 121.1029}, format="json")
     report = StrayReport.objects.get(pk=res.json()["report_id"])

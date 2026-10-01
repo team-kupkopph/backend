@@ -1,3 +1,5 @@
+import math
+
 from django.contrib.gis.geos import Point
 from django.db import IntegrityError, transaction
 from django.db.models import Count
@@ -40,6 +42,9 @@ from sagip.sweeps import claim_due_at, reopen_case
 # decision 14: offers must outlive the longest claim window (24h) so a reopened case
 # still has people to re-ask — if either number moves, move both.
 OFFER_WINDOW_HOURS = 48
+
+MIN_RADIUS_KM = 1.0
+MAX_RADIUS_KM = 25.0
 
 # US-K2 · a case can only move forward through this order; `resolved` is terminal.
 # `claimed` is included as the baseline so a target's index can be compared against
@@ -121,7 +126,7 @@ class ReportsCreateView(APIView):
         if d.get("sighting_of"):
             sighted = StrayReport.objects.filter(pk=d["sighting_of"]).first()
             if (sighted is None or sighted.report_type != ReportType.LOST
-                    or sighted.status == StrayStatus.RESOLVED):
+                    or sighted.status == StrayStatus.RESOLVED or sighted.hidden_at is not None):
                 return Response({"error": {"code": "not_a_lost_report",
                                            "message": "That isn't an open lost-pet report"}},
                                 status=422)
@@ -148,7 +153,7 @@ class ReportsCreateView(APIView):
             report = StrayReport.objects.create(
                 reporter_account=request.user,
                 report_type=report_type,
-                pet_id=pet_id,
+                pet_id=pet.pk if pet is not None else None,   # C20 · only the caller's own pet
                 is_anonymous=d.get("is_anonymous", False),
                 contact_share_consent=d.get("contact_share_consent", False),
                 contact_share_consent_at=(timezone.now() if d.get("contact_share_consent")
@@ -219,7 +224,7 @@ class ReportClaimView(APIView):
         try:
             with transaction.atomic():
                 report = (StrayReport.objects.select_for_update()
-                          .filter(pk=report_id).first())
+                          .filter(pk=report_id, hidden_at__isnull=True).first())
                 if report is None:
                     return Response({"error": {"code": "not_found",
                                                "message": "No such report"}}, status=404)
@@ -290,16 +295,22 @@ class CaseStatusView(APIView):
         s.is_valid(raise_exception=True)
         target = s.validated_data["status"]
 
-        report = case.report
-        current_rank = CASE_STATUS_ORDER.get(report.status, -1)
-        if report.status == StrayStatus.RESOLVED:
-            return Response({"error": {"code": "case_resolved",
-                                       "message": "This case is already resolved"}}, status=409)
-        if CASE_STATUS_ORDER[target] <= current_rank:
-            return Response({"error": {"code": "not_forward",
-                                       "message": "A case can only move forward"}}, status=409)
-
+        # C10a · the checks above were unlocked. Lock the case, then the report (the order
+        # CaseReleaseView uses), and re-check both: a lapse or a release may have committed in
+        # between, and writing `rescued` onto a reopened report strands it with no claimer.
         with transaction.atomic():
+            case = RescueCase.objects.select_for_update().get(pk=case.pk)
+            if case.expired_at is not None:
+                return Response({"error": {"code": "case_expired",
+                                           "message": "This claim has lapsed"}}, status=409)
+            report = StrayReport.objects.select_for_update().get(pk=case.report_id)
+            case.report = report
+            if report.status == StrayStatus.RESOLVED:
+                return Response({"error": {"code": "case_resolved",
+                                           "message": "This case is already resolved"}}, status=409)
+            if CASE_STATUS_ORDER[target] <= CASE_STATUS_ORDER.get(report.status, -1):
+                return Response({"error": {"code": "not_forward",
+                                           "message": "A case can only move forward"}}, status=409)
             set_report_status(report, target, request.user, note=s.validated_data.get("note", ""))
             if target == StrayStatus.RESOLVED:
                 if "outcome_notes" in s.validated_data:
@@ -389,7 +400,7 @@ class ReportOffersView(APIView):
     throttle_classes = [OfferCreateThrottle]  # US-SEC2 · per-account, 20/hour
 
     def post(self, request, report_id):
-        report = StrayReport.objects.filter(pk=report_id).first()
+        report = StrayReport.objects.filter(pk=report_id, hidden_at__isnull=True).first()
         if report is None:
             return Response({"error": {"code": "not_found", "message": "No such report"}},
                             status=404)
@@ -403,25 +414,38 @@ class ReportOffersView(APIView):
         s = OfferCreateSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         offer_type = s.validated_data["offer_type"]
-        if ReportOffer.objects.filter(report=report, account=request.user,
-                                      offer_type=offer_type).exists():
-            return Response({"error": {"code": "already_offered",
-                                       "message": "You already offered this"}}, status=409)
 
-        expires_at = timezone.now() + timezone.timedelta(hours=OFFER_WINDOW_HOURS)
-        try:
-            offer = ReportOffer.objects.create(
-                report=report, account=request.user, offer_type=offer_type,
-                status=OfferStatus.OPEN, expires_at=expires_at,
-                note=s.validated_data.get("note", ""),
-                contact_share_consent=s.validated_data["contact_share_consent"],
-                contact_share_consent_at=(timezone.now()
-                                          if s.validated_data["contact_share_consent"] else None))
-        except IntegrityError:
-            # Backstop for the UNIQUE(report, account, offer_type) constraint, same
-            # belt-and-suspenders shape as the claim's IntegrityError handling.
-            return Response({"error": {"code": "already_offered",
-                                       "message": "You already offered this"}}, status=409)
+        with transaction.atomic():
+            # C22 · a claim may have landed since the check above; it locks this row too.
+            # C13 · so may a takedown (or a delete): re-check `hidden_at` under the lock.
+            report = (StrayReport.objects.select_for_update()
+                      .filter(pk=report.pk, hidden_at__isnull=True).first())
+            if report is None:
+                return Response({"error": {"code": "not_found", "message": "No such report"}},
+                                status=404)
+            if report.status != StrayStatus.REPORTED:
+                return Response({"error": {"code": "report_not_open",
+                                           "message": "This report is no longer open for offers"}},
+                                status=409)
+            if ReportOffer.objects.filter(report=report, account=request.user,
+                                          offer_type=offer_type).exists():
+                return Response({"error": {"code": "already_offered",
+                                           "message": "You already offered this"}}, status=409)
+            expires_at = timezone.now() + timezone.timedelta(hours=OFFER_WINDOW_HOURS)
+            try:
+                with transaction.atomic():   # savepoint: an IntegrityError must not poison the outer block
+                    offer = ReportOffer.objects.create(
+                        report=report, account=request.user, offer_type=offer_type,
+                        status=OfferStatus.OPEN, expires_at=expires_at,
+                        note=s.validated_data.get("note", ""),
+                        contact_share_consent=s.validated_data["contact_share_consent"],
+                        contact_share_consent_at=(timezone.now()
+                                                  if s.validated_data["contact_share_consent"] else None))
+            except IntegrityError:
+                # Backstop for the UNIQUE(report, account, offer_type) constraint, same
+                # belt-and-suspenders shape as the claim's IntegrityError handling.
+                return Response({"error": {"code": "already_offered",
+                                           "message": "You already offered this"}}, status=409)
 
         if report.reporter_account_id:
             notify(report.reporter_account, "offer_received",
@@ -494,6 +518,11 @@ class RescueMapView(APIView):
             radius_km = float(request.query_params.get("radius_km") or DEFAULT_RADIUS_KM)
         except (TypeError, ValueError):
             radius_km = DEFAULT_RADIUS_KM
+        # C21 · a radius is a map zoom, not a query parameter for the whole country.
+        if not math.isfinite(radius_km):
+            radius_km = DEFAULT_RADIUS_KM
+        radius_km = min(max(radius_km, MIN_RADIUS_KM), MAX_RADIUS_KM)
+
         # S16 · the same query the shelter dashboard's Rescue card counts (sagip/queries.py).
         qs = reports_near_city(request.query_params.get("city"), radius_km)
         if qs is None:
@@ -527,7 +556,9 @@ class MyReportsView(APIView):
         qs = request.user.stray_reports.order_by("-created_at")
         results = [{"report_id": str(r.report_id), "species": r.species,
                     "condition": r.condition, "status": r.status,
-                    "city": r.city, "created_at": r.created_at.isoformat()} for r in qs]
+                    "city": r.city, "created_at": r.created_at.isoformat(),
+                    "hidden": r.hidden_at is not None}   # C13 · "Removed by moderation" (D10)
+                   for r in qs]
         return Response({"results": results})
 
 
@@ -555,6 +586,12 @@ class ReportDetailView(APIView):
         if r is None:
             return Response({"error": {"code": "not_found", "message": "No such report"}},
                             status=404)
+        # C13 · a moderation takedown: only the reporter (who sees why) and an active claimer
+        # (an animal already in their care) can still open it.
+        if r.hidden_at is not None and not (
+                request.user.is_authenticated
+                and (request.user.pk == r.reporter_account_id or is_active_claimer(r, request.user))):
+            return Response({"error": {"code": "not_found", "message": "No such report"}}, status=404)
         body = {
             "report_id": str(r.report_id), "report_type": r.report_type,
             "species": r.species, "condition": r.condition,
@@ -569,12 +606,16 @@ class ReportDetailView(APIView):
                                 "size_category": r.size_category, "sex": r.sex}
         if r.report_type == ReportType.LOST and r.pet_id:
             from listings.models import Pet
-            pet = Pet.objects.filter(pk=r.pet_id).only("name").first()
+            # C20 · only a pet the reporter owns: rows filed before the ownership check may hold
+            # someone else's pet_id, and naming it would leak that stranger's pet.
+            pet = (Pet.objects.filter(pk=r.pet_id, owner_account_id=r.reporter_account_id)
+                   .only("name").first())
             if pet is not None:
                 body["pet_name"] = pet.name    # "Have you seen Bruno?" — the owner published this
 
         is_reporter = request.user.is_authenticated and request.user.pk == r.reporter_account_id
         if is_reporter:
+            body["hidden"] = r.hidden_at is not None               # C13 · removed by moderation
             body["escalation_level"] = r.escalation_level
             body["offers_count"] = r.offers.count()
             history = list(r.status_history.order_by("changed_at"))
@@ -804,7 +845,8 @@ def _escalation_notified(report):
     at_report = nearby.exclude(data__has_key="reopened").count() if applies else None
     reopened = nearby.filter(data__reopened=True).count() if applies else None
     return {"level_1": reached.get(1, 0), "level_2": reached.get(2, 0),
-            "at_report": at_report, "reopened": reopened}
+            "at_report": at_report, "reopened": reopened,
+            "at_report_held": report.alert_held}
 
 
 def _match_repr(match, viewer_report):
@@ -857,6 +899,10 @@ class ReportMatchesView(APIView):
         matches = (ReportMatch.objects
                    .filter(Q(report=report) | Q(matched_report=report))
                    .exclude(status=MatchStatus.DISMISSED)
+                   # C13 · a moderated report drops out of both sides' lists: its reporter can't
+                   # reach the other side's contact, and the other side no longer sees it.
+                   .exclude(Q(report__hidden_at__isnull=False)
+                            | Q(matched_report__hidden_at__isnull=False))
                    .select_related("report", "matched_report").order_by("-score"))
         return Response({"results": [_match_repr(m, report) for m in matches]})
 
@@ -870,7 +916,11 @@ class ReportMatchDecisionView(APIView):
     def post(self, request, report_id, match_id, action):
         match = (ReportMatch.objects.select_related("report", "matched_report")
                  .filter(pk=match_id).first())
-        if match is None or report_id not in (match.report_id, match.matched_report_id):
+        # C13 · a match with a moderated side can't be decided: confirming would resolve the
+        # other reporter's real report off a removed one.
+        if (match is None or report_id not in (match.report_id, match.matched_report_id)
+                or match.report.hidden_at is not None
+                or match.matched_report.hidden_at is not None):
             return Response({"error": {"code": "not_found", "message": "No such match"}},
                             status=404)
         reporters = {match.report.reporter_account_id, match.matched_report.reporter_account_id}

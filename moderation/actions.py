@@ -51,6 +51,15 @@ def resolve_flag(flag, reviewer, status, notes=""):
         if hidden:
             side_effects["story_hidden"] = str(flag.target_id)
 
+    if status == FlagStatus.ACTIONED and flag.target_type == FlagTarget.REPORT:
+        # C13 · hide, never delete — the report and its history are the audit trail.
+        from sagip.models import StrayReport
+        from sagip.moderation import hide_report
+        report = StrayReport.objects.filter(pk=flag.target_id).first()
+        if report is not None:
+            hide_report(report, reviewer)
+            side_effects["report_hidden"] = str(report.pk)
+
     # ⚠️ Actioning a flag does NOT suspend an account, even for target_type='account'.
     # Suspension has its own side effects (token revocation, US-E2) and its own audit trail.
     # A flag resolved as `actioned` records the JUDGEMENT; the action is taken separately and

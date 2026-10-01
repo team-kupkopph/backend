@@ -34,7 +34,8 @@ def test_my_reports_lists_only_the_callers_reports_with_status(client):
     _report(other)
     body = client.get("/api/v1/me/reports", **_hdr(me)).json()["results"]
     assert [r["report_id"] for r in body] == [str(mine.report_id)]
-    assert set(body[0].keys()) == {"report_id", "species", "condition", "status", "city", "created_at"}
+    assert set(body[0].keys()) == {"report_id", "species", "condition", "status", "city", "created_at",
+                                   "hidden"}   # C13 · "Removed by moderation" (D10)
     assert body[0]["status"] == "reported"
 
 
@@ -138,7 +139,7 @@ def test_the_reporter_sees_how_many_people_each_escalation_level_reached(client)
     # at_report is 0, not None: an injured stray is one the report-time alert covers (D2), it
     # just wasn't filed through the API here, so no one was paged at report time.
     assert body["escalation_notified"] == {"level_1": 2, "level_2": 0, "at_report": 0,
-                                           "reopened": 0}
+                                           "reopened": 0, "at_report_held": None}
 
 
 @pytest.mark.django_db
@@ -147,4 +148,4 @@ def test_an_unescalated_report_has_reached_no_one_yet(client):
     r = _report(reporter, city="Marikina", status="reported")
     body = client.get(f"/api/v1/reports/{r.report_id}", **_hdr(reporter)).json()
     assert body["escalation_notified"] == {"level_1": 0, "level_2": 0, "at_report": 0,
-                                           "reopened": 0}
+                                           "reopened": 0, "at_report_held": None}

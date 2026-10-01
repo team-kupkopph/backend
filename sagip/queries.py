@@ -24,6 +24,6 @@ def reports_near_city(city, radius_km=DEFAULT_RADIUS_KM):
     lat, lng = centroid_ll
     centre = Point(lng, lat, srid=4326)
     return (StrayReport.objects
-            .filter(geom__dwithin=(centre, D(km=radius_km)))
+            .filter(geom__dwithin=(centre, D(km=radius_km)), hidden_at__isnull=True)
             .annotate(_distance=Distance("geom", centre))
             .order_by("_distance"))

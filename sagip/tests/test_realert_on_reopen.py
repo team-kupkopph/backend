@@ -42,6 +42,8 @@ def _shelter(city="Marikina City"):
 
 
 def _filed(reporter, condition="injured"):
+    # D9 · alerts need a verified phone: every reporter in this file has one.
+    reporter.phone_verified_at = timezone.now(); reporter.save(update_fields=["phone_verified_at"])
     res = _c(reporter).post("/api/v1/reports", {"species": "dog", "condition": condition,
                                                 "lat": 14.6507, "lng": 121.1029, "city": "Marikina"},
                             format="json")

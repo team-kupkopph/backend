@@ -60,6 +60,7 @@ _TYPES = [
     # S9: the claimer is warned before a claim lapses, and told when it has.
     NotificationType("claim_due", "{report_id, case_id}", True, "kupkop://cases/{case_id}"),
     NotificationType("claim_lapsed", "{report_id, case_id}", True, "kupkop://reports/{report_id}"),
+    NotificationType("report_removed", "{report_id}", True, "kupkop://rescues"),
     # D2 / S6: an urgent report pages verified rescuers + shelters in its city at once
     # (sagip/alerts.py), capped at 5 per person per 24 h.
     NotificationType("report_nearby", "{report_id}", True, "kupkop://reports/{report_id}"),
