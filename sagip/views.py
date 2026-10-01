@@ -606,7 +606,10 @@ class ReportDetailView(APIView):
                                 "size_category": r.size_category, "sex": r.sex}
         if r.report_type == ReportType.LOST and r.pet_id:
             from listings.models import Pet
-            pet = Pet.objects.filter(pk=r.pet_id).only("name").first()
+            # C20 · only a pet the reporter owns: rows filed before the ownership check may hold
+            # someone else's pet_id, and naming it would leak that stranger's pet.
+            pet = (Pet.objects.filter(pk=r.pet_id, owner_account_id=r.reporter_account_id)
+                   .only("name").first())
             if pet is not None:
                 body["pet_name"] = pet.name    # "Have you seen Bruno?" — the owner published this
 
