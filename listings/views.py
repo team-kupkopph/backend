@@ -335,7 +335,8 @@ def _withdraw_placement(inquiry, now, reason="cancelled"):
 
 class CaseHandoffCancelView(APIView):
     """C14 / D11 · POST /cases/{id}/handoff/cancel — the rescuer takes back a handoff that hasn't
-    happened yet: a draft, an unanswered placement, or a public listing nobody has inquired on.
+    happened yet: a draft, an unanswered placement, or a public listing nobody has inquired on —
+    or (D15) one people have inquired on, once the rescuer confirms with {"close_inquiries": true}.
 
     ⚠️ Lock order is case -> listing -> inquiries; PlacementDecisionView locks the inquiry
     first. A cancel racing an accept can therefore deadlock; Postgres aborts one side with a
@@ -372,10 +373,24 @@ class CaseHandoffCancelView(APIView):
             if listing.status == ListingStatus.PENDING and len(active) == 1:
                 _withdraw_placement(active[0], now)
             elif active:
-                return Response({"error": {"code": "has_active_inquiries",
-                                           "message": "People have asked about this animal, so it "
-                                                      "can't be taken down from here."}},
-                                status=409)
+                # D15 · two-step: without the flag the rescuer is told how many people asked and
+                # nothing changes; with it (a real JSON boolean — "true"/1 don't count) the listing
+                # and every open inquiry close inside these same locks.
+                if request.data.get("close_inquiries") is not True:
+                    return Response({"error": {"code": "has_active_inquiries",
+                                               "message": "People have asked about this animal, so it "
+                                                          "can't be taken down from here.",
+                                               "details": {"active_inquiries": len(active)}}},
+                                    status=409)
+                listing.status = ListingStatus.WITHDRAWN
+                listing.save(update_fields=["status"])
+                for inquiry in active:
+                    inquiry.status = InquiryStatus.WITHDRAWN
+                    inquiry.decided_at = now
+                    inquiry.save(update_fields=["status", "decided_at"])
+                    notices.listing_withdrawn(listing, inquiry)
+                    emit("inquiry_decided", outcome="listing_withdrawn")
+                return Response({"status": "withdrawn", "closed_inquiries": len(active)})
             else:
                 listing.status = ListingStatus.WITHDRAWN
                 listing.save(update_fields=["status"])

@@ -102,6 +102,15 @@ def placement_withdrawn(listing, inquiry, reason="cancelled"):
            data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
 
 
+def listing_withdrawn(listing, inquiry):
+    """D15 · an adopter whose open inquiry was closed because the rescuer took the listing back
+    hears the animal is no longer available."""
+    name = listing.name or "This animal"
+    notify(inquiry.adopter_account, "listing_withdrawn", title="No longer available",
+           body=f"{name} is no longer available for adoption.",
+           data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
+
+
 # D3 · what the reporter is told when the claimer releases. Keyed by
 # serializers.ClaimReleaseSerializer's reasons.
 RELEASE_REASON_TEXT = {
