@@ -39,13 +39,19 @@ def _report(**kw):
     return StrayReport.objects.create(**defaults)
 
 
-def _claimed():
-    report = _report()
+def _claimed(report=None):
+    report = report or _report()
     claimer = _verified()
     res = _c(claimer).post(f"/api/v1/reports/{report.pk}/claim")
     assert res.status_code == 201
     report.refresh_from_db()
     return report, RescueCase.objects.get(pk=res.json()["case_id"]), claimer
+
+
+def _offer(report):
+    return ReportOffer.objects.create(report=report, account=AccountFactory(), offer_type="transport",
+                                      status=OfferStatus.OPEN,
+                                      expires_at=timezone.now() + timezone.timedelta(hours=40))
 
 
 def _action(report):
@@ -85,20 +91,52 @@ def test_a_hidden_report_stops_escalating_and_its_offers_expire():
 
 @pytest.mark.django_db
 def test_a_claimed_case_ends_and_the_claimer_is_told_but_custody_is_left_alone():
-    report, case, claimer = _claimed()
+    offered = _report()
+    offer = _offer(offered)
+    report, case, claimer = _claimed(offered)
+    offer.refresh_from_db()
+    assert offer.status == OfferStatus.MATCHED      # the claim matched it
     _action(report)
-    case.refresh_from_db()
+    case.refresh_from_db(); offer.refresh_from_db()
     assert case.expired_at is not None
+    assert offer.status == OfferStatus.EXPIRED      # C13 · not stranded MATCHED on a dead claim
     [n] = Notification.objects.filter(account=claimer, type="report_removed")
     assert n.data == {"report_id": str(report.pk)}
 
-    kept, kept_case, keeper = _claimed()
+    custody = _report()
+    kept_offer = _offer(custody)
+    kept, kept_case, keeper = _claimed(custody)
     assert _c(keeper).post(f"/api/v1/cases/{kept_case.pk}/status", {"status": "rescued"},
                            format="json").status_code == 200
     _action(kept)
     kept_case.refresh_from_db(); kept.refresh_from_db()
     assert kept_case.expired_at is None and kept.status == "rescued"
     assert _c(keeper).get(f"/api/v1/reports/{kept.pk}").status_code == 200   # active claimer still sees it
+    kept_offer.refresh_from_db()
+    assert kept_offer.status == OfferStatus.MATCHED   # the rescue it serves is still going
+
+
+@pytest.mark.django_db
+def test_a_claim_that_commits_while_the_takedown_waits_still_ends(monkeypatch):
+    """C13 · hide_report's first case lookup can't see a case whose claim hasn't committed, so it
+    finds nothing; it then wakes on the report lock to a claimed report with no case in hand.
+    Simulated by making that first lookup see nothing while the claimed case exists."""
+    from sagip.moderation import hide_report
+    report, case, claimer = _claimed()
+    real = RescueCase.objects.select_for_update
+    calls = []
+
+    def first_lookup_misses(*a, **kw):
+        calls.append(1)
+        qs = real(*a, **kw)
+        return qs.none() if len(calls) == 1 else qs
+    monkeypatch.setattr(RescueCase.objects, "select_for_update", first_lookup_misses)
+
+    hide_report(report, AccountFactory())
+    case.refresh_from_db()
+    assert len(calls) == 2                     # the miss, then the re-query under the report lock
+    assert case.expired_at is not None
+    assert Notification.objects.filter(account=claimer, type="report_removed").count() == 1
 
 
 def _pair(**match_kw):
