@@ -99,3 +99,80 @@ def test_the_help_names_placement_expiry():
     # C14 / D11 · `manage.py help run_sweeps` is how an operator learns what the cron line does.
     from sagip.management.commands.run_sweeps import Command
     assert "placement" in Command.help.lower()
+
+
+# ── R2 · one failing sweep must not skip the others ─────────────────────────────────
+def _stubs(monkeypatch, failing=(), offers_fails=False):
+    """Replace SWEEPS with recording stubs; `failing` names the ones that raise."""
+    from sagip.management.commands import run_sweeps as mod
+    calls = []
+
+    def make(label):
+        def fn():
+            calls.append(label)
+            if label in failing:
+                raise RuntimeError(f"{label} boom")
+            return [object()]
+        return fn
+
+    monkeypatch.setattr(mod, "SWEEPS", [(lb, make(lb)) for lb in ("a", "b", "c")])
+
+    def offers():
+        calls.append("offers")
+        if offers_fails:
+            raise RuntimeError("offers boom")
+        return 2
+    monkeypatch.setattr(mod, "expire_offers", offers)
+    return calls
+
+
+@pytest.mark.django_db
+def test_a_failing_sweep_does_not_skip_the_others(monkeypatch, capsys, caplog):
+    # R2 · before this, one raising sweep aborted the command and every later sweep (offer
+    # expiry included) silently did not run until the next tick — or ever, if it kept failing.
+    calls = _stubs(monkeypatch, failing={"b"})
+    with caplog.at_level("ERROR", logger="kupkop.sweeps"):
+        call_command("run_sweeps")                      # exit 0: not every sweep failed
+    out = capsys.readouterr().out
+    assert calls == ["a", "b", "c", "offers"]           # the rest still ran
+    assert "b error" in out and "a 1" in out and "c 1" in out and "2 offer(s)" in out
+    rec = [r for r in caplog.records if r.name == "kupkop.sweeps"]
+    assert len(rec) == 1 and rec[0].exc_info and "sweep b failed" in rec[0].getMessage()
+
+
+@pytest.mark.django_db
+def test_a_failing_offer_sweep_is_isolated_too(monkeypatch, capsys, caplog):
+    calls = _stubs(monkeypatch, offers_fails=True)
+    with caplog.at_level("ERROR", logger="kupkop.sweeps"):
+        call_command("run_sweeps")
+    out = capsys.readouterr().out
+    assert calls == ["a", "b", "c", "offers"]
+    assert "offers error" in out and "a 1" in out
+    assert any("sweep offers failed" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.django_db
+def test_a_partial_failure_is_flagged_but_exits_zero(monkeypatch):
+    # Warning styling for a partial failure, success styling otherwise; both exit 0.
+    from sagip.management.commands.run_sweeps import Command
+    _stubs(monkeypatch, failing={"a"})
+    seen = {}
+    cmd = Command()
+    monkeypatch.setattr(cmd.style, "WARNING", lambda s: seen.setdefault("warn", s) and s)
+    monkeypatch.setattr(cmd.style, "SUCCESS", lambda s: seen.setdefault("ok", s) and s)
+    cmd.run()
+    assert "a error" in seen["warn"] and "ok" not in seen
+    seen.clear()
+    _stubs(monkeypatch)
+    cmd.run()
+    assert "ok" in seen and "warn" not in seen
+
+
+@pytest.mark.django_db
+def test_every_sweep_failing_exits_non_zero(monkeypatch, capsys):
+    from django.core.management.base import CommandError
+    calls = _stubs(monkeypatch, failing={"a", "b", "c"}, offers_fails=True)
+    with pytest.raises(CommandError) as exc:
+        call_command("run_sweeps")
+    assert calls == ["a", "b", "c", "offers"]           # all were still attempted
+    assert "a error" in str(exc.value) and "offers error" in str(exc.value)

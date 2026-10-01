@@ -36,7 +36,7 @@ from listings.stages import set_stage_state
 from listings.visibility import account_is_verified_rescuer, public_poster_q
 from notifications.service import notify
 from sagip import notices
-from sagip.models import RescueCase, StrayStatus
+from sagip.models import RescueCase, StrayReport, StrayStatus
 from sagip.status import resolve_report
 from shelter.models import ShelterProfile
 
@@ -335,11 +335,12 @@ def _withdraw_placement(inquiry, now, reason="cancelled"):
 
 class CaseHandoffCancelView(APIView):
     """C14 / D11 · POST /cases/{id}/handoff/cancel — the rescuer takes back a handoff that hasn't
-    happened yet: a draft, an unanswered placement, or a public listing nobody has inquired on.
+    happened yet: a draft, an unanswered placement, or a public listing nobody has inquired on —
+    or (D15) one people have inquired on, once the rescuer confirms with {"close_inquiries": true}.
 
-    ⚠️ Lock order is case -> listing -> inquiries; PlacementDecisionView locks the inquiry
-    first. A cancel racing an accept can therefore deadlock; Postgres aborts one side with a
-    deadlock error and rolls it back whole, so state stays consistent (see the task report)."""
+    R1 · lock order is case (with its report) -> listing -> inquiries — the one order
+    PlacementDecisionView, expire_placements and hide_report also take, so a take-back racing an
+    accept, a decline or a lapse queues behind it instead of deadlocking."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, case_id):
@@ -372,13 +373,29 @@ class CaseHandoffCancelView(APIView):
             if listing.status == ListingStatus.PENDING and len(active) == 1:
                 _withdraw_placement(active[0], now)
             elif active:
-                return Response({"error": {"code": "has_active_inquiries",
-                                           "message": "People have asked about this animal, so it "
-                                                      "can't be taken down from here."}},
-                                status=409)
+                # D15 · two-step: without the flag the rescuer is told how many people asked and
+                # nothing changes; with it (a real JSON boolean — "true"/1 don't count) the listing
+                # and every open inquiry close inside these same locks.
+                # A JSON list/string body has no .get — it is just "not true", not a 500.
+                body = request.data if isinstance(request.data, dict) else {}
+                if body.get("close_inquiries") is not True:
+                    return Response({"error": {"code": "has_active_inquiries",
+                                               "message": "People have asked about this animal, so it "
+                                                          "can't be taken down from here.",
+                                               "details": {"active_inquiries": len(active)}}},
+                                    status=409)
+                listing.status = ListingStatus.WITHDRAWN
+                listing.save(update_fields=["status", "updated_at"])
+                for inquiry in active:
+                    inquiry.status = InquiryStatus.WITHDRAWN
+                    inquiry.decided_at = now
+                    inquiry.save(update_fields=["status", "decided_at", "updated_at"])
+                    notices.listing_withdrawn(listing, inquiry)
+                    emit("inquiry_decided", outcome="listing_withdrawn")
+                return Response({"status": "withdrawn", "closed_inquiries": len(active)})
             else:
                 listing.status = ListingStatus.WITHDRAWN
-                listing.save(update_fields=["status"])
+                listing.save(update_fields=["status", "updated_at"])
         return Response({"status": "withdrawn"})
 
 
@@ -426,9 +443,16 @@ class ListingDetailView(APIView):
                                            "message": f"The adoption fee can't exceed ₱{cap}",
                                            "details": {"cap": cap}}}, status=422)
         field_map = {"birthdate": "date_of_birth", "description": "story"}
+        changed = []
         for key, value in data.items():
-            setattr(listing, field_map.get(key, key), value)
-        listing.save()
+            field = field_map.get(key, key)
+            setattr(listing, field, value)
+            changed.append(field)
+        # Final review #2 · write only what the patch set. A whole-row save() would write back the
+        # status this request read, undoing an accept/decline/take-back/expiry that committed in
+        # between; the status is then re-read so the answer reports what is really there.
+        listing.save(update_fields=[*changed, "updated_at"])
+        listing.refresh_from_db(fields=["status"])
         return Response({
             "listing_id": str(listing.pk), "pet": _pet_fields(listing),
             "description": listing.story or None, "adoption_fee": str(listing.adoption_fee),
@@ -463,6 +487,18 @@ class ListingInquiriesView(APIView):
                             status=409)
         try:
             with transaction.atomic():
+                # Final review #1 · only an AVAILABLE listing takes inquiries. A take-back (D15)
+                # leaves WITHDRAWN, a placement is PENDING for its one recipient, ADOPTED has a
+                # home — a stale card or deep link must not strand a new ACTIVE inquiry (and a
+                # notification) on any of them. The status is re-read under the row lock
+                # (listing -> inquiry, R1's order; nothing is held before this) so a take-back
+                # or accept that committed after the read above is seen, and one still running
+                # queues behind us.
+                locked = AdoptionListing.objects.select_for_update().get(pk=listing.pk)
+                if locked.status != ListingStatus.AVAILABLE:
+                    return Response({"error": {"code": "listing_unavailable",
+                                               "message": "This animal is no longer available "
+                                                          "for adoption."}}, status=409)
                 inquiry = AdoptionInquiry.objects.create(
                     listing=listing, adopter_account=request.user,
                     message=s.validated_data.get("message", ""))
@@ -624,6 +660,26 @@ class ListingPublishView(APIView):
         return Response({"listing_id": str(listing.pk), "status": listing.status})
 
 
+def _no_such_inquiry():
+    return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
+
+
+def _lock_handoff(listing_id, source_report_id):
+    """R1 · lock a handoff's rows in the one order every Sagip writer uses: the report's active
+    case (there may be none — then nothing is locked for it), then the report, then the listing.
+    The caller locks the inquiry after. Returns the locked listing (None if it is gone), with
+    its `source_report` set to the locked report row. Call inside `transaction.atomic()`."""
+    report = None
+    if source_report_id is not None:
+        list(RescueCase.objects.select_for_update()
+             .filter(report_id=source_report_id, expired_at__isnull=True).order_by("pk"))
+        report = StrayReport.objects.select_for_update().filter(pk=source_report_id).first()
+    listing = AdoptionListing.objects.select_for_update().filter(pk=listing_id).first()
+    if listing is not None and report is not None:
+        listing.source_report = report
+    return listing
+
+
 class PlacementDecisionView(APIView):
     """POST /inquiries/{id}/accept | /decline — US-H3. The recipient of a direct
     placement (all stages skipped) accepts or declines it. Accept is the first code
@@ -637,20 +693,30 @@ class PlacementDecisionView(APIView):
     would sail through since 'all stages skipped' + 'you're the adopter' both remain
     true after the first decision — producing a duplicate Pet, an orphaned Pet
     (decline-after-accept re-frees a listing whose Pet already exists), or a reversed
-    adoption (decline-then-accept)."""
+    adoption (decline-then-accept).
+
+    R1 · lock order is the active case (if any) -> report -> listing -> inquiry, the same as
+    `CaseHandoffCancelView` (case -> listing -> inquiries) and `hide_report` (case -> report),
+    so a decision racing a take-back or a takedown queues instead of deadlocking. The inquiry
+    is first read UNLOCKED only to learn its listing and report; the 404/403 answered from that
+    read are on fields that never change, and every decision is re-checked on the locked row."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, inquiry_id, action):
+        peek = (AdoptionInquiry.objects.filter(pk=inquiry_id)
+                .values("adopter_account_id", "listing_id", "listing__source_report_id").first())
+        if peek is None:
+            return _no_such_inquiry()
+        if peek["adopter_account_id"] != request.user.pk:
+            return Response({"error": {"code": "not_your_placement",
+                                       "message": "Only the recipient can decide this"}},
+                            status=403)
         with transaction.atomic():
-            inq = (AdoptionInquiry.objects.select_for_update()
-                   .select_related("listing").filter(pk=inquiry_id).first())
-            if inq is None:
-                return Response({"error": {"code": "not_found", "message": "No such inquiry"}},
-                                status=404)
-            if inq.adopter_account_id != request.user.pk:
-                return Response({"error": {"code": "not_your_placement",
-                                           "message": "Only the recipient can decide this"}},
-                                status=403)
+            listing = _lock_handoff(peek["listing_id"], peek["listing__source_report_id"])
+            inq = AdoptionInquiry.objects.select_for_update().filter(pk=inquiry_id).first()
+            if inq is None or listing is None:      # deleted between the peek and the locks
+                return _no_such_inquiry()
+            inq.listing = listing
             states = set(AdoptionStage.objects.filter(inquiry=inq).values_list("state", flat=True))
             if states != {StageState.SKIPPED}:
                 return Response({"error": {"code": "not_a_placement",

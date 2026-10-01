@@ -17,11 +17,17 @@ that fits today with ~5x of margin and stops fitting after the next 10x of growt
 point two of these run concurrently forever. A held lock makes the second tick a no-op
 instead. See common/locks.py for why it is a database advisory lock and not `flock`.
 """
+import logging
+
+from django.core.management.base import CommandError
+
 from common.management_base import SingletonCommand
 from community.sweeps import award_badges
 from listings.sweeps import expire_placements
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims, warn_due_claims
 from volunteer.sweeps import nudge_attendance, remind_shifts
+
+logger = logging.getLogger("kupkop.sweeps")
 
 # (label, callable) — each returns a list of the rows it touched.
 #
@@ -49,8 +55,30 @@ class Command(SingletonCommand):
             "shift reminders, badges.")
 
     def run(self, *args, **options):
-        parts = [f"{label} {len(fn())}" for label, fn in SWEEPS]
+        # R2 · each sweep is isolated: one raising (a bad row, a deadlock victim) is logged and
+        # reported as "<label> error" and the rest still run. A plain try/except per sweep, NOT
+        # an outer transaction.atomic(): that would turn expire_placements' per-row transactions
+        # into savepoints and hold their row locks until the whole command finished.
+        parts, failed = [], 0
+        for label, fn in SWEEPS:
+            try:
+                parts.append(f"{label} {len(fn())}")
+            except Exception:
+                failed += 1
+                parts.append(f"{label} error")
+                logger.exception("sweep %s failed", label)
         # expire_offers returns a count, not a list — kept separate rather than forcing a
         # uniform return type on a sweep that has no rows worth handing back.
-        parts.append(f"expired {expire_offers()} offer(s)")
-        self.stdout.write(self.style.SUCCESS(", ".join(parts)))
+        try:
+            parts.append(f"expired {expire_offers()} offer(s)")
+        except Exception:
+            failed += 1
+            parts.append("offers error")
+            logger.exception("sweep %s failed", "offers")
+        summary = ", ".join(parts)
+        total = len(SWEEPS) + 1
+        if failed == total:
+            # Only when EVERYTHING failed is the run itself a failure worth a cron mail; a
+            # partial failure is in the log and the summary but exits zero.
+            raise CommandError(summary)
+        self.stdout.write((self.style.WARNING if failed else self.style.SUCCESS)(summary))

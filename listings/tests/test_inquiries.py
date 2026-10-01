@@ -268,3 +268,44 @@ def test_a_non_numeric_page_falls_back_to_the_first_page(client):
     res = client.get("/api/v1/me/inquiries?page=abc", **_hdr(me))
     assert res.status_code == 200
     assert [r["listing"]["name"] for r in res.json()["results"]] == ["Bantay"]
+
+
+# ── A listing that is no longer available takes no new inquiries ────────────────
+@pytest.mark.django_db
+@pytest.mark.parametrize("status", ["withdrawn", "pending", "adopted"])
+def test_inquiring_on_a_listing_that_is_no_longer_available_is_409(client, status):
+    """Final review #1 · a take-back (D15) leaves a WITHDRAWN listing that a stale feed card or a
+    deep link can still reach; PENDING is a placement offered to one recipient, ADOPTED has a home.
+    None of them may collect a fresh ACTIVE inquiry (which would also notify the poster)."""
+    poster = AccountFactory()
+    listing = _listing(poster, status=status)
+    res = _inquire(client, listing, _verified_member())
+    assert res.status_code == 409, res.content
+    err = res.json()["error"]
+    assert err["code"] == "listing_unavailable"
+    assert err["message"] == "This animal is no longer available for adoption."
+    assert not AdoptionInquiry.objects.filter(listing=listing).exists()
+    assert not Notification.objects.filter(account=poster, type="inquiry_received").exists()
+
+
+@pytest.mark.django_db
+def test_an_inquiry_that_raced_a_take_back_is_refused_not_stranded(client):
+    """The status is re-read under the row lock: a listing the poster took back after the view's
+    first read still refuses (simulated by changing the row between the first read and the lock)."""
+    from unittest import mock
+
+    poster = AccountFactory()
+    listing = _listing(poster)
+    member = _verified_member()
+    real = AdoptionInquiry.objects.filter
+
+    def flip_then_filter(*a, **kw):
+        # The view's already_inquired check is the last thing before the locked re-read.
+        AdoptionListing.objects.filter(pk=listing.pk).update(status="withdrawn")
+        return real(*a, **kw)
+
+    with mock.patch.object(AdoptionInquiry.objects, "filter", side_effect=flip_then_filter):
+        res = _inquire(client, listing, member)
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "listing_unavailable"
+    assert not AdoptionInquiry.objects.filter(listing=listing).exists()

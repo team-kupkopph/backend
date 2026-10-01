@@ -15,6 +15,7 @@ from adminapi.moderation_views import (
     FlagDismissView,
     FlagQueueView,
     FlagReviewView,
+    ReportRestoreView,
 )
 from adminapi.shelters_views import (
     DonationQrQueueView,
@@ -75,6 +76,9 @@ urlpatterns = [
     path("flags/<uuid:flag_id>/review", FlagReviewView.as_view()),
     path("flags/<uuid:flag_id>/action", FlagActionView.as_view()),
     path("flags/<uuid:flag_id>/dismiss", FlagDismissView.as_view()),
+
+    # U1 · a mistaken takedown of a Sagip report, undone by staff.
+    path("reports/<uuid:report_id>/restore", ReportRestoreView.as_view()),
 
     # US-E1/E2 · members.
     path("members", MemberQueueView.as_view()),

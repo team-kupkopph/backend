@@ -140,3 +140,61 @@ def test_two_places_at_once_produce_one_handoff():
 
     assert sorted(results) == [201, 409], f"expected exactly one winner, got {results}"
     assert AdoptionListing.objects.filter(source_report=case.report).count() == 1
+
+
+# ── R1 · one lock order: case -> report -> listing -> inquiry ──────────────────────────
+def _locked_tables(ctx):
+    """The table each `SELECT … FOR UPDATE` in `ctx` locks, in the order they ran."""
+    import re
+    return [re.search(r'FROM "(\w+)"', q["sql"]).group(1)
+            for q in ctx.captured_queries if "FOR UPDATE" in q["sql"]]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action", ["accept", "decline"])
+def test_a_placement_decision_locks_case_then_report_then_listing_then_inquiry(action):
+    """R1 · CaseHandoffCancelView takes case -> listing -> inquiries; a decision that locked the
+    inquiry first could deadlock against a take-back of the same placement."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    rescuer = AccountFactory(); recipient = _verified(AccountFactory())
+    inquiry_id = _place(rescuer, _safe_case(rescuer), recipient).json()["inquiry_id"]
+    with CaptureQueriesContext(connection) as ctx:
+        assert _c(recipient).post(f"/api/v1/inquiries/{inquiry_id}/{action}").status_code == 200
+    assert _locked_tables(ctx) == ["rescue_case", "stray_report", "adoption_listing",
+                                   "adoption_inquiry"]
+
+
+@pytest.mark.django_db
+def test_the_placement_expiry_sweep_locks_in_the_same_order():
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    from django.utils import timezone
+
+    from listings.sweeps import PLACEMENT_EXPIRY_DAYS, expire_placements
+    rescuer = AccountFactory()
+    _place(rescuer, _safe_case(rescuer), _verified(AccountFactory()))
+    with CaptureQueriesContext(connection) as ctx:
+        assert len(expire_placements(
+            now=timezone.now() + timezone.timedelta(days=PLACEMENT_EXPIRY_DAYS, minutes=1))) == 1
+    assert _locked_tables(ctx) == ["rescue_case", "stray_report", "adoption_listing",
+                                   "adoption_inquiry"]
+
+
+@pytest.mark.django_db
+def test_a_placement_deleted_between_the_read_and_the_locks_is_404(monkeypatch):
+    """R1 · the decision reads the inquiry unlocked to learn what to lock; one that is gone by
+    the time the locks are held is the same 404 as one that never existed."""
+    from listings import views
+    from listings.models import AdoptionInquiry
+    rescuer = AccountFactory(); recipient = _verified(AccountFactory())
+    inquiry_id = _place(rescuer, _safe_case(rescuer), recipient).json()["inquiry_id"]
+    real = views._lock_handoff
+
+    def deleted_first(*a, **kw):
+        AdoptionInquiry.objects.filter(pk=inquiry_id).delete()
+        return real(*a, **kw)
+    monkeypatch.setattr(views, "_lock_handoff", deleted_first)
+
+    res = _c(recipient).post(f"/api/v1/inquiries/{inquiry_id}/accept")
+    assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"

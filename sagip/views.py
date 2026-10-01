@@ -386,6 +386,7 @@ class MyRescuesView(APIView):
             "claimed_at": c.claimed_at.isoformat(),
             "expired_at": c.expired_at.isoformat() if c.expired_at else None,
             "claim_due_at": _iso(claim_due_at(c)),   # S9 · null once it can't lapse
+            "hidden": c.report.hidden_at is not None,   # P2 · "Removed by moderation"
         } for c in qs]
         return Response({"cases": cases})
 
@@ -591,6 +592,14 @@ class ReportDetailView(APIView):
         if r.hidden_at is not None and not (
                 request.user.is_authenticated
                 and (request.user.pk == r.reporter_account_id or is_active_claimer(r, request.user))):
+            # P2 · a 404 reads as "never existed" to someone who was told it was theirs: anyone with
+            # ANY case on the report (the takedown ended theirs) is told it was removed. Strangers
+            # and guests still get the 404, so a removed report's existence is not confirmed to them.
+            if (request.user.is_authenticated
+                    and r.cases.filter(claimed_by_account=request.user).exists()):
+                return Response({"error": {"code": "report_removed",
+                                           "message": "This report was removed by moderation."}},
+                                status=410)
             return Response({"error": {"code": "not_found", "message": "No such report"}}, status=404)
         body = {
             "report_id": str(r.report_id), "report_type": r.report_type,
@@ -910,7 +919,13 @@ class ReportMatchesView(APIView):
 class ReportMatchDecisionView(APIView):
     """US-L2 · confirm or dismiss a suggested match. Either reporter in the pair may decide
     (§11.3); a second decision on an already-decided match is 409 match_decided (the H3 TOCTOU
-    posture). Confirm links the pair and moves BOTH reports toward resolved (a reunion)."""
+    posture). Confirm links the pair and moves BOTH reports toward resolved (a reunion).
+
+    R1 · lock order is both reports' active cases (by pk) -> both reports (by pk) -> the match:
+    the same case -> report -> matches order as `hide_report` (and CaseHandoffCancelView's
+    case -> report), so a takedown and a decision on the same pair queue instead of
+    deadlocking. The hidden check is re-run on the locked reports: a takedown that committed
+    after the unlocked read is a 404 here, not a resolve off a removed report."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, report_id, match_id, action):
@@ -928,7 +943,16 @@ class ReportMatchDecisionView(APIView):
             return Response({"error": {"code": "forbidden",
                                        "message": "Not your match to decide"}}, status=403)
         with transaction.atomic():
-            locked = ReportMatch.objects.select_for_update().get(pk=match.pk)
+            pks = sorted({match.report_id, match.matched_report_id})
+            list(RescueCase.objects.select_for_update()
+                 .filter(report_id__in=pks, expired_at__isnull=True).order_by("pk"))
+            reports = list(StrayReport.objects.select_for_update().filter(pk__in=pks).order_by("pk"))
+            locked = ReportMatch.objects.select_for_update().filter(pk=match.pk).first()
+            # R1 · taken down (or deleted, which takes the match with it) after the read above.
+            if (locked is None or len(reports) != len(pks)
+                    or any(r.hidden_at is not None for r in reports)):
+                return Response({"error": {"code": "not_found", "message": "No such match"}},
+                                status=404)
             if locked.status != MatchStatus.SUGGESTED:
                 return Response({"error": {"code": "match_decided",
                                            "message": "This match was already decided"}},
@@ -936,7 +960,7 @@ class ReportMatchDecisionView(APIView):
             if action == "confirm":
                 locked.status = MatchStatus.CONFIRMED
                 locked.save(update_fields=["status"])
-                for rep in (match.report, match.matched_report):
+                for rep in reports:                  # the locked rows, not the stale read
                     if rep.status != StrayStatus.RESOLVED:
                         set_report_status(rep, StrayStatus.RESOLVED, request.user,
                                           note="lost & found match confirmed")

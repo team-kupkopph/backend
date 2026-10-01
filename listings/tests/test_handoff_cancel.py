@@ -33,8 +33,8 @@ def _place(rescuer, case, recipient):
         {"recipient_email": recipient.email, "name": "Bruno", "adoption_fee": "0"}, format="json")
 
 
-def _cancel(who, case):
-    return _c(who).post(f"/api/v1/cases/{case.pk}/handoff/cancel")
+def _cancel(who, case, body=None):
+    return _c(who).post(f"/api/v1/cases/{case.pk}/handoff/cancel", body, format="json")
 
 
 @pytest.mark.django_db
@@ -72,6 +72,9 @@ def test_a_public_listing_with_active_inquiries_cannot_be_cancelled():
     assert res.status_code == 409 and res.json()["error"]["code"] == "has_active_inquiries"
     assert res.json()["error"]["message"] == ("People have asked about this animal, so it can't be "
                                               "taken down from here.")
+    assert res.json()["error"]["details"] == {"active_inquiries": 1}
+    assert AdoptionListing.objects.get(pk=lid).status == ListingStatus.AVAILABLE   # nothing changed
+    assert not Notification.objects.filter(type="listing_withdrawn").exists()
 
 
 @pytest.mark.django_db
@@ -247,3 +250,116 @@ def test_the_sweep_leaves_an_old_public_inquiry_on_a_pending_listing_alone():
     inq.refresh_from_db(); listing.refresh_from_db()
     assert inq.status == InquiryStatus.ACTIVE and listing.status == ListingStatus.PENDING
     assert not Notification.objects.filter(type__in=["placement_decided", "placement_withdrawn"]).exists()
+
+
+# ── D15 · Take back closes open inquiries, after a confirm ──────────────────────────────
+def _public_listing(rescuer, case, adopters, name="Bruno"):
+    """An AVAILABLE listing for `case` with one ACTIVE inquiry per adopter."""
+    lid = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {}, format="json").json()["listing_id"]
+    AdoptionListing.objects.filter(pk=lid).update(status=ListingStatus.AVAILABLE, name=name)
+    return lid, [AdoptionInquiry.objects.create(listing_id=lid, adopter_account=a,
+                                                status=InquiryStatus.ACTIVE) for a in adopters]
+
+
+@pytest.mark.django_db
+def test_the_confirmed_take_back_closes_every_open_inquiry_and_tells_each_adopter(caplog):
+    import logging
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    adopters = [AccountFactory(), AccountFactory()]
+    lid, [a_inq, b_inq] = _public_listing(rescuer, case, adopters)
+    declined = AdoptionInquiry.objects.create(listing_id=lid, adopter_account=AccountFactory(),
+                                              status=InquiryStatus.DECLINED)
+    with caplog.at_level(logging.INFO, logger="kupkop.analytics"):
+        res = _cancel(rescuer, case, {"close_inquiries": True})
+    assert res.status_code == 200 and res.json() == {"status": "withdrawn", "closed_inquiries": 2}
+    assert AdoptionListing.objects.get(pk=lid).status == ListingStatus.WITHDRAWN
+    for inq in (a_inq, b_inq):
+        inq.refresh_from_db()
+        assert inq.status == InquiryStatus.WITHDRAWN and inq.decided_at is not None
+    declined.refresh_from_db()
+    assert declined.status == InquiryStatus.DECLINED and declined.decided_at is None   # untouched
+    for adopter, inq in zip(adopters, (a_inq, b_inq), strict=True):
+        [n] = Notification.objects.filter(account=adopter, type="listing_withdrawn")
+        assert n.title == "No longer available"
+        assert n.body == "Bruno is no longer available for adoption."
+        assert n.data == {"listing_id": lid, "inquiry_id": str(inq.pk)}
+    assert Notification.objects.filter(type="listing_withdrawn").count() == 2   # not the declined one
+    assert _decided_outcomes(caplog) == ["listing_withdrawn", "listing_withdrawn"]
+    assert _place(rescuer, case, _verified(AccountFactory())).status_code == 201   # free again
+
+
+@pytest.mark.django_db
+def test_a_listing_with_no_name_reads_this_animal_in_the_adopters_notice():
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    adopter = AccountFactory()
+    _public_listing(rescuer, case, [adopter], name="")
+    assert _cancel(rescuer, case, {"close_inquiries": True}).status_code == 200
+    [n] = Notification.objects.filter(account=adopter, type="listing_withdrawn")
+    assert n.body == "This animal is no longer available for adoption."
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("flag", [False, "true", 1, "yes", None])
+def test_only_a_real_boolean_true_confirms_the_take_back(flag):
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    lid, [inq] = _public_listing(rescuer, case, [AccountFactory()])
+    res = _cancel(rescuer, case, {"close_inquiries": flag})
+    assert res.status_code == 409 and res.json()["error"]["code"] == "has_active_inquiries"
+    assert AdoptionListing.objects.get(pk=lid).status == ListingStatus.AVAILABLE
+    inq.refresh_from_db()
+    assert inq.status == InquiryStatus.ACTIVE
+    assert not Notification.objects.filter(type="listing_withdrawn").exists()
+
+
+@pytest.mark.django_db
+def test_the_flag_changes_nothing_for_a_draft_or_a_placement():
+    rescuer, recipient = _verified(AccountFactory()), _verified(AccountFactory())
+    drafted = _safe_case(rescuer)
+    lid = _c(rescuer).post(f"/api/v1/cases/{drafted.pk}/list", {}, format="json").json()["listing_id"]
+    res = _cancel(rescuer, drafted, {"close_inquiries": True})
+    assert res.status_code == 200 and res.json() == {"status": "withdrawn"}
+    assert AdoptionListing.objects.get(pk=lid).status == ListingStatus.WITHDRAWN
+
+    placed_case = _safe_case(rescuer)
+    placed = _place(rescuer, placed_case, recipient).json()
+    res = _cancel(rescuer, placed_case, {"close_inquiries": True})
+    assert res.status_code == 200 and res.json() == {"status": "withdrawn"}
+    assert Notification.objects.filter(account=recipient, type="placement_withdrawn").count() == 1
+    assert not Notification.objects.filter(type="listing_withdrawn").exists()
+    assert AdoptionInquiry.objects.get(pk=placed["inquiry_id"]).status == InquiryStatus.WITHDRAWN
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("body", [[1], "true"])
+def test_a_take_back_body_that_is_not_an_object_is_a_plain_refusal(body):
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    lid, [inq] = _public_listing(rescuer, case, [AccountFactory()])
+    res = _cancel(rescuer, case, body)
+    assert res.status_code == 409 and res.json()["error"]["code"] == "has_active_inquiries"
+    assert res.json()["error"]["details"] == {"active_inquiries": 1}
+    assert AdoptionListing.objects.get(pk=lid).status == ListingStatus.AVAILABLE
+    inq.refresh_from_db()
+    assert inq.status == InquiryStatus.ACTIVE
+    assert not Notification.objects.filter(type="listing_withdrawn").exists()
+
+
+@pytest.mark.django_db
+def test_a_take_back_moves_updated_at_on_the_listing_and_every_closed_inquiry():
+    """Final review #4 · update_fields skips auto_now unless `updated_at` is named, on the confirmed
+    close, and on the plain (nobody-asked) take-back of a draft."""
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    lid, [inq] = _public_listing(rescuer, case, [AccountFactory()])
+    old = timezone.now() - timezone.timedelta(days=3)
+    AdoptionListing.objects.filter(pk=lid).update(updated_at=old)
+    AdoptionInquiry.objects.filter(pk=inq.pk).update(updated_at=old)
+    assert _cancel(rescuer, case, {"close_inquiries": True}).status_code == 200
+    listing = AdoptionListing.objects.get(pk=lid)
+    inq.refresh_from_db()
+    assert listing.updated_at > old + timezone.timedelta(days=2)
+    assert inq.updated_at > old + timezone.timedelta(days=2)
+
+    drafted = _safe_case(rescuer)
+    did = _c(rescuer).post(f"/api/v1/cases/{drafted.pk}/list", {}, format="json").json()["listing_id"]
+    AdoptionListing.objects.filter(pk=did).update(updated_at=old)
+    assert _cancel(rescuer, drafted).status_code == 200
+    assert AdoptionListing.objects.get(pk=did).updated_at > old + timezone.timedelta(days=2)
