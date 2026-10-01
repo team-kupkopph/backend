@@ -196,3 +196,27 @@ def test_a_takedown_dismisses_the_reports_suggested_matches_either_side():
     assert as_found.status == MatchStatus.DISMISSED and as_lost.status == MatchStatus.DISMISSED
     assert confirmed.status == MatchStatus.CONFIRMED      # a decided match is history, not a lead
     assert untouched.status == MatchStatus.SUGGESTED
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("gone", ["hidden", "deleted"])
+def test_an_offer_racing_a_takedown_or_a_delete_gets_404(monkeypatch, gone):
+    """C13 · the report vanishes between the offer view's unlocked check and its locked
+    re-read (the serializer runs in between, so that's where it's made to happen)."""
+    from sagip import views
+    report = _report()
+    real = views.OfferCreateSerializer.is_valid
+
+    def vanish_then_validate(self, *a, **kw):
+        if gone == "hidden":
+            StrayReport.objects.filter(pk=report.pk).update(hidden_at=timezone.now())
+        else:
+            StrayReport.objects.filter(pk=report.pk).delete()
+        return real(self, *a, **kw)
+    monkeypatch.setattr(views.OfferCreateSerializer, "is_valid", vanish_then_validate)
+
+    res = _c(AccountFactory()).post(f"/api/v1/reports/{report.pk}/offers",
+                                    {"offer_type": "transport"}, format="json")
+    assert res.status_code == 404
+    assert res.json()["error"]["code"] == "not_found"
+    assert not ReportOffer.objects.filter(report_id=report.pk).exists()

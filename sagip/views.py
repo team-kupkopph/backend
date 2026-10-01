@@ -417,7 +417,12 @@ class ReportOffersView(APIView):
 
         with transaction.atomic():
             # C22 · a claim may have landed since the check above; it locks this row too.
-            report = StrayReport.objects.select_for_update().get(pk=report.pk)
+            # C13 · so may a takedown (or a delete): re-check `hidden_at` under the lock.
+            report = (StrayReport.objects.select_for_update()
+                      .filter(pk=report.pk, hidden_at__isnull=True).first())
+            if report is None:
+                return Response({"error": {"code": "not_found", "message": "No such report"}},
+                                status=404)
             if report.status != StrayStatus.REPORTED:
                 return Response({"error": {"code": "report_not_open",
                                            "message": "This report is no longer open for offers"}},
