@@ -889,6 +889,10 @@ class ReportMatchesView(APIView):
         matches = (ReportMatch.objects
                    .filter(Q(report=report) | Q(matched_report=report))
                    .exclude(status=MatchStatus.DISMISSED)
+                   # C13 · a moderated report drops out of both sides' lists: its reporter can't
+                   # reach the other side's contact, and the other side no longer sees it.
+                   .exclude(Q(report__hidden_at__isnull=False)
+                            | Q(matched_report__hidden_at__isnull=False))
                    .select_related("report", "matched_report").order_by("-score"))
         return Response({"results": [_match_repr(m, report) for m in matches]})
 
@@ -902,7 +906,11 @@ class ReportMatchDecisionView(APIView):
     def post(self, request, report_id, match_id, action):
         match = (ReportMatch.objects.select_related("report", "matched_report")
                  .filter(pk=match_id).first())
-        if match is None or report_id not in (match.report_id, match.matched_report_id):
+        # C13 · a match with a moderated side can't be decided: confirming would resolve the
+        # other reporter's real report off a removed one.
+        if (match is None or report_id not in (match.report_id, match.matched_report_id)
+                or match.report.hidden_at is not None
+                or match.matched_report.hidden_at is not None):
             return Response({"error": {"code": "not_found", "message": "No such match"}},
                             status=404)
         reporters = {match.report.reporter_account_id, match.matched_report.reporter_account_id}

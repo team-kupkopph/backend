@@ -1,10 +1,19 @@
 """C13 / D10 · what a moderation takedown does to a Sagip report (called by
 moderation.actions.resolve_flag when a `report` flag is actioned)."""
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from notifications.service import notify
-from sagip.models import OfferStatus, ReportOffer, RescueCase, StrayReport, StrayStatus
+from sagip.models import (
+    MatchStatus,
+    OfferStatus,
+    ReportMatch,
+    ReportOffer,
+    RescueCase,
+    StrayReport,
+    StrayStatus,
+)
 
 
 @transaction.atomic
@@ -21,6 +30,10 @@ def hide_report(report, by):
     report.save(update_fields=["hidden_at"])
     ReportOffer.objects.filter(report=report, status=OfferStatus.OPEN).update(
         status=OfferStatus.EXPIRED)
+    # C13 · an undecided lost & found pair with a removed side is no longer a lead; a decided
+    # one (confirmed or dismissed) is history and stays as it was.
+    ReportMatch.objects.filter(Q(report=report) | Q(matched_report=report),
+                               status=MatchStatus.SUGGESTED).update(status=MatchStatus.DISMISSED)
     # A claim nobody has acted on ends; an animal already in someone's care stays with them.
     if report.status == StrayStatus.CLAIMED and case is not None:
         case.expired_at = now

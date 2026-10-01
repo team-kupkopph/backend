@@ -10,7 +10,14 @@ from accounts.factories import AccountFactory
 from moderation.actions import resolve_flag
 from moderation.models import FlagStatus, FlagTarget, ModerationFlag
 from notifications.models import Notification
-from sagip.models import OfferStatus, ReportOffer, RescueCase, StrayReport
+from sagip.models import (
+    MatchStatus,
+    OfferStatus,
+    ReportMatch,
+    ReportOffer,
+    RescueCase,
+    StrayReport,
+)
 from sagip.sweeps import escalate_reports
 from verifications.models import AccountCapability
 
@@ -92,3 +99,62 @@ def test_a_claimed_case_ends_and_the_claimer_is_told_but_custody_is_left_alone()
     kept_case.refresh_from_db(); kept.refresh_from_db()
     assert kept_case.expired_at is None and kept.status == "rescued"
     assert _c(keeper).get(f"/api/v1/reports/{kept.pk}").status_code == 200   # active claimer still sees it
+
+
+def _pair(**match_kw):
+    """A lost report and a found report about it, paired by the matcher. The found side's
+    reporter consented to share contact, so a leak would carry their phone and email."""
+    lost = _report(report_type="lost", condition="healthy")
+    found = _report(report_type="found", condition="healthy", contact_share_consent=True)
+    match = ReportMatch.objects.create(report=found, matched_report=lost, score="0.900",
+                                       **match_kw)
+    return lost, found, match
+
+
+def _hide(report):
+    """Set hidden_at without running hide_report, so the views' own guard is what's tested."""
+    StrayReport.objects.filter(pk=report.pk).update(hidden_at=timezone.now())
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("status", [MatchStatus.SUGGESTED, MatchStatus.CONFIRMED])
+def test_a_hidden_report_drops_out_of_both_sides_match_lists(status):
+    """C13 · the hidden report's reporter can't see the other side's contact, and the other
+    side no longer sees the hidden report or who filed it."""
+    lost, found, _ = _pair(status=status)
+    _hide(found)
+    for side in (found, lost):
+        res = _c(side.reporter_account).get(f"/api/v1/reports/{side.pk}/matches")
+        assert res.status_code == 200
+        assert res.json()["results"] == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("hidden_side", ["found", "lost"])
+def test_a_match_with_a_hidden_side_cannot_be_decided(hidden_side):
+    """C13 · confirming would resolve the other reporter's real report off a removed one."""
+    lost, found, match = _pair()
+    _hide(found if hidden_side == "found" else lost)
+    for side in (found, lost):
+        res = _c(side.reporter_account).post(
+            f"/api/v1/reports/{side.pk}/matches/{match.pk}/confirm")
+        assert res.status_code == 404
+        assert res.json()["error"]["code"] == "not_found"
+    match.refresh_from_db(); lost.refresh_from_db()
+    assert match.status == MatchStatus.SUGGESTED and lost.status == "reported"
+
+
+@pytest.mark.django_db
+def test_a_takedown_dismisses_the_reports_suggested_matches_either_side():
+    lost, found, as_found = _pair()
+    other_found = _report(report_type="found", condition="healthy")
+    as_lost = ReportMatch.objects.create(report=other_found, matched_report=found, score="0.5")
+    confirmed = ReportMatch.objects.create(report=found, matched_report=_report(report_type="lost"),
+                                           score="0.5", status=MatchStatus.CONFIRMED)
+    untouched = ReportMatch.objects.create(report=other_found, matched_report=lost, score="0.5")
+    _action(found)
+    for m in (as_found, as_lost, confirmed, untouched):
+        m.refresh_from_db()
+    assert as_found.status == MatchStatus.DISMISSED and as_lost.status == MatchStatus.DISMISSED
+    assert confirmed.status == MatchStatus.CONFIRMED      # a decided match is history, not a lead
+    assert untouched.status == MatchStatus.SUGGESTED
