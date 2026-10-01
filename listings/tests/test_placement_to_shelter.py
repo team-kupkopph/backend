@@ -92,6 +92,26 @@ def test_the_draft_carries_the_rescue_photos_first_one_primary():
 
 
 @pytest.mark.django_db
+def test_a_taken_down_reports_photos_do_not_follow_the_animal_to_the_shelter():
+    # C13 · a takedown may have been for the photos.
+    from django.utils import timezone
+    shelter = _shelter()
+    _, report, placed = _placed_with(shelter)
+    StrayReport.objects.filter(pk=report.pk).update(hidden_at=timezone.now())
+    draft_id = _accept(shelter, placed).json()["listing_id"]
+    assert not AdoptionListingPhoto.objects.filter(listing_id=draft_id).exists()
+
+
+@pytest.mark.django_db
+def test_a_report_with_no_photos_gives_the_shelter_a_draft_with_no_photos():
+    shelter = _shelter()
+    _, _, placed = _placed_with(shelter, report_photos=())
+    res = _accept(shelter, placed)
+    assert res.status_code == 200
+    assert not AdoptionListingPhoto.objects.filter(listing_id=res.json()["listing_id"]).exists()
+
+
+@pytest.mark.django_db
 def test_the_placement_listing_itself_is_closed_as_placed_with_the_shelter():
     shelter = _shelter()
     _, _, placed = _placed_with(shelter)

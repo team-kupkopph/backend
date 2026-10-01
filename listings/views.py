@@ -252,7 +252,9 @@ class CaseListView(APIView):
                 adoption_fee=fee_dec, status=ListingStatus.DRAFT)
             # D12 · the rescuer finishes the story, fee and details, then publishes
             # (POST /listings/{id}/publish) — the path a shelter's D7 draft already takes.
-            urls = [p.url for p in case.report.photos.order_by("uploaded_at")]
+            # C13 · a moderated report's photos stay down: the takedown may have been for them.
+            urls = ([] if case.report.hidden_at is not None
+                    else [p.url for p in case.report.photos.order_by("uploaded_at")])
             for i, url in enumerate(urls):
                 AdoptionListingPhoto.objects.create(listing=listing, url=url, is_primary=(i == 0))
         return Response({"listing_id": str(listing.pk), "draft": True}, status=201)
@@ -582,7 +584,8 @@ def _shelter_draft_from(placed, shelter):
         name=placed.name or "", city=(primary.city if primary else placed.city) or "",
         status=ListingStatus.DRAFT)
     urls = [p.url for p in placed.photos.order_by("-is_primary")]
-    if not urls and placed.source_report_id:
+    # C13 · never fall back to a moderated report's photos: the takedown may have been for them.
+    if not urls and placed.source_report_id and placed.source_report.hidden_at is None:
         urls = [p.url for p in placed.source_report.photos.order_by("uploaded_at")]
     for i, url in enumerate(urls):
         AdoptionListingPhoto.objects.create(listing=draft, url=url, is_primary=(i == 0))

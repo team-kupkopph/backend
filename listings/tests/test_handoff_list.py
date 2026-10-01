@@ -100,3 +100,26 @@ def test_the_rescuer_publishing_the_draft_makes_it_available():
     assert pub.status_code == 200 and pub.json()["status"] == "available"
     listing.refresh_from_db()
     assert listing.status == ListingStatus.AVAILABLE
+
+
+@pytest.mark.django_db
+def test_a_taken_down_reports_photos_are_not_copied_into_the_draft():
+    # C13 · a takedown may have been for the photos; listing must not republish them.
+    from django.utils import timezone
+    rescuer = AccountFactory()
+    case = _safe_case(rescuer)
+    StrayReportPhoto.objects.create(report=case.report, url="https://cdn.example/a.jpg")
+    StrayReport.objects.filter(pk=case.report_id).update(hidden_at=timezone.now())
+
+    res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {"name": "Tisoy"}, format="json")
+    assert res.status_code == 201
+    assert not AdoptionListing.objects.get(pk=res.json()["listing_id"]).photos.exists()
+
+
+@pytest.mark.django_db
+def test_a_report_with_no_photos_makes_a_draft_with_no_photos():
+    rescuer = AccountFactory()
+    case = _safe_case(rescuer)
+    res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {"name": "Tisoy"}, format="json")
+    assert res.status_code == 201
+    assert not AdoptionListing.objects.get(pk=res.json()["listing_id"]).photos.exists()
