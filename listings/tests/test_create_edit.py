@@ -203,3 +203,10 @@ def test_patch_unknown_listing_is_404(client):
     res = client.patch(f"/api/v1/listings/{uuid.uuid4()}", {"adoption_fee": "1.00"},
                        content_type="application/json", **_hdr(member))
     assert res.status_code == 404
+
+
+@pytest.mark.django_db
+def test_publishing_an_unknown_listing_is_404_not_found(client):
+    import uuid
+    res = client.post(f"/api/v1/listings/{uuid.uuid4()}/publish", **_hdr(AccountFactory()))
+    assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"

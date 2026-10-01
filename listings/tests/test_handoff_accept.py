@@ -92,3 +92,23 @@ def test_accept_links_listing_to_pet_and_recipient():
     listing.refresh_from_db()
     assert str(listing.adopted_pet_id) == pet_id
     assert listing.adopted_by_account_id == recipient.pk
+
+
+@pytest.mark.django_db
+def test_accept_unknown_inquiry_404_not_found():
+    import uuid
+    res = _c(AccountFactory()).post(f"/api/v1/inquiries/{uuid.uuid4()}/accept")
+    assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+
+
+@pytest.mark.django_db
+def test_a_person_accepting_a_placement_gets_the_listings_photos_on_the_pet():
+    from listings.models import AdoptionListingPhoto, PetPhoto
+    recipient = AccountFactory(); listing, inq = _placement(recipient)
+    AdoptionListingPhoto.objects.create(listing=listing, url="https://example.invalid/a", is_primary=True)
+    AdoptionListingPhoto.objects.create(listing=listing, url="https://example.invalid/b", is_primary=False)
+    res = _c(recipient).post(f"/api/v1/inquiries/{inq.pk}/accept")
+    assert res.status_code == 200
+    pet = Pet.objects.get(pk=res.json()["pet_id"])
+    assert {(p.url, p.is_primary) for p in PetPhoto.objects.filter(pet=pet)} == {
+        ("https://example.invalid/a", True), ("https://example.invalid/b", False)}

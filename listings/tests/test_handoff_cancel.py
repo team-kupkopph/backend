@@ -169,3 +169,81 @@ def test_a_cancelled_placement_and_an_expired_one_are_counted_as_decisions(caplo
         _c(rescuer).post(f"/api/v1/cases/{drafted.pk}/list", {}, format="json")
         _cancel(rescuer, drafted)
         assert _decided_outcomes(caplog) == ["withdrawn", "expired"]
+
+
+# ── The cancel guards and the expiry sweep's skips ──────────────────────────────────────
+@pytest.mark.django_db
+def test_cancelling_an_unknown_case_is_404_not_found():
+    import uuid
+    res = _c(_verified(AccountFactory())).post(f"/api/v1/cases/{uuid.uuid4()}/handoff/cancel")
+    assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+
+
+@pytest.mark.django_db
+def test_cancelling_when_the_animal_is_no_longer_safe_is_409_case_not_safe():
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    StrayReport.objects.filter(pk=case.report_id).update(status=StrayStatus.CLAIMED)
+    res = _cancel(rescuer, case)
+    assert res.status_code == 409 and res.json()["error"]["code"] == "case_not_safe"
+
+
+@pytest.mark.django_db
+def test_cancelling_an_already_adopted_listing_is_409_and_leaves_it_alone():
+    """C14 · the report can still read SAFE while its listing is ADOPTED — the animal has a home,
+    so there is nothing to take back."""
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    listing = AdoptionListing.objects.create(posted_by=rescuer, source_report=case.report,
+        species="dog", name="Bruno", city="Marikina", adoption_fee="0", status=ListingStatus.ADOPTED)
+    res = _cancel(rescuer, case)
+    assert res.status_code == 409 and res.json()["error"]["code"] == "already_adopted"
+    listing.refresh_from_db()
+    assert listing.status == ListingStatus.ADOPTED
+
+
+@pytest.mark.django_db
+def test_a_placement_six_days_old_is_not_expired():
+    rescuer, recipient = _verified(AccountFactory()), _verified(AccountFactory())
+    case = _safe_case(rescuer)
+    placed = _place(rescuer, case, recipient).json()
+    assert expire_placements(now=timezone.now() + timezone.timedelta(days=6)) == []
+    assert AdoptionInquiry.objects.get(pk=placed["inquiry_id"]).status == InquiryStatus.ACTIVE
+    assert not Notification.objects.filter(type__in=["placement_decided", "placement_withdrawn"]).exists()
+
+
+@pytest.mark.django_db
+def test_the_sweep_skips_an_inquiry_that_was_decided_after_the_candidate_scan(monkeypatch):
+    """C14 · the sweep reads its candidates, then locks each row; one answered in between (here:
+    withdrawn while the first is being expired) is skipped, not expired twice or notified."""
+    from listings import sweeps
+    rescuer = _verified(AccountFactory())
+    ids = []
+    for _ in range(2):
+        ids.append(_place(rescuer, _safe_case(rescuer), _verified(AccountFactory())).json()["inquiry_id"])
+    real = sweeps.notices.placement_decided
+
+    def decided_then_the_other_is_withdrawn(listing, inquiry, decision):
+        real(listing, inquiry, decision)
+        AdoptionInquiry.objects.filter(pk__in=ids).exclude(pk=inquiry.pk).update(
+            status=InquiryStatus.WITHDRAWN)
+    monkeypatch.setattr(sweeps.notices, "placement_decided", decided_then_the_other_is_withdrawn)
+
+    expired = expire_placements(now=timezone.now() + timezone.timedelta(days=PLACEMENT_EXPIRY_DAYS, minutes=1))
+    assert len(expired) == 1
+    assert Notification.objects.filter(account=rescuer, type="placement_decided").count() == 1
+    other = AdoptionInquiry.objects.exclude(pk=expired[0].pk).get(pk__in=ids)
+    assert other.status == InquiryStatus.WITHDRAWN        # the racing decision stands
+
+
+@pytest.mark.django_db
+def test_the_sweep_leaves_an_old_public_inquiry_on_a_pending_listing_alone():
+    """C14 · only a placement (every stage skipped) expires; an inquiry with no skipped ladder is
+    not one, however old."""
+    listing = AdoptionListing.objects.create(posted_by=AccountFactory(), species="dog", name="Bruno",
+        city="Marikina", adoption_fee="0", status=ListingStatus.PENDING)
+    inq = AdoptionInquiry.objects.create(listing=listing, adopter_account=AccountFactory(),
+                                         status=InquiryStatus.ACTIVE)
+    later = timezone.now() + timezone.timedelta(days=PLACEMENT_EXPIRY_DAYS + 3)
+    assert expire_placements(now=later) == []
+    inq.refresh_from_db(); listing.refresh_from_db()
+    assert inq.status == InquiryStatus.ACTIVE and listing.status == ListingStatus.PENDING
+    assert not Notification.objects.filter(type__in=["placement_decided", "placement_withdrawn"]).exists()

@@ -65,3 +65,31 @@ def test_you_cannot_place_an_animal_with_yourself():
                            {"recipient_email": rescuer.email, "city": "X", "adoption_fee": "0"}, format="json")
     assert res.status_code == 422 and res.json()["error"]["code"] == "recipient_is_you"
     assert not AdoptionListing.objects.filter(source_report=case.report).exists()
+
+
+@pytest.mark.django_db
+def test_place_unknown_case_404_not_found():
+    import uuid
+    res = _c(AccountFactory()).post(f"/api/v1/cases/{uuid.uuid4()}/place",
+                                    {"recipient_email": "x@example.com"}, format="json")
+    assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+
+
+@pytest.mark.django_db
+def test_place_with_a_non_numeric_fee_422_bad_request_nothing_created():
+    r = AccountFactory(); recipient = _verified(AccountFactory()); case = _safe_case(r)
+    res = _c(r).post(f"/api/v1/cases/{case.pk}/place",
+                     {"recipient_email": recipient.email, "adoption_fee": "abc"}, format="json")
+    assert res.status_code == 422 and res.json()["error"]["code"] == "bad_request"
+    assert not AdoptionListing.objects.filter(source_report=case.report).exists()
+
+
+@pytest.mark.django_db
+def test_place_over_the_fee_cap_422_nothing_created():
+    r = AccountFactory()   # a personal account is fee-capped
+    recipient = _verified(AccountFactory()); case = _safe_case(r)
+    res = _c(r).post(f"/api/v1/cases/{case.pk}/place",
+                     {"recipient_email": recipient.email, "adoption_fee": "999999"}, format="json")
+    assert res.status_code == 422 and res.json()["error"]["code"] == "fee_over_cap"
+    assert not AdoptionListing.objects.filter(source_report=case.report).exists()
+    assert not AdoptionInquiry.objects.filter(adopter_account=recipient).exists()
