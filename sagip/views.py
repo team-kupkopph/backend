@@ -386,6 +386,7 @@ class MyRescuesView(APIView):
             "claimed_at": c.claimed_at.isoformat(),
             "expired_at": c.expired_at.isoformat() if c.expired_at else None,
             "claim_due_at": _iso(claim_due_at(c)),   # S9 · null once it can't lapse
+            "hidden": c.report.hidden_at is not None,   # P2 · "Removed by moderation"
         } for c in qs]
         return Response({"cases": cases})
 
@@ -591,6 +592,14 @@ class ReportDetailView(APIView):
         if r.hidden_at is not None and not (
                 request.user.is_authenticated
                 and (request.user.pk == r.reporter_account_id or is_active_claimer(r, request.user))):
+            # P2 · a 404 reads as "never existed" to someone who was told it was theirs: anyone with
+            # ANY case on the report (the takedown ended theirs) is told it was removed. Strangers
+            # and guests still get the 404, so a removed report's existence is not confirmed to them.
+            if (request.user.is_authenticated
+                    and r.cases.filter(claimed_by_account=request.user).exists()):
+                return Response({"error": {"code": "report_removed",
+                                           "message": "This report was removed by moderation."}},
+                                status=410)
             return Response({"error": {"code": "not_found", "message": "No such report"}}, status=404)
         body = {
             "report_id": str(r.report_id), "report_type": r.report_type,
