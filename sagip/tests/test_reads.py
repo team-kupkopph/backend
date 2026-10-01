@@ -34,7 +34,8 @@ def test_my_reports_lists_only_the_callers_reports_with_status(client):
     _report(other)
     body = client.get("/api/v1/me/reports", **_hdr(me)).json()["results"]
     assert [r["report_id"] for r in body] == [str(mine.report_id)]
-    assert set(body[0].keys()) == {"report_id", "species", "condition", "status", "city", "created_at"}
+    assert set(body[0].keys()) == {"report_id", "species", "condition", "status", "city", "created_at",
+                                   "hidden"}   # C13 · "Removed by moderation" (D10)
     assert body[0]["status"] == "reported"
 
 
