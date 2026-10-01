@@ -2,8 +2,8 @@ import pytest
 from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
-from listings.models import AdoptionListing
-from sagip.models import RescueCase, StrayReport, StrayStatus
+from listings.models import AdoptionListing, ListingStatus
+from sagip.models import RescueCase, StrayReport, StrayReportPhoto, StrayStatus
 
 
 def _c(a):
@@ -67,3 +67,59 @@ def test_list_no_city_and_report_city_none_defaults_to_empty_string():
     assert res.status_code == 201
     listing = AdoptionListing.objects.get(pk=res.json()["listing_id"])
     assert listing.city == ""
+
+
+@pytest.mark.django_db
+def test_listing_a_rescue_makes_a_private_draft_with_the_reports_photos():
+    # C15 / D12 · the rescuer finishes the story, fee and details before it goes public.
+    rescuer = AccountFactory()
+    case = _safe_case(rescuer)
+    StrayReportPhoto.objects.create(report=case.report, url="https://cdn.example/a.jpg")
+    StrayReportPhoto.objects.create(report=case.report, url="https://cdn.example/b.jpg")
+
+    res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {"name": "Tisoy"}, format="json")
+    assert res.status_code == 201 and res.json()["draft"] is True
+    listing = AdoptionListing.objects.get(pk=res.json()["listing_id"])
+    assert listing.status == ListingStatus.DRAFT
+    # AdoptionListingPhoto has no timestamp (UUID pk), so assert the primary + the set, not an order.
+    photos = list(listing.photos.values_list("url", "is_primary"))
+    assert sorted(photos) == [("https://cdn.example/a.jpg", True), ("https://cdn.example/b.jpg", False)]
+    assert APIClient().get(f"/api/v1/listings/{listing.pk}").status_code == 404   # private until published
+    # still one live handoff per case
+    assert _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {}, format="json").status_code == 409
+
+
+@pytest.mark.django_db
+def test_the_rescuer_publishing_the_draft_makes_it_available():
+    rescuer = AccountFactory()
+    case = _safe_case(rescuer)
+    res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {"name": "Tisoy"}, format="json")
+    listing = AdoptionListing.objects.get(pk=res.json()["listing_id"])
+    assert listing.status == ListingStatus.DRAFT
+    pub = _c(rescuer).post(f"/api/v1/listings/{listing.pk}/publish")
+    assert pub.status_code == 200 and pub.json()["status"] == "available"
+    listing.refresh_from_db()
+    assert listing.status == ListingStatus.AVAILABLE
+
+
+@pytest.mark.django_db
+def test_a_taken_down_reports_photos_are_not_copied_into_the_draft():
+    # C13 · a takedown may have been for the photos; listing must not republish them.
+    from django.utils import timezone
+    rescuer = AccountFactory()
+    case = _safe_case(rescuer)
+    StrayReportPhoto.objects.create(report=case.report, url="https://cdn.example/a.jpg")
+    StrayReport.objects.filter(pk=case.report_id).update(hidden_at=timezone.now())
+
+    res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {"name": "Tisoy"}, format="json")
+    assert res.status_code == 201
+    assert not AdoptionListing.objects.get(pk=res.json()["listing_id"]).photos.exists()
+
+
+@pytest.mark.django_db
+def test_a_report_with_no_photos_makes_a_draft_with_no_photos():
+    rescuer = AccountFactory()
+    case = _safe_case(rescuer)
+    res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {"name": "Tisoy"}, format="json")
+    assert res.status_code == 201
+    assert not AdoptionListing.objects.get(pk=res.json()["listing_id"]).photos.exists()

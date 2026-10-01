@@ -74,6 +74,10 @@ def placement_decided(listing, inquiry, decision):
     who = inquiry.adopter_account.display_name
     if decision == "accepted":
         title, body = "Placement accepted", f"{who} accepted {name}. The rescue is complete."
+    elif decision == "expired":
+        title, body = ("Placement not answered",
+                       f"{who} didn't answer about {name} within 7 days, so the offer was withdrawn. "
+                       f"You can place them with someone else or list them for adoption.")
     else:
         title, body = ("Placement declined",
                        f"{who} declined {name}. You can place them with someone else or list "
@@ -81,6 +85,21 @@ def placement_decided(listing, inquiry, decision):
     notify(listing.posted_by, "placement_decided", title=title, body=body,
            data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk),
                  "decision": decision})
+
+
+def placement_withdrawn(listing, inquiry, reason="cancelled"):
+    """C14 · the recipient hears that an offer they never answered is off the table — and why:
+    the rescuer took it back (`cancelled`), or it lapsed unanswered (`expired`, D11's sweep).
+    An expiry must not read as the rescuer changing their mind."""
+    name = listing.name or "the animal"
+    if reason == "expired":
+        title = "A placement offer expired"
+        body = f"The offer of {name} expired after 7 days without an answer."
+    else:
+        title = "A placement offer was withdrawn"
+        body = f"{listing.posted_by.display_name} is no longer offering {name} to you."
+    notify(inquiry.adopter_account, "placement_withdrawn", title=title, body=body,
+           data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
 
 
 # D3 · what the reporter is told when the claimer releases. Keyed by

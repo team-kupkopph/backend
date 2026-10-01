@@ -66,6 +66,7 @@ _TYPES = [
     NotificationType("report_nearby", "{report_id}", True, "kupkop://reports/{report_id}"),
     # S18: the rescuer hears whether a direct placement was accepted.
     NotificationType("placement_decided", "{listing_id, inquiry_id, decision}", True, "kupkop://rescues"),
+    NotificationType("placement_withdrawn", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}

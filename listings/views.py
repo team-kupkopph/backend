@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account, AccountStatus, Address
+from common.analytics import emit
 from common.cities import city_variants
 from listings.fees import fee_cap_for
 from listings.models import (
@@ -44,7 +45,18 @@ PAGE_SIZE = 20
 
 # S20 · a listing in any of these states is the animal's live handoff; a WITHDRAWN one
 # (a declined placement, or a listing its poster took down) no longer is.
-LIVE_HANDOFF_STATUSES = (ListingStatus.AVAILABLE, ListingStatus.PENDING, ListingStatus.ADOPTED)
+# D12 · a rescue's draft is its handoff in progress.
+LIVE_HANDOFF_STATUSES = (ListingStatus.DRAFT, ListingStatus.AVAILABLE,
+                         ListingStatus.PENDING, ListingStatus.ADOPTED)
+
+
+def _case_expired():
+    """A lapsed or released claim. The case row outlives it and still names its old claimer,
+    while the report can be claimed again under a NEW case — so without this check a former
+    claimer could list, place or cancel the next claimer's rescue. Same envelope as
+    sagip's CaseStatusView."""
+    return Response({"error": {"code": "case_expired", "message": "This claim has lapsed"}},
+                    status=409)
 
 
 def _load_safe_own_case(case_id, user):
@@ -65,15 +77,23 @@ def _load_safe_own_case(case_id, user):
         return None, Response({"error": {"code": "not_your_case",
                                          "message": "Only the claiming rescuer can list this animal"}},
                               status=403)
+    if case.expired_at is not None:
+        return None, _case_expired()
     if case.report.status != StrayStatus.SAFE:
         return None, Response({"error": {"code": "case_not_safe",
                                          "message": "The animal must be safe before listing"}},
                               status=409)
-    if AdoptionListing.objects.filter(source_report=case.report,
-                                      status__in=LIVE_HANDOFF_STATUSES).exists():
+    live = (AdoptionListing.objects.filter(source_report=case.report,
+                                           status__in=LIVE_HANDOFF_STATUSES)
+            .only("pk", "status").first())
+    if live is not None:
+        # The details are the client's way back to the handoff it already started (a second
+        # "List" tap would otherwise strand the rescuer outside their own draft).
         return None, Response({"error": {"code": "already_handed_off",
                                          "message": "This animal is already listed or offered "
-                                                    "to someone"}},
+                                                    "to someone",
+                                         "details": {"listing_id": str(live.pk),
+                                                     "listing_status": live.status}}},
                               status=409)
     return case, None
 
@@ -210,8 +230,9 @@ class ListingsView(APIView):
 
 
 class CaseListView(APIView):
-    """US-H1 · list an adoption from a SAFE rescue case. The listing carries source_report
-    so provenance survives; the animal's species is inherited from the report. Fee capped
+    """US-H1 · list an adoption from a SAFE rescue case. The listing is a private DRAFT
+    carrying the report's photos (C15/D12). It carries source_report so provenance
+    survives; the animal's species is inherited from the report. Fee capped
     by the existing fee_cap_for — no second rule."""
     permission_classes = [IsAuthenticated]
 
@@ -235,8 +256,15 @@ class CaseListView(APIView):
                 posted_by=request.user, source_report=case.report, species=case.report.species,
                 name=request.data.get("name") or "",
                 city=request.data.get("city") or case.report.city or "",
-                adoption_fee=fee_dec, status=ListingStatus.AVAILABLE)
-        return Response({"listing_id": str(listing.pk)}, status=201)
+                adoption_fee=fee_dec, status=ListingStatus.DRAFT)
+            # D12 · the rescuer finishes the story, fee and details, then publishes
+            # (POST /listings/{id}/publish) — the path a shelter's D7 draft already takes.
+            # C13 · a moderated report's photos stay down: the takedown may have been for them.
+            urls = ([] if case.report.hidden_at is not None
+                    else [p.url for p in case.report.photos.order_by("uploaded_at")])
+            for i, url in enumerate(urls):
+                AdoptionListingPhoto.objects.create(listing=listing, url=url, is_primary=(i == 0))
+        return Response({"listing_id": str(listing.pk), "draft": True}, status=201)
 
 
 class CasePlaceView(APIView):
@@ -290,6 +318,68 @@ class CasePlaceView(APIView):
                   body=f"{request.user.display_name} wants to place an animal with you.",
                   data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
         return Response({"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)}, status=201)
+
+
+def _withdraw_placement(inquiry, now, reason="cancelled"):
+    """C14 · end an unanswered direct placement: the offer is withdrawn, the listing goes back to
+    private (WITHDRAWN frees the case for its next handoff, S20), and the recipient is told why
+    (`reason`: "cancelled" by the rescuer, or "expired" by D11's sweep)."""
+    inquiry.status = InquiryStatus.WITHDRAWN
+    inquiry.decided_at = now
+    inquiry.save(update_fields=["status", "decided_at"])
+    inquiry.listing.status = ListingStatus.WITHDRAWN
+    inquiry.listing.save(update_fields=["status"])
+    notices.placement_withdrawn(inquiry.listing, inquiry, reason=reason)
+    emit("inquiry_decided", outcome="expired" if reason == "expired" else "withdrawn")
+
+
+class CaseHandoffCancelView(APIView):
+    """C14 / D11 · POST /cases/{id}/handoff/cancel — the rescuer takes back a handoff that hasn't
+    happened yet: a draft, an unanswered placement, or a public listing nobody has inquired on.
+
+    ⚠️ Lock order is case -> listing -> inquiries; PlacementDecisionView locks the inquiry
+    first. A cancel racing an accept can therefore deadlock; Postgres aborts one side with a
+    deadlock error and rolls it back whole, so state stays consistent (see the task report)."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, case_id):
+        with transaction.atomic():
+            case = (RescueCase.objects.select_for_update().select_related("report")
+                    .filter(pk=case_id).first())
+            if case is None:
+                return Response({"error": {"code": "not_found", "message": "No such case"}}, status=404)
+            if case.claimed_by_account_id != request.user.pk:
+                return Response({"error": {"code": "not_your_case",
+                                           "message": "Only the claiming rescuer can change this"}},
+                                status=403)
+            if case.expired_at is not None:
+                return _case_expired()
+            if case.report.status != StrayStatus.SAFE:
+                return Response({"error": {"code": "case_not_safe",
+                                           "message": "There is no handoff to take back"}}, status=409)
+            listing = (AdoptionListing.objects.select_for_update()
+                       .filter(source_report=case.report, status__in=LIVE_HANDOFF_STATUSES).first())
+            if listing is None:
+                return Response({"error": {"code": "no_handoff",
+                                           "message": "This animal isn't listed or offered to anyone"}},
+                                status=404)
+            if listing.status == ListingStatus.ADOPTED:
+                return Response({"error": {"code": "already_adopted",
+                                           "message": "This animal already has a home"}}, status=409)
+            active = list(AdoptionInquiry.objects.select_for_update()
+                          .filter(listing=listing, status=InquiryStatus.ACTIVE))
+            now = timezone.now()
+            if listing.status == ListingStatus.PENDING and len(active) == 1:
+                _withdraw_placement(active[0], now)
+            elif active:
+                return Response({"error": {"code": "has_active_inquiries",
+                                           "message": "People have asked about this animal, so it "
+                                                      "can't be taken down from here."}},
+                                status=409)
+            else:
+                listing.status = ListingStatus.WITHDRAWN
+                listing.save(update_fields=["status"])
+        return Response({"status": "withdrawn"})
 
 
 class ListingDetailView(APIView):
@@ -403,6 +493,22 @@ def _stage_json(key, stage):
             "updated_at": stage.updated_at.isoformat(), "note": stage.note or None}
 
 
+def _my_inquiry_row(inquiry):
+    """One adopter-facing inquiry: the /me/inquiries row, and the GET /inquiries/{id} body."""
+    stages = {s.stage_key: s for s in inquiry.stages.all()}
+    return {
+        "inquiry_id": str(inquiry.pk),
+        "listing": {"listing_id": str(inquiry.listing_id), "name": inquiry.listing.name,
+                   "species": inquiry.listing.species},
+        "status": inquiry.status,
+        # All six rows exist from the inquiry's first second, so a row's `updated_at`
+        # is only a date the ladder should show once the stage has MOVED — for a
+        # `not_started` stage it is the creation time, and is sent as null. `note`
+        # is null when empty for the same reason: absent, not "".
+        "stages": [_stage_json(key, stages.get(key)) for key in AdoptionStageKey],
+    }
+
+
 class MyInquiriesView(APIView):
     """GET /me/inquiries — US-A4. The adopter's own inquiries, with each stage's state,
     so "both sides see the same state" is literal: this is the same data the poster's
@@ -413,21 +519,21 @@ class MyInquiriesView(APIView):
         qs = (AdoptionInquiry.objects.filter(adopter_account=request.user)
               .select_related("listing").order_by("-created_at"))
         page_items, next_page = _paginate(qs, request)
-        results = []
-        for inquiry in page_items:
-            stages = {s.stage_key: s for s in inquiry.stages.all()}
-            results.append({
-                "inquiry_id": str(inquiry.pk),
-                "listing": {"listing_id": str(inquiry.listing_id), "name": inquiry.listing.name,
-                           "species": inquiry.listing.species},
-                "status": inquiry.status,
-                # All six rows exist from the inquiry's first second, so a row's `updated_at`
-                # is only a date the ladder should show once the stage has MOVED — for a
-                # `not_started` stage it is the creation time, and is sent as null. `note`
-                # is null when empty for the same reason: absent, not "".
-                "stages": [_stage_json(key, stages.get(key)) for key in AdoptionStageKey],
-            })
+        results = [_my_inquiry_row(inquiry) for inquiry in page_items]
         return Response({"results": results, "next": next_page})
+
+
+class InquiryDetailView(APIView):
+    """C25 · one of the caller's own inquiries, by id — the Place request screen used to scan page 1
+    of /me/inquiries and called an older placement "not found"."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, inquiry_id):
+        inquiry = (AdoptionInquiry.objects.select_related("listing")
+                   .filter(pk=inquiry_id, adopter_account=request.user).first())
+        if inquiry is None:
+            return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
+        return Response(_my_inquiry_row(inquiry))
 
 
 class MyPetsView(APIView):
@@ -487,7 +593,8 @@ def _shelter_draft_from(placed, shelter):
         name=placed.name or "", city=(primary.city if primary else placed.city) or "",
         status=ListingStatus.DRAFT)
     urls = [p.url for p in placed.photos.order_by("-is_primary")]
-    if not urls and placed.source_report_id:
+    # C13 · never fall back to a moderated report's photos: the takedown may have been for them.
+    if not urls and placed.source_report_id and placed.source_report.hidden_at is None:
         urls = [p.url for p in placed.source_report.photos.order_by("uploaded_at")]
     for i, url in enumerate(urls):
         AdoptionListingPhoto.objects.create(listing=draft, url=url, is_primary=(i == 0))
@@ -588,7 +695,6 @@ class PlacementDecisionView(APIView):
                 # reconciled nightly; deferred import avoids a cycle).
                 from community.badges import award_badges_for
                 award_badges_for(inq.listing.posted_by)
-                from common.analytics import emit
                 emit("inquiry_decided", outcome="accepted")
                 emit("adoption_completed")
                 if draft is not None:
@@ -604,7 +710,6 @@ class PlacementDecisionView(APIView):
             inq.listing.status = ListingStatus.WITHDRAWN
             inq.listing.save(update_fields=["status"])
             notices.placement_decided(inq.listing, inq, "declined")   # S18
-            from common.analytics import emit
             emit("inquiry_decided", outcome="declined")
             return Response(status=200)
 
