@@ -469,6 +469,22 @@ def _stage_json(key, stage):
             "updated_at": stage.updated_at.isoformat(), "note": stage.note or None}
 
 
+def _my_inquiry_row(inquiry):
+    """One adopter-facing inquiry: the /me/inquiries row, and the GET /inquiries/{id} body."""
+    stages = {s.stage_key: s for s in inquiry.stages.all()}
+    return {
+        "inquiry_id": str(inquiry.pk),
+        "listing": {"listing_id": str(inquiry.listing_id), "name": inquiry.listing.name,
+                   "species": inquiry.listing.species},
+        "status": inquiry.status,
+        # All six rows exist from the inquiry's first second, so a row's `updated_at`
+        # is only a date the ladder should show once the stage has MOVED — for a
+        # `not_started` stage it is the creation time, and is sent as null. `note`
+        # is null when empty for the same reason: absent, not "".
+        "stages": [_stage_json(key, stages.get(key)) for key in AdoptionStageKey],
+    }
+
+
 class MyInquiriesView(APIView):
     """GET /me/inquiries — US-A4. The adopter's own inquiries, with each stage's state,
     so "both sides see the same state" is literal: this is the same data the poster's
@@ -479,21 +495,21 @@ class MyInquiriesView(APIView):
         qs = (AdoptionInquiry.objects.filter(adopter_account=request.user)
               .select_related("listing").order_by("-created_at"))
         page_items, next_page = _paginate(qs, request)
-        results = []
-        for inquiry in page_items:
-            stages = {s.stage_key: s for s in inquiry.stages.all()}
-            results.append({
-                "inquiry_id": str(inquiry.pk),
-                "listing": {"listing_id": str(inquiry.listing_id), "name": inquiry.listing.name,
-                           "species": inquiry.listing.species},
-                "status": inquiry.status,
-                # All six rows exist from the inquiry's first second, so a row's `updated_at`
-                # is only a date the ladder should show once the stage has MOVED — for a
-                # `not_started` stage it is the creation time, and is sent as null. `note`
-                # is null when empty for the same reason: absent, not "".
-                "stages": [_stage_json(key, stages.get(key)) for key in AdoptionStageKey],
-            })
+        results = [_my_inquiry_row(inquiry) for inquiry in page_items]
         return Response({"results": results, "next": next_page})
+
+
+class InquiryDetailView(APIView):
+    """C25 · one of the caller's own inquiries, by id — the Place request screen used to scan page 1
+    of /me/inquiries and called an older placement "not found"."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, inquiry_id):
+        inquiry = (AdoptionInquiry.objects.select_related("listing")
+                   .filter(pk=inquiry_id, adopter_account=request.user).first())
+        if inquiry is None:
+            return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
+        return Response(_my_inquiry_row(inquiry))
 
 
 class MyPetsView(APIView):

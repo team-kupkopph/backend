@@ -168,6 +168,29 @@ def test_my_inquiries_requires_auth(client):
     assert client.get("/api/v1/me/inquiries").status_code == 401
 
 
+# ── GET /inquiries/{id} ───────────────────────────────────────────────────────────
+@pytest.mark.django_db
+def test_an_adopter_reads_one_inquiry_by_id_and_nobody_else_can(client):
+    """C25 · the Place request screen used to scan page 1 of /me/inquiries; the detail is the
+    same object as one list row, and only the adopter may read it (404, not 403, so an
+    inquiry's existence isn't revealed — not even to the listing's own poster)."""
+    poster = AccountFactory()
+    listing = _listing(poster)
+    me = _verified_member()
+    assert _inquire(client, listing, me).status_code == 201
+    inq = AdoptionInquiry.objects.get(listing=listing, adopter_account=me)
+
+    row = client.get(f"/api/v1/inquiries/{inq.pk}", **_hdr(me))
+    assert row.status_code == 200
+    listed = client.get("/api/v1/me/inquiries", **_hdr(me)).json()["results"][0]
+    assert row.json() == listed
+    for stranger in (AccountFactory(), poster):
+        res = client.get(f"/api/v1/inquiries/{inq.pk}", **_hdr(stranger))
+        assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+    assert client.get(f"/api/v1/inquiries/{uuid.uuid4()}", **_hdr(me)).status_code == 404
+    assert client.get(f"/api/v1/inquiries/{inq.pk}").status_code == 401
+
+
 # ── POST /inquiries/{id}/stages/{stage_key} ──────────────────────────────────────
 @pytest.mark.django_db
 def test_the_poster_can_advance_a_stage(client):
