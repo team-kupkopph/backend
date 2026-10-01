@@ -36,7 +36,7 @@ from listings.stages import set_stage_state
 from listings.visibility import account_is_verified_rescuer, public_poster_q
 from notifications.service import notify
 from sagip import notices
-from sagip.models import RescueCase, StrayStatus
+from sagip.models import RescueCase, StrayReport, StrayStatus
 from sagip.status import resolve_report
 from shelter.models import ShelterProfile
 
@@ -338,9 +338,9 @@ class CaseHandoffCancelView(APIView):
     happened yet: a draft, an unanswered placement, or a public listing nobody has inquired on —
     or (D15) one people have inquired on, once the rescuer confirms with {"close_inquiries": true}.
 
-    ⚠️ Lock order is case -> listing -> inquiries; PlacementDecisionView locks the inquiry
-    first. A cancel racing an accept can therefore deadlock; Postgres aborts one side with a
-    deadlock error and rolls it back whole, so state stays consistent (see the task report)."""
+    R1 · lock order is case (with its report) -> listing -> inquiries — the one order
+    PlacementDecisionView, expire_placements and hide_report also take, so a take-back racing an
+    accept, a decline or a lapse queues behind it instead of deadlocking."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, case_id):
@@ -641,6 +641,26 @@ class ListingPublishView(APIView):
         return Response({"listing_id": str(listing.pk), "status": listing.status})
 
 
+def _no_such_inquiry():
+    return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
+
+
+def _lock_handoff(listing_id, source_report_id):
+    """R1 · lock a handoff's rows in the one order every Sagip writer uses: the report's active
+    case (there may be none — then nothing is locked for it), then the report, then the listing.
+    The caller locks the inquiry after. Returns the locked listing (None if it is gone), with
+    its `source_report` set to the locked report row. Call inside `transaction.atomic()`."""
+    report = None
+    if source_report_id is not None:
+        list(RescueCase.objects.select_for_update()
+             .filter(report_id=source_report_id, expired_at__isnull=True).order_by("pk"))
+        report = StrayReport.objects.select_for_update().filter(pk=source_report_id).first()
+    listing = AdoptionListing.objects.select_for_update().filter(pk=listing_id).first()
+    if listing is not None and report is not None:
+        listing.source_report = report
+    return listing
+
+
 class PlacementDecisionView(APIView):
     """POST /inquiries/{id}/accept | /decline — US-H3. The recipient of a direct
     placement (all stages skipped) accepts or declines it. Accept is the first code
@@ -654,20 +674,30 @@ class PlacementDecisionView(APIView):
     would sail through since 'all stages skipped' + 'you're the adopter' both remain
     true after the first decision — producing a duplicate Pet, an orphaned Pet
     (decline-after-accept re-frees a listing whose Pet already exists), or a reversed
-    adoption (decline-then-accept)."""
+    adoption (decline-then-accept).
+
+    R1 · lock order is the active case (if any) -> report -> listing -> inquiry, the same as
+    `CaseHandoffCancelView` (case -> listing -> inquiries) and `hide_report` (case -> report),
+    so a decision racing a take-back or a takedown queues instead of deadlocking. The inquiry
+    is first read UNLOCKED only to learn its listing and report; the 404/403 answered from that
+    read are on fields that never change, and every decision is re-checked on the locked row."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, inquiry_id, action):
+        peek = (AdoptionInquiry.objects.filter(pk=inquiry_id)
+                .values("adopter_account_id", "listing_id", "listing__source_report_id").first())
+        if peek is None:
+            return _no_such_inquiry()
+        if peek["adopter_account_id"] != request.user.pk:
+            return Response({"error": {"code": "not_your_placement",
+                                       "message": "Only the recipient can decide this"}},
+                            status=403)
         with transaction.atomic():
-            inq = (AdoptionInquiry.objects.select_for_update()
-                   .select_related("listing").filter(pk=inquiry_id).first())
-            if inq is None:
-                return Response({"error": {"code": "not_found", "message": "No such inquiry"}},
-                                status=404)
-            if inq.adopter_account_id != request.user.pk:
-                return Response({"error": {"code": "not_your_placement",
-                                           "message": "Only the recipient can decide this"}},
-                                status=403)
+            listing = _lock_handoff(peek["listing_id"], peek["listing__source_report_id"])
+            inq = AdoptionInquiry.objects.select_for_update().filter(pk=inquiry_id).first()
+            if inq is None or listing is None:      # deleted between the peek and the locks
+                return _no_such_inquiry()
+            inq.listing = listing
             states = set(AdoptionStage.objects.filter(inquiry=inq).values_list("state", flat=True))
             if states != {StageState.SKIPPED}:
                 return Response({"error": {"code": "not_a_placement",

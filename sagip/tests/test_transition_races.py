@@ -117,3 +117,74 @@ def test_an_offer_racing_a_claim_is_refused(monkeypatch):
 
     assert res.status_code == 409 and res.json()["error"]["code"] == "report_not_open"
     assert not ReportOffer.objects.filter(report=report).exists()
+
+
+# ── R1 · one lock order: a takedown and a match decision ────────────────────────────────
+def _pair():
+    lost = _report(report_type="lost", condition="healthy")
+    found = _report(report_type="found", condition="healthy")
+    from sagip.models import ReportMatch
+    return lost, found, ReportMatch.objects.create(report=found, matched_report=lost, score="0.900")
+
+
+def _locked_tables(ctx):
+    """The table each `SELECT … FOR UPDATE` in `ctx` locks, in the order they ran."""
+    import re
+    return [re.search(r'FROM "(\w+)"', q["sql"]).group(1)
+            for q in ctx.captured_queries if "FOR UPDATE" in q["sql"]]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("gone", ["taken_down", "deleted"])
+def test_a_takedown_committed_just_before_a_match_confirm_is_404(monkeypatch, gone):
+    """R1 · the confirm passed its unlocked hidden check, then a takedown (or a delete) committed
+    before it locked anything. Under the locks it must see that and refuse with the same 404 —
+    not resolve the other reporter's real report off a removed one, and not a 500."""
+    from moderation.actions import resolve_flag
+    from moderation.models import FlagStatus, FlagTarget, ModerationFlag
+    from sagip import views
+    from sagip.models import MatchStatus, ReportMatch
+    lost, found, match = _pair()
+    real_atomic, fired = views.transaction.atomic, []
+
+    def gone_first(*a, **kw):
+        if not fired:
+            fired.append(True)
+            if gone == "taken_down":
+                flag = ModerationFlag.objects.create(reporter_account=AccountFactory(),
+                    target_type=FlagTarget.REPORT, target_id=found.pk, reason="fake")
+                resolve_flag(flag, AccountFactory(), FlagStatus.ACTIONED)
+            else:
+                StrayReport.objects.filter(pk=found.pk).delete()
+        return real_atomic(*a, **kw)
+    from types import SimpleNamespace
+    monkeypatch.setattr(views, "transaction", SimpleNamespace(atomic=gone_first))
+
+    res = _c(lost.reporter_account).post(f"/api/v1/reports/{lost.pk}/matches/{match.pk}/confirm")
+
+    assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+    lost.refresh_from_db()
+    assert lost.status == "reported"
+    assert not CaseStatusHistory.objects.filter(report=lost, status="resolved").exists()
+    if gone == "taken_down":
+        found.refresh_from_db()
+        match.refresh_from_db()
+        assert found.status == "reported" and found.hidden_at is not None
+        assert match.status == MatchStatus.DISMISSED      # the takedown's own write, not ours
+    else:
+        assert not ReportMatch.objects.filter(pk=match.pk).exists()
+
+
+@pytest.mark.django_db
+def test_a_match_decision_locks_cases_then_reports_then_the_match():
+    """R1 · the same order as hide_report (case -> report, then its matches), so a takedown and
+    a confirm on the same pair queue instead of deadlocking."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+    lost, found, match = _pair()
+    RescueCase.objects.create(report=found, claimed_by_account=_verified())
+    with CaptureQueriesContext(connection) as ctx:
+        res = _c(lost.reporter_account).post(
+            f"/api/v1/reports/{lost.pk}/matches/{match.pk}/dismiss")
+    assert res.status_code == 200
+    assert _locked_tables(ctx) == ["rescue_case", "stray_report", "report_match"]
