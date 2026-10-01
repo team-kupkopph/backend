@@ -68,6 +68,8 @@ def test_a_public_listing_with_active_inquiries_cannot_be_cancelled():
                                    status=InquiryStatus.ACTIVE)
     res = _cancel(rescuer, case)
     assert res.status_code == 409 and res.json()["error"]["code"] == "has_active_inquiries"
+    assert res.json()["error"]["message"] == ("People have asked about this animal, so it can't be "
+                                              "taken down from here.")
 
 
 @pytest.mark.django_db

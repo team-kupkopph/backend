@@ -370,8 +370,8 @@ class CaseHandoffCancelView(APIView):
                 _withdraw_placement(active[0], now)
             elif active:
                 return Response({"error": {"code": "has_active_inquiries",
-                                           "message": "People have asked about this animal — reply "
-                                                      "to them before taking the listing down"}},
+                                           "message": "People have asked about this animal, so it "
+                                                      "can't be taken down from here."}},
                                 status=409)
             else:
                 listing.status = ListingStatus.WITHDRAWN
