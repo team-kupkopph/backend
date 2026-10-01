@@ -385,17 +385,17 @@ class CaseHandoffCancelView(APIView):
                                                "details": {"active_inquiries": len(active)}}},
                                     status=409)
                 listing.status = ListingStatus.WITHDRAWN
-                listing.save(update_fields=["status"])
+                listing.save(update_fields=["status", "updated_at"])
                 for inquiry in active:
                     inquiry.status = InquiryStatus.WITHDRAWN
                     inquiry.decided_at = now
-                    inquiry.save(update_fields=["status", "decided_at"])
+                    inquiry.save(update_fields=["status", "decided_at", "updated_at"])
                     notices.listing_withdrawn(listing, inquiry)
                     emit("inquiry_decided", outcome="listing_withdrawn")
                 return Response({"status": "withdrawn", "closed_inquiries": len(active)})
             else:
                 listing.status = ListingStatus.WITHDRAWN
-                listing.save(update_fields=["status"])
+                listing.save(update_fields=["status", "updated_at"])
         return Response({"status": "withdrawn"})
 
 

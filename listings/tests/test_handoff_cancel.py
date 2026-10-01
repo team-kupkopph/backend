@@ -341,3 +341,25 @@ def test_a_take_back_body_that_is_not_an_object_is_a_plain_refusal(body):
     inq.refresh_from_db()
     assert inq.status == InquiryStatus.ACTIVE
     assert not Notification.objects.filter(type="listing_withdrawn").exists()
+
+
+@pytest.mark.django_db
+def test_a_take_back_moves_updated_at_on_the_listing_and_every_closed_inquiry():
+    """Final review #4 · update_fields skips auto_now unless `updated_at` is named, on the confirmed
+    close, and on the plain (nobody-asked) take-back of a draft."""
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    lid, [inq] = _public_listing(rescuer, case, [AccountFactory()])
+    old = timezone.now() - timezone.timedelta(days=3)
+    AdoptionListing.objects.filter(pk=lid).update(updated_at=old)
+    AdoptionInquiry.objects.filter(pk=inq.pk).update(updated_at=old)
+    assert _cancel(rescuer, case, {"close_inquiries": True}).status_code == 200
+    listing = AdoptionListing.objects.get(pk=lid)
+    inq.refresh_from_db()
+    assert listing.updated_at > old + timezone.timedelta(days=2)
+    assert inq.updated_at > old + timezone.timedelta(days=2)
+
+    drafted = _safe_case(rescuer)
+    did = _c(rescuer).post(f"/api/v1/cases/{drafted.pk}/list", {}, format="json").json()["listing_id"]
+    AdoptionListing.objects.filter(pk=did).update(updated_at=old)
+    assert _cancel(rescuer, drafted).status_code == 200
+    assert AdoptionListing.objects.get(pk=did).updated_at > old + timezone.timedelta(days=2)
