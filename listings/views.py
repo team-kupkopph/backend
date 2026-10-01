@@ -44,7 +44,9 @@ PAGE_SIZE = 20
 
 # S20 · a listing in any of these states is the animal's live handoff; a WITHDRAWN one
 # (a declined placement, or a listing its poster took down) no longer is.
-LIVE_HANDOFF_STATUSES = (ListingStatus.AVAILABLE, ListingStatus.PENDING, ListingStatus.ADOPTED)
+# D12 · a rescue's draft is its handoff in progress.
+LIVE_HANDOFF_STATUSES = (ListingStatus.DRAFT, ListingStatus.AVAILABLE,
+                         ListingStatus.PENDING, ListingStatus.ADOPTED)
 
 
 def _load_safe_own_case(case_id, user):
@@ -210,8 +212,9 @@ class ListingsView(APIView):
 
 
 class CaseListView(APIView):
-    """US-H1 · list an adoption from a SAFE rescue case. The listing carries source_report
-    so provenance survives; the animal's species is inherited from the report. Fee capped
+    """US-H1 · list an adoption from a SAFE rescue case. The listing is a private DRAFT
+    carrying the report's photos (C15/D12). It carries source_report so provenance
+    survives; the animal's species is inherited from the report. Fee capped
     by the existing fee_cap_for — no second rule."""
     permission_classes = [IsAuthenticated]
 
@@ -235,8 +238,13 @@ class CaseListView(APIView):
                 posted_by=request.user, source_report=case.report, species=case.report.species,
                 name=request.data.get("name") or "",
                 city=request.data.get("city") or case.report.city or "",
-                adoption_fee=fee_dec, status=ListingStatus.AVAILABLE)
-        return Response({"listing_id": str(listing.pk)}, status=201)
+                adoption_fee=fee_dec, status=ListingStatus.DRAFT)
+            # D12 · the rescuer finishes the story, fee and details, then publishes
+            # (POST /listings/{id}/publish) — the path a shelter's D7 draft already takes.
+            urls = [p.url for p in case.report.photos.order_by("uploaded_at")]
+            for i, url in enumerate(urls):
+                AdoptionListingPhoto.objects.create(listing=listing, url=url, is_primary=(i == 0))
+        return Response({"listing_id": str(listing.pk), "draft": True}, status=201)
 
 
 class CasePlaceView(APIView):
