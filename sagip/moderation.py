@@ -70,7 +70,7 @@ def restore_report(report, by, reason):
     vouch for is not resurrected), and nobody is notified. The one repair is the status: a
     takedown that ended an unacted claim left the report `claimed` with no active case, a state
     that is on no map and claimable by no one, so it goes back to `reported` through
-    `set_report_status` (history row, `restored_by_moderation:<reason>`) and the next rescuer
+    `set_report_status` (history row, note `restored_by_moderation` — never the reason) and the next rescuer
     can claim it. A report in someone's custody (`rescued`, `safe`, `resolved`) keeps its status
     and its case. Raises `ReportNotHidden` when there is nothing to restore."""
     # Lock order: case, then report — as `hide_report`, so a restore that overlaps a status
@@ -82,8 +82,9 @@ def restore_report(report, by, reason):
     if report.hidden_at is None:
         raise ReportNotHidden()
     report.hidden_at = None
-    report.save(update_fields=["hidden_at"])
+    report.save(update_fields=["hidden_at", "updated_at"])
     if report.status == StrayStatus.CLAIMED and case is None:
-        set_report_status(report, StrayStatus.REPORTED, by,
-                          note=f"restored_by_moderation:{reason[:150]}")
+        # The note is the bare marker: the reason belongs to the audit, and `status_history` is
+        # the reporter's own timeline, which a moderator's internal reason must never reach.
+        set_report_status(report, StrayStatus.REPORTED, by, note="restored_by_moderation")
     return report

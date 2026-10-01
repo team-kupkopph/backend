@@ -101,7 +101,7 @@ def test_a_takedown_ended_claim_comes_back_as_reported_and_is_claimable_again(cl
     report.refresh_from_db()
     assert report.hidden_at is None and report.status == "reported"
     row = CaseStatusHistory.objects.filter(report=report, status="reported").get()
-    assert row.note == "restored_by_moderation:Wrongly actioned"
+    assert row.note == "restored_by_moderation"     # the reason is audited, not shown to the reporter
     assert row.changed_by_account_id == staffer.admin_account.account_id
     # The ended case stays ended: history, not a claim to resurrect.
     case.refresh_from_db()
@@ -111,12 +111,17 @@ def test_a_takedown_ended_claim_comes_back_as_reported_and_is_claimable_again(cl
 
 
 @pytest.mark.django_db
-def test_a_long_reason_is_clipped_into_the_history_note(client, auth):
+def test_the_reason_never_reaches_the_reporters_status_history(client, auth):
+    """Final review #3 · `status_history` is the reporter's own timeline, so the moderator's
+    reason (which lives in the audit) must not leak into it, whatever its length."""
     report, _, _ = _claimed()
     hide_report(report, AccountFactory())
-    _post(client, auth, report.pk, {"reason": "x" * 400})
+    _post(client, auth, report.pk, {"reason": "Internal: reporter was harassing " + "x" * 400})
     note = CaseStatusHistory.objects.get(report=report, status="reported").note
-    assert note == "restored_by_moderation:" + "x" * 150
+    assert note == "restored_by_moderation"
+    seen = APIClient()
+    seen.force_authenticate(user=report.reporter_account)
+    assert "harassing" not in seen.get("/api/v1/me/reports").content.decode()
 
 
 @pytest.mark.django_db
@@ -185,6 +190,27 @@ def test_a_restore_without_a_reason_is_422_and_changes_nothing(client, auth, bod
 def test_an_unknown_report_is_404(client, auth):
     res = _post(client, auth, "7d1d3b5e-0000-4000-8000-000000000000", {"reason": "Restore"})
     assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("body", [{}, {"reason": ""}, {"reason": "   "}, ["reason"]])
+def test_an_unknown_report_is_404_even_without_a_reason(client, auth, body):
+    """Final review #5 · the report is looked up before the reason is checked, so an id that
+    names nothing is a 404 whatever the body says."""
+    res = _post(client, auth, "7d1d3b5e-0000-4000-8000-000000000000", body)
+    assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+
+
+@pytest.mark.django_db
+def test_a_restore_moves_updated_at(client, auth):
+    """Final review #4 · `save(update_fields=...)` skips auto_now unless `updated_at` is listed."""
+    report = _report()
+    hide_report(report, AccountFactory())
+    old = timezone.now() - timezone.timedelta(days=3)
+    StrayReport.objects.filter(pk=report.pk).update(updated_at=old)
+    assert _post(client, auth, report.pk, {"reason": "Restore"}).status_code == 200
+    report.refresh_from_db()
+    assert report.hidden_at is None and report.updated_at > old + timezone.timedelta(days=2)
 
 
 @pytest.mark.django_db

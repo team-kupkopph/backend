@@ -164,16 +164,18 @@ class ReportRestoreView(StaffView):
     claim to the takedown is not told, so a reopened report is simply claimable again."""
 
     def post(self, request, report_id):
+        # Final review #5 · 404 before 422: an id that names nothing is "no such report" whatever
+        # the body says, so the reason check only ever talks about a report that exists.
+        report = StrayReport.objects.filter(pk=report_id).first()
+        if report is None:
+            return Response({"error": {"code": "not_found", "message": "No such report."}},
+                            status=404)
         reason = request.data.get("reason") if isinstance(request.data, dict) else None
         reason = reason.strip() if isinstance(reason, str) else ""
         if not reason:
             return Response({"error": {"code": "reason_required",
                                        "message": "Say why the report is being restored."}},
                             status=422)
-        report = StrayReport.objects.filter(pk=report_id).first()
-        if report is None:
-            return Response({"error": {"code": "not_found", "message": "No such report."}},
-                            status=404)
         try:
             report = restore_report(report, admin_account_for(request), reason)
         except ReportNotHidden:
