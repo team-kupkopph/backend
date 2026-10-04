@@ -112,12 +112,20 @@ class ReportsCreateView(APIView):
         # Returned BEFORE the create block, so the replay also skips every side effect:
         # no second matcher run (US-L2), no duplicate reunion push, no repeated analytics.
         idem = d.get("idempotency_key")
+        # Fast replay path: a second POST with the same (caller, key) returns the first row.
+        # The real exclusivity is the DB's partial-unique `idx_stray_report_idempotency`,
+        # re-checked under `except IntegrityError` on the insert below — the pre-check races
+        # against a concurrent retry under the same key (R2-F1), and without the catch the
+        # losing insert would 500 instead of the idempotent 200. Same belt-and-suspenders
+        # shape ReportOffersView uses for `UNIQUE(report, account, offer_type)`.
+        def _replay(row):
+            return Response({"report_id": str(row.report_id), "status": row.status}, status=200)
+
         if idem:
             existing = StrayReport.objects.filter(
                 reporter_account=request.user, idempotency_key=idem).first()
             if existing is not None:
-                return Response({"report_id": str(existing.report_id),
-                                 "status": existing.status}, status=200)
+                return _replay(existing)
         # D6 · "I've seen this pet". The sighting is a FOUND report of the lost pet's species,
         # linked to it below. Only someone else's still-open LOST report can be sighted.
         report_type = d.get("report_type", ReportType.STRAY)
@@ -149,32 +157,46 @@ class ReportsCreateView(APIView):
                 for field in ("breed", "color_markings", "size_category", "sex"):
                     if not describables[field]:
                         describables[field] = getattr(pet, field, None) or None
-        with transaction.atomic():
-            report = StrayReport.objects.create(
-                reporter_account=request.user,
-                report_type=report_type,
-                pet_id=pet.pk if pet is not None else None,   # C20 · only the caller's own pet
-                is_anonymous=d.get("is_anonymous", False),
-                contact_share_consent=d.get("contact_share_consent", False),
-                contact_share_consent_at=(timezone.now() if d.get("contact_share_consent")
-                                          else None),
-                species=species, condition=d["condition"], notes=d.get("notes", ""),
-                geom=Point(d["lng"], d["lat"], srid=4326),   # PostGIS: (x=lng, y=lat)
-                location_text=d.get("location_text", ""),
-                # The phone's reverse-geocoded city; C8 · when it sent none (geocoder failed,
-                # usually an offline-queued report), the nearest known city by point, so the
-                # city-scoped alerts still reach someone.
-                city=((d.get("city") or "").strip()
-                      or city_from_point(d["lat"], d["lng"])),
-                status="reported", escalation_level=0,
-                idempotency_key=idem or None, **describables)
-            photos = [p["file_url"] for p in d.get("photos", [])]
-            # D6 · a lost report shows the owner's own photo of their pet when they attached
-            # none — the picture a stranger needs to recognise them. Primary first.
-            if not photos and pet is not None and report_type == ReportType.LOST:
-                photos = [p.url for p in pet.photos.order_by("-is_primary", "uploaded_at")]
-            for url in photos:
-                StrayReportPhoto.objects.create(report=report, url=url)
+        try:
+            with transaction.atomic():
+                report = StrayReport.objects.create(
+                    reporter_account=request.user,
+                    report_type=report_type,
+                    pet_id=pet.pk if pet is not None else None,   # C20 · only the caller's own pet
+                    is_anonymous=d.get("is_anonymous", False),
+                    contact_share_consent=d.get("contact_share_consent", False),
+                    contact_share_consent_at=(timezone.now() if d.get("contact_share_consent")
+                                              else None),
+                    species=species, condition=d["condition"], notes=d.get("notes", ""),
+                    geom=Point(d["lng"], d["lat"], srid=4326),   # PostGIS: (x=lng, y=lat)
+                    location_text=d.get("location_text", ""),
+                    # The phone's reverse-geocoded city; C8 · when it sent none (geocoder failed,
+                    # usually an offline-queued report), the nearest known city by point, so the
+                    # city-scoped alerts still reach someone.
+                    city=((d.get("city") or "").strip()
+                          or city_from_point(d["lat"], d["lng"])),
+                    status="reported", escalation_level=0,
+                    idempotency_key=idem or None, **describables)
+                photos = [p["file_url"] for p in d.get("photos", [])]
+                # D6 · a lost report shows the owner's own photo of their pet when they attached
+                # none — the picture a stranger needs to recognise them. Primary first.
+                if not photos and pet is not None and report_type == ReportType.LOST:
+                    photos = [p.url for p in pet.photos.order_by("-is_primary", "uploaded_at")]
+                for url in photos:
+                    StrayReportPhoto.objects.create(report=report, url=url)
+        except IntegrityError:
+            # R2-F1 · the unlocked pre-check above saw no row, but a concurrent POST with the
+            # same (reporter_account, idempotency_key) committed between the pre-check and the
+            # insert. The partial-unique `idx_stray_report_idempotency` refused the second row;
+            # return the first row's replay, the same shape the pre-check would have, and
+            # fall through BEFORE the alert / matching / emit block so a losing retry neither
+            # pages recipients twice nor doubles analytics.
+            if idem:
+                existing = StrayReport.objects.filter(
+                    reporter_account=request.user, idempotency_key=idem).first()
+                if existing is not None:
+                    return _replay(existing)
+            raise
         # US-L2 · a new lost/found report triggers matching (§11). Best-effort: a matcher
         # failure must never break a welfare report submission. Inert for plain strays.
         if report.report_type in (ReportType.LOST, ReportType.FOUND):
