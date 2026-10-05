@@ -12,7 +12,16 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from listings import notices
-from listings.models import AdoptionInquiry, AdoptionStageKey, InquiryKind, InquiryStatus, StageState
+from listings.models import (
+    REJECT_REASONS,
+    AdoptionInquiry,
+    AdoptionStageKey,
+    EndReason,
+    InquiryKind,
+    InquiryStatus,
+    ListingStatus,
+    StageState,
+)
 from listings.representations import poster_contact_phone, poster_inquiry_rows
 from listings.stages import set_stage_state
 from listings.views import _locked_inquiry, _no_such_inquiry
@@ -67,3 +76,64 @@ class ScreenView(APIView):
                 set_stage_state(stage, StageState.IN_PROGRESS, request.user)
             notices.inquiry_accepted(inquiry)
         return Response(_poster_row(inquiry))
+
+
+def _end(inquiry, status, by, reason, now=None):
+    """Close one inquiry with who and why (AD6). If the animal was reserved for it, the listing
+    goes back on the feed (AQ4). Returns True when that happened. Call on locked rows."""
+    now = now or timezone.now()
+    was_reserved = inquiry.reserved_at is not None
+    inquiry.status, inquiry.decided_at = status, now
+    inquiry.ended_by_account, inquiry.end_reason, inquiry.reserved_at = by, reason, None
+    inquiry.save(update_fields=["status", "decided_at", "ended_by_account", "end_reason",
+                                "reserved_at", "updated_at"])
+    reopened = was_reserved and inquiry.listing.status == ListingStatus.PENDING
+    if reopened:
+        inquiry.listing.status = ListingStatus.AVAILABLE
+        inquiry.listing.save(update_fields=["status", "updated_at"])
+    return reopened
+
+
+class RejectView(APIView):
+    """AD6 · POST /inquiries/{id}/reject {"reason"} — the poster turns an applicant down, with one
+    of four reasons the adopter is shown. Turning down the applicant the animal is reserved for
+    puts it back on the feed."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, inquiry_id):
+        body = request.data if isinstance(request.data, dict) else {}
+        with transaction.atomic():
+            listing, inquiry = _locked_inquiry(inquiry_id)
+            if inquiry is None:
+                return _no_such_inquiry()
+            refusal = _poster_gate(inquiry, request.user)
+            if refusal:
+                return refusal
+            if body.get("reason") not in REJECT_REASONS:
+                return _err("bad_reason", "Choose a reason: not_a_fit, requirements_not_met, "
+                                          "no_response or other", 422)
+            _end(inquiry, InquiryStatus.DECLINED, request.user, body["reason"])
+            notices.inquiry_rejected(inquiry)
+        return Response({"status": inquiry.status, "end_reason": inquiry.end_reason})
+
+
+class WithdrawView(APIView):
+    """AD6 · POST /inquiries/{id}/withdraw — the adopter steps back from a public inquiry. A
+    placement's recipient answers with /decline instead."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, inquiry_id):
+        with transaction.atomic():
+            listing, inquiry = _locked_inquiry(inquiry_id)
+            if inquiry is None:
+                return _no_such_inquiry()
+            if inquiry.adopter_account_id != request.user.pk:
+                return _err("not_your_inquiry", "Only the person who asked can withdraw", 403)
+            if inquiry.kind != InquiryKind.INQUIRY:
+                return _err("is_placement", "Decline the placement instead", 409)
+            if inquiry.status != InquiryStatus.ACTIVE:
+                return _err("inquiry_closed", "This inquiry is already closed", 409)
+            reopened = _end(inquiry, InquiryStatus.WITHDRAWN, request.user,
+                            EndReason.ADOPTER_WITHDREW)
+            notices.inquiry_withdrawn(inquiry, reopened)
+        return Response({"status": inquiry.status, "end_reason": inquiry.end_reason})

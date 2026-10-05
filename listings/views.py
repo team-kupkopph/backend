@@ -17,6 +17,7 @@ from listings.models import (
     AdoptionListingPhoto,
     AdoptionStage,
     AdoptionStageKey,
+    EndReason,
     InquiryKind,
     InquiryStatus,
     ListingPreference,
@@ -333,7 +334,10 @@ def _withdraw_placement(inquiry, now, reason="cancelled"):
     (`reason`: "cancelled" by the rescuer, or "expired" by D11's sweep)."""
     inquiry.status = InquiryStatus.WITHDRAWN
     inquiry.decided_at = now
-    inquiry.save(update_fields=["status", "decided_at"])
+    inquiry.ended_by_account = inquiry.listing.posted_by if reason == "cancelled" else None
+    inquiry.end_reason = (EndReason.PLACEMENT_EXPIRED if reason == "expired"
+                          else EndReason.PLACEMENT_CANCELLED)
+    inquiry.save(update_fields=["status", "decided_at", "ended_by_account", "end_reason"])
     inquiry.listing.status = ListingStatus.WITHDRAWN
     inquiry.listing.save(update_fields=["status"])
     notices.placement_withdrawn(inquiry.listing, inquiry, reason=reason)
@@ -398,7 +402,10 @@ class CaseHandoffCancelView(APIView):
                 for inquiry in active:
                     inquiry.status = InquiryStatus.WITHDRAWN
                     inquiry.decided_at = now
-                    inquiry.save(update_fields=["status", "decided_at", "updated_at"])
+                    inquiry.ended_by_account = request.user
+                    inquiry.end_reason = EndReason.LISTING_WITHDRAWN
+                    inquiry.save(update_fields=["status", "decided_at", "ended_by_account",
+                                                "end_reason", "updated_at"])
                     notices.listing_withdrawn(listing, inquiry)
                     emit("inquiry_decided", outcome="listing_withdrawn")
                 return Response({"status": "withdrawn", "closed_inquiries": len(active)})
@@ -843,7 +850,9 @@ class PlacementDecisionView(APIView):
             # decline
             inq.status = InquiryStatus.DECLINED
             inq.decided_at = now
-            inq.save(update_fields=["status", "decided_at"])
+            inq.ended_by_account = request.user
+            inq.end_reason = EndReason.PLACEMENT_DECLINED
+            inq.save(update_fields=["status", "decided_at", "ended_by_account", "end_reason"])
             # ⚠️ WITHDRAWN, not AVAILABLE. A placement listing was never public — the rescuer
             # chose one person, not the adoption feed — so a decline must not publish it. It
             # also frees the case for its next handoff (S20's guard ignores withdrawn rows).

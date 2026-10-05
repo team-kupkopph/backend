@@ -73,6 +73,8 @@ _TYPES = [
     # split from the poster's inquiry_received so the app routes each without guessing.
     NotificationType("placement_offered", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
     NotificationType("inquiry_accepted", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
+    NotificationType("inquiry_rejected", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
+    NotificationType("inquiry_withdrawn", "{listing_id, inquiry_id, poster_is_shelter}", True, "kupkop://inquiries/{inquiry_id}"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}
