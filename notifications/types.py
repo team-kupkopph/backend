@@ -78,6 +78,7 @@ _TYPES = [
     NotificationType("adoption_badge_needed", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("adoption_reserved", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("reservation_released", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
+    NotificationType("adoption_completed", "{listing_id, inquiry_id, pet_id}", True, "kupkop://inquiries/{inquiry_id}"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}

@@ -11,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.analytics import emit
 from listings import notices
 from listings.models import (
     REJECT_REASONS,
@@ -24,8 +25,11 @@ from listings.models import (
 )
 from listings.representations import poster_contact_phone, poster_inquiry_rows
 from listings.stages import set_stage_state
-from listings.views import _locked_inquiry, _no_such_inquiry
+from listings.views import _locked_inquiry, _no_such_inquiry, _pet_from_listing
 from listings.visibility import account_is_verified_member
+from sagip import notices as sagip_notices
+from sagip.models import StrayStatus
+from sagip.status import resolve_report
 
 
 def _err(code, message, status):
@@ -204,3 +208,63 @@ class UnreserveView(APIView):
                 set_stage_state(stage, StageState.NOT_STARTED, request.user, note="Reservation released")
             notices.reservation_released(inquiry)
         return Response(_poster_row(inquiry))
+
+
+class CompleteView(APIView):
+    """AD5 / AQ3 · POST /inquiries/{id}/complete — the adoption happened. Only for the applicant
+    the animal is reserved for, and only while they still hold the badge (AQ2; re-checked, since a
+    badge can be revoked between Reserve and Complete). In one transaction:
+    - the inquiry is adopted, and its finalization step is done;
+    - the adopter gets the Pet;
+    - the listing is adopted;
+    - every other open applicant is declined as "another adopter was chosen" and told;
+    - a rescue-sourced report is resolved (the D4 remainder);
+    - the poster's badges are reconciled.
+    Lock order: R1's case → report → listing, then this inquiry, then the others by pk."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, inquiry_id):
+        from community.badges import award_badges_for  # deferred: avoids an import cycle
+
+        with transaction.atomic():
+            listing, inquiry = _locked_inquiry(inquiry_id)
+            if inquiry is None:
+                return _no_such_inquiry()
+            refusal = _poster_gate(inquiry, request.user)
+            if refusal:
+                return refusal
+            if inquiry.reserved_at is None:
+                return _err("not_reserved", "Reserve the animal for them first", 409)
+            adopter = inquiry.adopter_account
+            if not account_is_verified_member(adopter):
+                return _err("adopter_badge_required",
+                            "They need a Verified Member badge to complete the adoption", 409)
+            others = list(AdoptionInquiry.objects.select_for_update()
+                          .filter(listing=listing, status=InquiryStatus.ACTIVE)
+                          .exclude(pk=inquiry.pk).order_by("pk"))
+            now = timezone.now()
+            set_stage_state(inquiry.stages.get(stage_key=AdoptionStageKey.FINALIZATION),
+                            StageState.DONE, request.user)
+            inquiry.status, inquiry.decided_at, inquiry.ended_by_account = (
+                InquiryStatus.ADOPTED, now, request.user)
+            inquiry.save(update_fields=["status", "decided_at", "ended_by_account", "updated_at"])
+            pet = _pet_from_listing(listing, adopter)
+            listing.status, listing.adopted_pet, listing.adopted_by_account = (
+                ListingStatus.ADOPTED, pet, adopter)
+            listing.save(update_fields=["status", "adopted_pet", "adopted_by_account", "updated_at"])
+            for other in others:
+                other.listing = listing
+                _end(other, InquiryStatus.DECLINED, request.user, EndReason.ANOTHER_ADOPTER_CHOSEN, now)
+                notices.inquiry_rejected(other)
+            if listing.source_report_id is not None:
+                report = listing.source_report
+                if resolve_report(report, request.user, note="adopted through Kupkop"):
+                    case = report.cases.filter(expired_at__isnull=True).first()
+                    if case is not None:
+                        sagip_notices.case_progress(report, case, StrayStatus.RESOLVED)
+            notices.adoption_completed(inquiry, pet)
+            award_badges_for(listing.posted_by)
+            emit("inquiry_decided", outcome="adopted")
+            emit("adoption_completed")
+        return Response({"inquiry_id": str(inquiry.pk), "listing_id": str(listing.pk),
+                         "pet_id": str(pet.pk)})

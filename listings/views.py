@@ -763,6 +763,15 @@ def _locked_inquiry(inquiry_id):
     return listing, inquiry
 
 
+def _pet_from_listing(listing, owner):
+    """US-H3 / AQ3 · the adopter's own Pet for an animal they just took home: the listing's name,
+    species and photos (primary kept). Shared by a placement Accept and a public Complete."""
+    pet = Pet.objects.create(owner_account=owner, name=listing.name or "Pet", species=listing.species)
+    for ph in listing.photos.all():
+        PetPhoto.objects.create(pet=pet, url=ph.url, is_primary=ph.is_primary)
+    return pet
+
+
 class PlacementDecisionView(APIView):
     """POST /inquiries/{id}/accept | /decline — US-H3. The recipient of a direct
     placement (all stages skipped) accepts or declines it. Accept is the first code
@@ -820,11 +829,7 @@ class PlacementDecisionView(APIView):
                     pet, draft = None, _shelter_draft_from(inq.listing, request.user)
                 else:
                     draft = None
-                    pet = Pet.objects.create(owner_account=request.user,
-                                             name=inq.listing.name or "Pet",
-                                             species=inq.listing.species)
-                    for ph in inq.listing.photos.all():
-                        PetPhoto.objects.create(pet=pet, url=ph.url, is_primary=ph.is_primary)
+                    pet = _pet_from_listing(inq.listing, request.user)
                 inq.listing.status = ListingStatus.ADOPTED
                 inq.listing.adopted_pet = pet
                 inq.listing.adopted_by_account = request.user

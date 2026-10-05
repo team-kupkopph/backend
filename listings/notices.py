@@ -92,3 +92,11 @@ def reservation_released(inquiry):
            title=f"{_cap(_name(listing))} is no longer reserved",
            body=f"{_poster_name(listing)} released the reservation. Your inquiry is still open.",
            data=_data(inquiry))
+
+
+def adoption_completed(inquiry, pet):
+    listing = inquiry.listing
+    notify(inquiry.adopter_account, "adoption_completed",
+           title=f"Welcome home, {_name(listing)}!",
+           body=f"{_cap(_name(listing))} is now in My Pets. Thank you for adopting.",
+           data=_data(inquiry, pet_id=str(pet.pk)))
