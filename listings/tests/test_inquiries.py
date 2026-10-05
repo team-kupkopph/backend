@@ -6,10 +6,12 @@ import pytest
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
+from accounts.models import Account, AccountStatus
 from accounts.tokens import tokens_for
 from listings.models import AdoptionInquiry, AdoptionListing, AdoptionStage, AdoptionStageHistory
 from notifications.models import Notification
 from shelter.models import ShelterProfile
+from listings.visibility import account_is_verified_rescuer
 from verifications.models import AccountCapability, VerificationRequest
 
 
@@ -32,7 +34,13 @@ def _verified_shelter():
     return acc
 
 
-def _listing(poster, **kw):
+def _listing(poster, verify=True, **kw):
+    # AD16 · only a public poster's listing can be inquired on. Make the poster a Verified Member
+    # unless the test is about an unverified one (verify=False).
+    if verify and not account_is_verified_rescuer(poster):
+        AccountCapability.objects.get_or_create(
+            account=poster, capability="rescuer",
+            defaults={"status": "approved", "granted_at": timezone.now()})
     defaults = dict(name="Bantay", species="dog", city="Marikina", adoption_fee="300.00")
     defaults.update(kw)
     return AdoptionListing.objects.create(posted_by=poster, **defaults)
@@ -355,3 +363,32 @@ def test_an_inquiry_that_raced_a_take_back_is_refused_not_stranded(client):
     assert res.status_code == 409
     assert res.json()["error"]["code"] == "listing_unavailable"
     assert not AdoptionInquiry.objects.filter(listing=listing).exists()
+
+
+# ── AD13 / AD16 ──────────────────────────────────────────────────────────────────
+@pytest.mark.django_db
+def test_ad13_a_poster_cannot_inquire_on_their_own_listing(client):
+    poster = _verified_member()
+    res = _inquire(client, _listing(poster), poster)
+    assert res.status_code == 422 and res.json()["error"]["code"] == "own_listing"
+    assert not AdoptionInquiry.objects.exists()
+
+
+@pytest.mark.django_db
+def test_ad16_an_unverified_posters_listing_is_404_by_link_except_to_the_poster(client):
+    poster = AccountFactory(phone_verified_at=timezone.now())       # no badge: not public
+    listing = _listing(poster, verify=False)
+    assert client.get(f"/api/v1/listings/{listing.pk}").status_code == 404           # guest
+    assert client.get(f"/api/v1/listings/{listing.pk}", **_hdr(_verified_member())).status_code == 404
+    assert client.get(f"/api/v1/listings/{listing.pk}", **_hdr(poster)).status_code == 200
+    res = _inquire(client, listing, _verified_member())
+    assert res.status_code == 404 and not AdoptionInquiry.objects.exists()
+
+
+@pytest.mark.django_db
+def test_ad16_a_deleted_posters_listing_is_404_by_link(client):
+    poster = _verified_member()
+    listing = _listing(poster)
+    Account.objects.filter(pk=poster.pk).update(status=AccountStatus.DELETED, deleted_at=timezone.now())
+    assert client.get(f"/api/v1/listings/{listing.pk}").status_code == 404
+    assert _inquire(client, listing, _verified_member()).status_code == 404

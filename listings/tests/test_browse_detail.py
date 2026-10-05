@@ -143,10 +143,11 @@ def test_detail_404_for_unknown_listing(client):
 
 
 @pytest.mark.django_db
-def test_detail_is_visible_even_for_a_listing_by_an_unverified_poster(client):
-    """Detail is a direct-link page (like report-detail) — it doesn't re-apply the
-    browse-feed visibility gate, only the list does."""
+def test_detail_of_an_unverified_posters_listing_is_404_to_everyone_but_the_poster(client):
+    """AD16 (dev/adoption-build-review.md) · detail used to skip the feed's visibility gate, which
+    let an unverified poster share a working listing link off-platform. It applies the gate now;
+    the poster still sees their own listing."""
     unverified = AccountFactory()
     listing = _listing(unverified)
-    res = client.get(f"/api/v1/listings/{listing.pk}")
-    assert res.status_code == 200
+    assert client.get(f"/api/v1/listings/{listing.pk}").status_code == 404
+    assert client.get(f"/api/v1/listings/{listing.pk}", **_hdr(unverified)).status_code == 200

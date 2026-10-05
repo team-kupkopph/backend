@@ -29,3 +29,15 @@ def account_is_verified_member(account):
     Complete require of an adopter. Narrower than account_is_verified_rescuer: a shelter can't
     adopt (decision 3)."""
     return account.capabilities.filter(capability="rescuer", status="approved").exists()
+
+
+def listing_is_public(listing):
+    """AD16 · whether people other than its poster may see `listing`: its poster passes
+    public_poster_q() and the account isn't deleted (US-N1). The browse feed has always filtered on
+    this. Detail and inquiry now do too, so a link an unverified poster shares off-platform leads
+    nowhere."""
+    from accounts.models import AccountStatus
+    from listings.models import AdoptionListing
+    return (AdoptionListing.objects.filter(pk=listing.pk)
+            .exclude(posted_by__status=AccountStatus.DELETED)
+            .filter(public_poster_q()).exists())

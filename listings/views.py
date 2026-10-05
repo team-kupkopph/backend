@@ -33,7 +33,8 @@ from listings.serializers import (
     StageUpdateSerializer,
 )
 from listings.stages import INDIVIDUAL_SKIP_NOTE, INDIVIDUAL_SKIPPED_STAGES, set_stage_state
-from listings.visibility import account_is_verified_member, account_is_verified_rescuer, public_poster_q
+from listings.visibility import (account_is_verified_member, account_is_verified_rescuer,
+                                 listing_is_public, public_poster_q)
 from notifications.service import notify
 from sagip import notices
 from sagip.models import RescueCase, StrayReport, StrayStatus
@@ -418,6 +419,12 @@ class ListingDetailView(APIView):
         if listing.status == ListingStatus.DRAFT and listing.posted_by_id != getattr(request.user, "pk", None):
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
+        # AD16 · an unverified or deleted poster's listing isn't public by link either; the poster
+        # still reads their own (the edit form and the draft flow load it here).
+        if (listing.posted_by_id != getattr(request.user, "pk", None)
+                and not listing_is_public(listing)):
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
         return Response({
             "listing_id": str(listing.pk), "pet": _pet_fields(listing),
             "description": listing.story or None, "adoption_fee": str(listing.adoption_fee),
@@ -478,6 +485,13 @@ class ListingInquiriesView(APIView):
         if listing.status == ListingStatus.DRAFT:          # D7 · not public yet
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
+        if not listing_is_public(listing):                  # AD16
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
+        if listing.posted_by_id == request.user.pk:         # AD13
+            return Response({"error": {"code": "own_listing",
+                                       "message": "You can't inquire on your own listing"}},
+                            status=422)
         if request.user.account_type == "shelter":
             return Response({"error": {"code": "shelter_cannot_adopt",
                                        "message": "Shelters can't adopt through Kupkop"}},
