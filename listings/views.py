@@ -26,7 +26,8 @@ from listings.models import (
     PreferenceKind,
     StageState,
 )
-from listings.representations import adopter_inquiry_row, poster_inquiry_rows
+from listings.representations import (adopter_inquiry_row, adopter_inquiry_rows,
+                                     poster_inquiry_rows)
 from listings.serializers import (
     InquiryCreateSerializer,
     ListingCreateSerializer,
@@ -583,7 +584,7 @@ class MyInquiriesView(APIView):
               .prefetch_related("stages").order_by("-created_at"))
         page_items, next_page = _paginate(qs, request)
         member = account_is_verified_member(request.user)
-        results = [adopter_inquiry_row(inquiry, verified_member=member) for inquiry in page_items]
+        results = adopter_inquiry_rows(page_items, verified_member=member)
         return Response({"results": results, "next": next_page})
 
 

@@ -3,6 +3,8 @@ the poster has accepted the applicant for screening."""
 import uuid
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from listings.models import AdoptionInquiry
@@ -82,10 +84,39 @@ def test_the_applicants_list_is_the_posters_only_and_filters_open():
     assert c(poster).get(f"/api/v1/listings/{uuid.uuid4()}/inquiries").status_code == 404
 
 
+def _queries_for(client, url):
+    with CaptureQueriesContext(connection) as ctx:
+        res = client.get(url)
+    assert res.status_code == 200, res.content
+    return len(ctx), res.json()["results"]
+
+
 @pytest.mark.django_db
-def test_the_applicants_list_costs_a_fixed_number_of_queries(django_assert_max_num_queries):
+def test_the_applicants_list_costs_the_same_for_two_rows_as_for_six():
     poster = shelter(); the_listing = listing(poster)
-    for _ in range(5):
+    for _ in range(2):
         inquire(person(), the_listing)
-    with django_assert_max_num_queries(12):
-        assert len(c(poster).get(f"/api/v1/listings/{the_listing.pk}/inquiries").json()["results"]) == 5
+    two, rows = _queries_for(c(poster), f"/api/v1/listings/{the_listing.pk}/inquiries")
+    assert len(rows) == 2
+    for _ in range(4):
+        inquire(person(), the_listing)
+    AdoptionInquiry.objects.filter(listing=the_listing).update(accepted_at=timezone.now())
+    six, rows = _queries_for(c(poster), f"/api/v1/listings/{the_listing.pk}/inquiries")
+    assert len(rows) == 6 and all("adopter_contact" in r for r in rows)   # the reveal is costed
+    assert six == two
+
+
+@pytest.mark.django_db
+def test_my_inquiries_costs_the_same_for_one_row_as_for_six_across_posters():
+    adopter = person()
+    first = inquire(adopter, listing(shelter()))
+    AdoptionInquiry.objects.filter(pk=first.pk).update(accepted_at=timezone.now())
+    one, rows = _queries_for(c(adopter), "/api/v1/me/inquiries")
+    assert len(rows) == 1 and "poster_contact" in rows[0]
+    posters = [shelter(), shelter(), person(), person(), shelter()]       # shelters and individuals
+    for poster in posters:
+        inq = inquire(adopter, listing(poster))
+        AdoptionInquiry.objects.filter(pk=inq.pk).update(accepted_at=timezone.now())
+    six, rows = _queries_for(c(adopter), "/api/v1/me/inquiries")
+    assert len(rows) == 6 and all("poster_contact" in r for r in rows)
+    assert six == one

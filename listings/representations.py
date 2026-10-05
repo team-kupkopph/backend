@@ -35,20 +35,22 @@ def contact_revealed(inquiry):
             and inquiry.status in (InquiryStatus.ACTIVE, InquiryStatus.ADOPTED))
 
 
-def poster_contact_phone(poster):
-    """The number an adopter gets for a poster: a shelter's official phone, else the poster's own
-    verified phone. None when there is neither. POST /screen refuses then, so a reveal is never
-    one-sided."""
-    profile = ShelterProfile.objects.filter(account=poster).first()
+def _phone_for(poster, profile):
     if profile is not None and profile.official_phone:
         return profile.official_phone
     return poster.phone if poster.phone_verified_at else None
 
 
-def _poster_contact(poster):
-    profile = ShelterProfile.objects.filter(account=poster).first()
+def poster_contact_phone(poster):
+    """The number an adopter gets for a poster: a shelter's official phone, else the poster's own
+    verified phone. None when there is neither. POST /screen refuses then, so a reveal is never
+    one-sided."""
+    return _phone_for(poster, ShelterProfile.objects.filter(account=poster).first())
+
+
+def _poster_contact(poster, profile):
     name = (profile.contact_person_name or profile.org_name) if profile else poster.display_name
-    return {"name": name, "phone": poster_contact_phone(poster)}
+    return {"name": name, "phone": _phone_for(poster, profile)}
 
 
 def _base(inquiry, viewer):
@@ -64,15 +66,28 @@ def _base(inquiry, viewer):
     }
 
 
-def adopter_inquiry_row(inquiry, verified_member=None):
-    """The adopter's own inquiry. `verified_member` may be passed in by a list view that already
-    knows it (it is the same account on every row)."""
+def adopter_inquiry_row(inquiry, verified_member=None, profiles=None):
+    """The adopter's own inquiry. A list view passes what it already knows for the whole page:
+    `verified_member` (the same account on every row) and `profiles` (poster account id ->
+    ShelterProfile, see adopter_inquiry_rows). Left out, they are looked up for this one row."""
     row = _base(inquiry, "adopter")
     row["verified_member"] = (account_is_verified_member(inquiry.adopter_account)
                               if verified_member is None else verified_member)
     if contact_revealed(inquiry):
-        row["poster_contact"] = _poster_contact(inquiry.listing.posted_by)
+        poster = inquiry.listing.posted_by
+        profile = (ShelterProfile.objects.filter(account=poster).first() if profiles is None
+                   else profiles.get(poster.pk))
+        row["poster_contact"] = _poster_contact(poster, profile)
     return row
+
+
+def adopter_inquiry_rows(inquiries, verified_member=None):
+    """A page of the adopter's own inquiries: one query for every revealed poster's shelter
+    profile, not one per row."""
+    posters = {i.listing.posted_by_id for i in inquiries if contact_revealed(i)}
+    profiles = {p.account_id: p for p in ShelterProfile.objects.filter(account_id__in=posters)}
+    return [adopter_inquiry_row(i, verified_member=verified_member, profiles=profiles)
+            for i in inquiries]
 
 
 def poster_inquiry_rows(inquiries):
