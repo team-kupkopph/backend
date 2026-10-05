@@ -26,6 +26,7 @@ from listings.models import (
     PreferenceKind,
     StageState,
 )
+from listings.representations import adopter_inquiry_row, poster_inquiry_rows
 from listings.serializers import (
     InquiryCreateSerializer,
     ListingCreateSerializer,
@@ -477,6 +478,24 @@ class ListingInquiriesView(APIView):
     contact-exchange moment (AQ1: phones are shared once the poster accepts for screening)."""
     permission_classes = [IsAuthenticated]
 
+    def get(self, request, listing_id):
+        """AD2 · GET /listings/{id}/inquiries — the poster's applicants for one listing, newest
+        first, paginated. ?status=open keeps the ones still waiting on an answer."""
+        listing = AdoptionListing.objects.filter(pk=listing_id).first()
+        if listing is None:
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
+        if listing.posted_by_id != request.user.pk:
+            return Response({"error": {"code": "not_your_listing",
+                                       "message": "Only the poster can see who asked"}}, status=403)
+        qs = (AdoptionInquiry.objects.filter(listing=listing)
+              .select_related("listing", "listing__posted_by", "adopter_account")
+              .prefetch_related("stages").order_by("-created_at"))
+        if request.query_params.get("status") == "open":
+            qs = qs.filter(status=InquiryStatus.ACTIVE)
+        page_items, next_page = _paginate(qs, request)
+        return Response({"results": poster_inquiry_rows(page_items), "next": next_page})
+
     def post(self, request, listing_id):
         listing = AdoptionListing.objects.filter(pk=listing_id).first()
         if listing is None:
@@ -552,29 +571,6 @@ class ListingInquiriesView(APIView):
                          "verified_member": account_is_verified_member(request.user)}, status=201)
 
 
-def _stage_json(key, stage):
-    if stage is None or stage.state == StageState.NOT_STARTED:
-        return {"stage_key": key, "state": StageState.NOT_STARTED, "updated_at": None, "note": None}
-    return {"stage_key": key, "state": stage.state,
-            "updated_at": stage.updated_at.isoformat(), "note": stage.note or None}
-
-
-def _my_inquiry_row(inquiry):
-    """One adopter-facing inquiry: the /me/inquiries row, and the GET /inquiries/{id} body."""
-    stages = {s.stage_key: s for s in inquiry.stages.all()}
-    return {
-        "inquiry_id": str(inquiry.pk),
-        "listing": {"listing_id": str(inquiry.listing_id), "name": inquiry.listing.name,
-                   "species": inquiry.listing.species},
-        "status": inquiry.status,
-        # All six rows exist from the inquiry's first second, so a row's `updated_at`
-        # is only a date the ladder should show once the stage has MOVED — for a
-        # `not_started` stage it is the creation time, and is sent as null. `note`
-        # is null when empty for the same reason: absent, not "".
-        "stages": [_stage_json(key, stages.get(key)) for key in AdoptionStageKey],
-    }
-
-
 class MyInquiriesView(APIView):
     """GET /me/inquiries — US-A4. The adopter's own inquiries, with each stage's state,
     so "both sides see the same state" is literal: this is the same data the poster's
@@ -583,23 +579,29 @@ class MyInquiriesView(APIView):
 
     def get(self, request):
         qs = (AdoptionInquiry.objects.filter(adopter_account=request.user)
-              .select_related("listing").order_by("-created_at"))
+              .select_related("listing", "listing__posted_by", "adopter_account")
+              .prefetch_related("stages").order_by("-created_at"))
         page_items, next_page = _paginate(qs, request)
-        results = [_my_inquiry_row(inquiry) for inquiry in page_items]
+        member = account_is_verified_member(request.user)
+        results = [adopter_inquiry_row(inquiry, verified_member=member) for inquiry in page_items]
         return Response({"results": results, "next": next_page})
 
 
 class InquiryDetailView(APIView):
-    """C25 · one of the caller's own inquiries, by id — the Place request screen used to scan page 1
-    of /me/inquiries and called an older placement "not found"."""
+    """C25 + AD1 · one inquiry, by id, in the caller's tier: the adopter's row for the adopter,
+    the poster's row for the listing's poster, and 404 for everyone else (an inquiry's existence
+    isn't revealed)."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request, inquiry_id):
-        inquiry = (AdoptionInquiry.objects.select_related("listing")
-                   .filter(pk=inquiry_id, adopter_account=request.user).first())
-        if inquiry is None:
-            return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
-        return Response(_my_inquiry_row(inquiry))
+        inquiry = (AdoptionInquiry.objects
+                   .select_related("listing", "listing__posted_by", "adopter_account")
+                   .prefetch_related("stages").filter(pk=inquiry_id).first())
+        if inquiry is not None and inquiry.adopter_account_id == request.user.pk:
+            return Response(adopter_inquiry_row(inquiry))
+        if inquiry is not None and inquiry.listing.posted_by_id == request.user.pk:
+            return Response(poster_inquiry_rows([inquiry])[0])
+        return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
 
 
 class MyPetsView(APIView):
