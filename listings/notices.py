@@ -66,3 +66,29 @@ def inquiry_withdrawn(inquiry, reopened):
     # an individual) until the Applicant screen exists.
     notify(listing.posted_by, "inquiry_withdrawn", title="An applicant withdrew", body=body,
            data=_data(inquiry, poster_is_shelter=listing.posted_by.account_type == "shelter"))
+
+
+def adoption_badge_needed(inquiry):
+    """AQ2 · the poster tried to reserve, and the adopter lacks the Verified Member badge."""
+    listing = inquiry.listing
+    notify(inquiry.adopter_account, "adoption_badge_needed",
+           title=f"One step before you can adopt {_name(listing)}",
+           body=(f"{_poster_name(listing)} is ready to reserve {_name(listing)} for you. "
+                 f"Get your Verified Member badge to continue."),
+           data=_data(inquiry))
+
+
+def adoption_reserved(inquiry):
+    listing = inquiry.listing
+    notify(inquiry.adopter_account, "adoption_reserved",
+           title=f"{_cap(_name(listing))} is reserved for you",
+           body=f"{_poster_name(listing)} is holding {_name(listing)} for you while you arrange the adoption.",
+           data=_data(inquiry))
+
+
+def reservation_released(inquiry):
+    listing = inquiry.listing
+    notify(inquiry.adopter_account, "reservation_released",
+           title=f"{_cap(_name(listing))} is no longer reserved",
+           body=f"{_poster_name(listing)} released the reservation. Your inquiry is still open.",
+           data=_data(inquiry))

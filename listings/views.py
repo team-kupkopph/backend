@@ -404,8 +404,9 @@ class CaseHandoffCancelView(APIView):
                     inquiry.decided_at = now
                     inquiry.ended_by_account = request.user
                     inquiry.end_reason = EndReason.LISTING_WITHDRAWN
+                    inquiry.reserved_at = None
                     inquiry.save(update_fields=["status", "decided_at", "ended_by_account",
-                                                "end_reason", "updated_at"])
+                                                "end_reason", "reserved_at", "updated_at"])
                     notices.listing_withdrawn(listing, inquiry)
                     emit("inquiry_decided", outcome="listing_withdrawn")
                 return Response({"status": "withdrawn", "closed_inquiries": len(active)})

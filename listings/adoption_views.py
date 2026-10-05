@@ -25,6 +25,7 @@ from listings.models import (
 from listings.representations import poster_contact_phone, poster_inquiry_rows
 from listings.stages import set_stage_state
 from listings.views import _locked_inquiry, _no_such_inquiry
+from listings.visibility import account_is_verified_member
 
 
 def _err(code, message, status):
@@ -137,3 +138,69 @@ class WithdrawView(APIView):
                             EndReason.ADOPTER_WITHDREW)
             notices.inquiry_withdrawn(inquiry, reopened)
         return Response({"status": inquiry.status, "end_reason": inquiry.end_reason})
+
+
+class ReserveView(APIView):
+    """AQ4 · POST /inquiries/{id}/reserve — the poster holds the animal for one applicant they have
+    screened. The listing reads Reserved (`pending`) and takes no new inquiries. The other
+    applicants keep waiting; they aren't declined. AQ2 · the adopter must hold the Verified Member
+    badge by now. If they don't, the poster is refused and the adopter is told what's missing."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, inquiry_id):
+        with transaction.atomic():
+            listing, inquiry = _locked_inquiry(inquiry_id)
+            if inquiry is None:
+                return _no_such_inquiry()
+            refusal = _poster_gate(inquiry, request.user)
+            if refusal:
+                return refusal
+            if inquiry.accepted_at is None:
+                return _err("not_screening", "Accept this applicant for screening first", 409)
+            if inquiry.reserved_at is not None:
+                return _err("already_reserved", "This animal is already reserved for them", 409)
+            if listing.status != ListingStatus.AVAILABLE:
+                if listing.status == ListingStatus.PENDING:
+                    return _err("reserved_for_another", "This animal is reserved for someone else", 409)
+                return _err("listing_unavailable", "This animal is no longer listed", 409)
+            if not account_is_verified_member(inquiry.adopter_account):
+                notices.adoption_badge_needed(inquiry)
+                return _err("adopter_badge_required",
+                            "They need a Verified Member badge before you can reserve. We've told them.",
+                            409)
+            inquiry.reserved_at = timezone.now()
+            inquiry.save(update_fields=["reserved_at", "updated_at"])
+            listing.status = ListingStatus.PENDING
+            listing.save(update_fields=["status", "updated_at"])
+            stage = inquiry.stages.get(stage_key=AdoptionStageKey.FINALIZATION)
+            if stage.state == StageState.NOT_STARTED:
+                set_stage_state(stage, StageState.IN_PROGRESS, request.user)
+            notices.adoption_reserved(inquiry)
+        return Response(_poster_row(inquiry))
+
+
+class UnreserveView(APIView):
+    """AQ4 · POST /inquiries/{id}/unreserve — it fell through for now. The applicant stays in the
+    running, the listing goes back on the feed, and the others carry on."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, inquiry_id):
+        with transaction.atomic():
+            listing, inquiry = _locked_inquiry(inquiry_id)
+            if inquiry is None:
+                return _no_such_inquiry()
+            refusal = _poster_gate(inquiry, request.user)
+            if refusal:
+                return refusal
+            if inquiry.reserved_at is None:
+                return _err("not_reserved", "This animal isn't reserved for them", 409)
+            inquiry.reserved_at = None
+            inquiry.save(update_fields=["reserved_at", "updated_at"])
+            if listing.status == ListingStatus.PENDING:
+                listing.status = ListingStatus.AVAILABLE
+                listing.save(update_fields=["status", "updated_at"])
+            stage = inquiry.stages.get(stage_key=AdoptionStageKey.FINALIZATION)
+            if stage.state == StageState.IN_PROGRESS:
+                set_stage_state(stage, StageState.NOT_STARTED, request.user, note="Reservation released")
+            notices.reservation_released(inquiry)
+        return Response(_poster_row(inquiry))

@@ -1,6 +1,6 @@
 from django.urls import path
 
-from listings.adoption_views import RejectView, ScreenView, WithdrawView
+from listings.adoption_views import RejectView, ReserveView, ScreenView, UnreserveView, WithdrawView
 from listings.views import (
     CaseHandoffCancelView,
     CaseListView,
@@ -32,6 +32,8 @@ urlpatterns = [
     path("inquiries/<uuid:inquiry_id>/screen", ScreenView.as_view()),               # AQ1
     path("inquiries/<uuid:inquiry_id>/reject", RejectView.as_view()),               # AD6
     path("inquiries/<uuid:inquiry_id>/withdraw", WithdrawView.as_view()),           # AD6
+    path("inquiries/<uuid:inquiry_id>/reserve", ReserveView.as_view()),             # AQ4
+    path("inquiries/<uuid:inquiry_id>/unreserve", UnreserveView.as_view()),         # AQ4
     path("inquiries/<uuid:inquiry_id>/accept", PlacementDecisionView.as_view(), {"action": "accept"}),
     path("inquiries/<uuid:inquiry_id>/decline", PlacementDecisionView.as_view(), {"action": "decline"}),
     path("cases/<uuid:case_id>/list", CaseListView.as_view()),
