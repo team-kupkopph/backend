@@ -9,9 +9,9 @@ from accounts.factories import AccountFactory
 from accounts.models import Account, AccountStatus
 from accounts.tokens import tokens_for
 from listings.models import AdoptionInquiry, AdoptionListing, AdoptionStage, AdoptionStageHistory
+from listings.visibility import account_is_verified_rescuer
 from notifications.models import Notification
 from shelter.models import ShelterProfile
-from listings.visibility import account_is_verified_rescuer
 from verifications.models import AccountCapability, VerificationRequest
 
 

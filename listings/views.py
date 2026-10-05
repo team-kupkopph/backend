@@ -26,8 +26,7 @@ from listings.models import (
     PreferenceKind,
     StageState,
 )
-from listings.representations import (adopter_inquiry_row, adopter_inquiry_rows,
-                                     poster_inquiry_rows)
+from listings.representations import adopter_inquiry_row, adopter_inquiry_rows, poster_inquiry_rows
 from listings.serializers import (
     InquiryCreateSerializer,
     ListingCreateSerializer,
@@ -35,8 +34,12 @@ from listings.serializers import (
     StageUpdateSerializer,
 )
 from listings.stages import INDIVIDUAL_SKIP_NOTE, INDIVIDUAL_SKIPPED_STAGES, set_stage_state
-from listings.visibility import (account_is_verified_member, account_is_verified_rescuer,
-                                 listing_is_public, public_poster_q)
+from listings.visibility import (
+    account_is_verified_member,
+    account_is_verified_rescuer,
+    listing_is_public,
+    public_poster_q,
+)
 from notifications.service import notify
 from sagip import notices
 from sagip.models import RescueCase, StrayReport, StrayStatus

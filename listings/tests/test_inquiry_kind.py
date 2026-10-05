@@ -5,8 +5,14 @@ from django.utils import timezone
 
 from accounts.factories import AccountFactory
 from listings.kinds import backfill_inquiry_kinds
-from listings.models import (AdoptionInquiry, AdoptionListing, AdoptionStage, AdoptionStageKey,
-                             InquiryKind, StageState)
+from listings.models import (
+    AdoptionInquiry,
+    AdoptionListing,
+    AdoptionStage,
+    AdoptionStageKey,
+    InquiryKind,
+    StageState,
+)
 
 
 def _listing(**kw):
