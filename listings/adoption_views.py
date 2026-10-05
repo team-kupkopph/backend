@@ -15,31 +15,11 @@ from listings import notices
 from listings.models import AdoptionInquiry, AdoptionStageKey, InquiryKind, InquiryStatus, StageState
 from listings.representations import poster_contact_phone, poster_inquiry_rows
 from listings.stages import set_stage_state
-from listings.views import _lock_handoff
+from listings.views import _locked_inquiry, _no_such_inquiry
 
 
 def _err(code, message, status):
     return Response({"error": {"code": code, "message": message}}, status=status)
-
-
-def _no_such_inquiry():
-    return _err("not_found", "No such inquiry", 404)
-
-
-def _locked_inquiry(inquiry_id):
-    """(listing, inquiry), locked in R1 order, or (None, None) if either is gone.
-    Call inside transaction.atomic(). No select_related on the locked read: a join would lock the
-    adopter's account row too."""
-    peek = (AdoptionInquiry.objects.filter(pk=inquiry_id)
-            .values("listing_id", "listing__source_report_id").first())
-    if peek is None:
-        return None, None
-    listing = _lock_handoff(peek["listing_id"], peek["listing__source_report_id"])
-    inquiry = AdoptionInquiry.objects.select_for_update().filter(pk=inquiry_id).first()
-    if listing is None or inquiry is None:
-        return None, None
-    inquiry.listing = listing
-    return listing, inquiry
 
 
 def _poster_gate(inquiry, user):

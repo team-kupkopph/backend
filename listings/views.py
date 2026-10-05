@@ -651,16 +651,9 @@ class InquiryStageView(APIView):
     def post(self, request, inquiry_id, stage_key):
         # AD3 · locked and re-checked like every other inquiry write (R1 order).
         with transaction.atomic():
-            peek = (AdoptionInquiry.objects.filter(pk=inquiry_id)
-                    .values("listing_id", "listing__source_report_id").first())
-            if peek is None:
-                return Response({"error": {"code": "not_found", "message": "No such inquiry"}},
-                                status=404)
-            listing = _lock_handoff(peek["listing_id"], peek["listing__source_report_id"])
-            inquiry = AdoptionInquiry.objects.select_for_update().filter(pk=inquiry_id).first()
-            if inquiry is None or listing is None:
-                return Response({"error": {"code": "not_found", "message": "No such inquiry"}},
-                                status=404)
+            listing, inquiry = _locked_inquiry(inquiry_id)
+            if inquiry is None:
+                return _no_such_inquiry()
             if listing.posted_by_id != request.user.pk:
                 return Response({"error": {"code": "not_your_listing",
                                            "message": "Only the poster can advance this inquiry"}},
@@ -744,6 +737,22 @@ def _lock_handoff(listing_id, source_report_id):
     if listing is not None and report is not None:
         listing.source_report = report
     return listing
+
+
+def _locked_inquiry(inquiry_id):
+    """(listing, inquiry), locked in R1 order, or (None, None) if either is gone.
+    Call inside transaction.atomic(). No select_related on the locked read: a join would lock the
+    adopter's account row too."""
+    peek = (AdoptionInquiry.objects.filter(pk=inquiry_id)
+            .values("listing_id", "listing__source_report_id").first())
+    if peek is None:
+        return None, None
+    listing = _lock_handoff(peek["listing_id"], peek["listing__source_report_id"])
+    inquiry = AdoptionInquiry.objects.select_for_update().filter(pk=inquiry_id).first()
+    if listing is None or inquiry is None:
+        return None, None
+    inquiry.listing = listing
+    return listing, inquiry
 
 
 class PlacementDecisionView(APIView):
