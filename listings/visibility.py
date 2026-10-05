@@ -22,3 +22,10 @@ def account_is_verified_rescuer(account):
     lockstep — the same identity that may list may claim."""
     return (account.capabilities.filter(capability="rescuer", status="approved").exists()
             or account.verifications.filter(type="shelter_org", status="approved").exists())
+
+
+def account_is_verified_member(account):
+    """AQ2 · the Verified Member badge alone (an approved `rescuer` capability), which Reserve and
+    Complete require of an adopter. Narrower than account_is_verified_rescuer: a shelter can't
+    adopt (decision 3)."""
+    return account.capabilities.filter(capability="rescuer", status="approved").exists()

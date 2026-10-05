@@ -93,3 +93,16 @@ def test_place_over_the_fee_cap_422_nothing_created():
     assert res.status_code == 422 and res.json()["error"]["code"] == "fee_over_cap"
     assert not AdoptionListing.objects.filter(source_report=case.report).exists()
     assert not AdoptionInquiry.objects.filter(adopter_account=recipient).exists()
+
+
+@pytest.mark.django_db
+def test_a_placement_pushes_placement_offered_not_inquiry_received():
+    """AD2 · the two directions get two types, so the app can route each without guessing."""
+    from notifications.models import Notification
+    rescuer, recipient = _verified(AccountFactory()), _verified(AccountFactory())
+    case = _safe_case(rescuer)
+    res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/place",
+                           {"recipient_email": recipient.email, "name": "Bruno"}, format="json")
+    assert res.status_code == 201
+    assert Notification.objects.filter(account=recipient, type="placement_offered").count() == 1
+    assert not Notification.objects.filter(type="inquiry_received").exists()

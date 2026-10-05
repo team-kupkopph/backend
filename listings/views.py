@@ -26,15 +26,14 @@ from listings.models import (
     PreferenceKind,
     StageState,
 )
-from listings.permissions import IsVerifiedMember
 from listings.serializers import (
     InquiryCreateSerializer,
     ListingCreateSerializer,
     ListingPatchSerializer,
     StageUpdateSerializer,
 )
-from listings.stages import set_stage_state
-from listings.visibility import account_is_verified_rescuer, public_poster_q
+from listings.stages import INDIVIDUAL_SKIP_NOTE, INDIVIDUAL_SKIPPED_STAGES, set_stage_state
+from listings.visibility import account_is_verified_member, account_is_verified_rescuer, public_poster_q
 from notifications.service import notify
 from sagip import notices
 from sagip.models import RescueCase, StrayReport, StrayStatus
@@ -316,7 +315,7 @@ class CasePlaceView(APIView):
             for key in AdoptionStageKey:
                 stage = AdoptionStage.objects.create(inquiry=inquiry, stage_key=key)
                 set_stage_state(stage, StageState.SKIPPED, request.user, note="direct placement")
-            notify(recipient, "inquiry_received", title="You've been offered a pet",
+            notify(recipient, "placement_offered", title="You've been offered a pet",
                   body=f"{request.user.display_name} wants to place an animal with you.",
                   data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
         return Response({"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)}, status=201)
@@ -465,10 +464,11 @@ class ListingDetailView(APIView):
 
 
 class ListingInquiriesView(APIView):
-    """POST /listings/{id}/inquiries — US-A4. Only a Verified Member with a verified
-    phone may inquire; the phone check exists because the inquiry is the first
-    contact-exchange moment ("verify-phone ships with its first trigger")."""
-    permission_classes = [IsVerifiedMember]
+    """POST /listings/{id}/inquiries — US-A4, gate per AQ2 (2026-10-05): any signed-in person
+    with a verified phone may ask; the Verified Member badge is checked at Reserve. A shelter
+    can't adopt (decision 3). The phone check exists because the inquiry leads to the
+    contact-exchange moment (AQ1: phones are shared once the poster accepts for screening)."""
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, listing_id):
         listing = AdoptionListing.objects.filter(pk=listing_id).first()
@@ -478,6 +478,10 @@ class ListingInquiriesView(APIView):
         if listing.status == ListingStatus.DRAFT:          # D7 · not public yet
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
+        if request.user.account_type == "shelter":
+            return Response({"error": {"code": "shelter_cannot_adopt",
+                                       "message": "Shelters can't adopt through Kupkop"}},
+                            status=403)
         if request.user.phone_verified_at is None:
             return Response({"error": {"code": "phone_unverified",
                                        "message": "Verify your phone before inquiring"}},
@@ -515,15 +519,23 @@ class ListingInquiriesView(APIView):
                 # silently defaulted, so the history is complete from the first row.
                 inquiry_stage = next(st for st in stages if st.stage_key == AdoptionStageKey.INQUIRY)
                 set_stage_state(inquiry_stage, StageState.DONE, request.user)
+                if listing.posted_by.account_type != "shelter":           # AQ5
+                    for st in stages:
+                        if st.stage_key in INDIVIDUAL_SKIPPED_STAGES:
+                            set_stage_state(st, StageState.SKIPPED, None, note=INDIVIDUAL_SKIP_NOTE)
+                # poster_is_shelter drives the app's interim routing of this push (a shelter
+                # opens Requests, an individual the listing) until the Applicant screen exists.
                 notify(listing.posted_by, "inquiry_received",
                       title="Someone inquired about your listing",
                       body=f"{request.user.display_name} is interested in {listing.name}.",
-                      data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
+                      data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk),
+                            "poster_is_shelter": listing.posted_by.account_type == "shelter"})
         except IntegrityError:
             return Response({"error": {"code": "already_inquired",
                                        "message": "You already inquired on this listing"}},
                             status=409)
-        return Response({"inquiry_id": str(inquiry.pk), "status": inquiry.status}, status=201)
+        return Response({"inquiry_id": str(inquiry.pk), "status": inquiry.status,
+                         "verified_member": account_is_verified_member(request.user)}, status=201)
 
 
 def _stage_json(key, stage):
