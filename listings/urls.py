@@ -1,5 +1,6 @@
 from django.urls import path
 
+from listings.adoption_views import ScreenView
 from listings.views import (
     CaseHandoffCancelView,
     CaseListView,
@@ -28,6 +29,7 @@ urlpatterns = [
     path("me/shortlist/<uuid:listing_id>", ShortlistItemView.as_view()),
     path("inquiries/<uuid:inquiry_id>", InquiryDetailView.as_view()),
     path("inquiries/<uuid:inquiry_id>/stages/<str:stage_key>", InquiryStageView.as_view()),
+    path("inquiries/<uuid:inquiry_id>/screen", ScreenView.as_view()),               # AQ1
     path("inquiries/<uuid:inquiry_id>/accept", PlacementDecisionView.as_view(), {"action": "accept"}),
     path("inquiries/<uuid:inquiry_id>/decline", PlacementDecisionView.as_view(), {"action": "decline"}),
     path("cases/<uuid:case_id>/list", CaseListView.as_view()),

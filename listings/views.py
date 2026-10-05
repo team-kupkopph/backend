@@ -621,32 +621,62 @@ class MyPetsView(APIView):
         return Response({"results": [_repr(p) for p in pets]})
 
 
+def _stage_move_refusal(inquiry, stage_key, state):
+    """AD3 · a stage moves only on an open, public inquiry the poster has accepted for screening.
+    The inquiry step is done the moment someone asks, and finalization is finished by Complete
+    (which does everything else an adoption needs), never by a bare stage move."""
+    def err(code, message):
+        return Response({"error": {"code": code, "message": message}}, status=409)
+    if inquiry.kind != InquiryKind.INQUIRY:
+        return err("is_placement", "A placement has no stages to move")
+    if inquiry.status != InquiryStatus.ACTIVE:
+        return err("inquiry_closed", "This inquiry is already closed")
+    if inquiry.accepted_at is None:
+        return err("not_screening", "Accept this applicant for screening first")
+    if stage_key == AdoptionStageKey.INQUIRY:
+        return err("stage_locked", "The inquiry step is done when they ask")
+    if stage_key == AdoptionStageKey.FINALIZATION and state == StageState.DONE:
+        return err("use_complete", "Finish the adoption with Complete")
+    return None
+
+
 class InquiryStageView(APIView):
     """POST /inquiries/{id}/stages/{stage_key} — US-A4. Only the listing's poster may
     advance a stage."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, inquiry_id, stage_key):
-        inquiry = AdoptionInquiry.objects.select_related("listing").filter(pk=inquiry_id).first()
-        if inquiry is None:
-            return Response({"error": {"code": "not_found", "message": "No such inquiry"}},
-                            status=404)
-        if inquiry.listing.posted_by_id != request.user.pk:
-            return Response({"error": {"code": "not_your_listing",
-                                       "message": "Only the poster can advance this inquiry"}},
-                            status=403)
-        stage = inquiry.stages.filter(stage_key=stage_key).first()
-        if stage is None:
-            return Response({"error": {"code": "not_found", "message": "No such stage"}},
-                            status=404)
-        s = StageUpdateSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
-        set_stage_state(stage, s.validated_data["state"], request.user,
-                        note=s.validated_data.get("note", ""))
-        notify(inquiry.adopter_account, "stage_advanced",
-              title="Your adoption inquiry moved forward",
-              body=f"{stage_key.replace('_', ' ').title()} is now {s.validated_data['state'].replace('_', ' ')}.",
-              data={"inquiry_id": str(inquiry.pk), "stage_key": stage_key})
+        # AD3 · locked and re-checked like every other inquiry write (R1 order).
+        with transaction.atomic():
+            peek = (AdoptionInquiry.objects.filter(pk=inquiry_id)
+                    .values("listing_id", "listing__source_report_id").first())
+            if peek is None:
+                return Response({"error": {"code": "not_found", "message": "No such inquiry"}},
+                                status=404)
+            listing = _lock_handoff(peek["listing_id"], peek["listing__source_report_id"])
+            inquiry = AdoptionInquiry.objects.select_for_update().filter(pk=inquiry_id).first()
+            if inquiry is None or listing is None:
+                return Response({"error": {"code": "not_found", "message": "No such inquiry"}},
+                                status=404)
+            if listing.posted_by_id != request.user.pk:
+                return Response({"error": {"code": "not_your_listing",
+                                           "message": "Only the poster can advance this inquiry"}},
+                                status=403)
+            stage = inquiry.stages.filter(stage_key=stage_key).first()
+            if stage is None:
+                return Response({"error": {"code": "not_found", "message": "No such stage"}},
+                                status=404)
+            s = StageUpdateSerializer(data=request.data)
+            s.is_valid(raise_exception=True)
+            state = s.validated_data["state"]
+            refusal = _stage_move_refusal(inquiry, stage_key, state)
+            if refusal:
+                return refusal
+            set_stage_state(stage, state, request.user, note=s.validated_data.get("note", ""))
+            notify(inquiry.adopter_account, "stage_advanced",
+                   title="Your adoption inquiry moved forward",
+                   body=f"{stage_key.replace('_', ' ').title()} is now {state.replace('_', ' ')}.",
+                   data={"inquiry_id": str(inquiry.pk), "stage_key": stage_key})
         return Response({"stage_key": stage_key, "state": stage.state})
 
 

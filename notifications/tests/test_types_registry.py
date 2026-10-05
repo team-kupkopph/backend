@@ -8,7 +8,7 @@ from notifications.types import REGISTRY, is_registered
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CALL_SITE_FILES = ["verifications/review.py", "sagip/sweeps.py", "sagip/views.py",
-                   "listings/views.py"]
+                   "listings/views.py", "listings/notices.py"]
 
 
 def _types_called_in_source():

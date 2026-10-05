@@ -252,6 +252,7 @@ def test_the_poster_can_advance_a_stage(client):
     listing = _listing(poster)
     member = _verified_member()
     inquiry_id = _inquire(client, listing, member).json()["inquiry_id"]
+    AdoptionInquiry.objects.filter(pk=inquiry_id).update(accepted_at=timezone.now())   # AD3
 
     res = client.post(f"/api/v1/inquiries/{inquiry_id}/stages/application",
                       {"state": "done", "note": "Form looks good"},
@@ -281,6 +282,7 @@ def test_advancing_a_stage_notifies_the_adopter(client):
     listing = _listing(poster)
     member = _verified_member()
     inquiry_id = _inquire(client, listing, member).json()["inquiry_id"]
+    AdoptionInquiry.objects.filter(pk=inquiry_id).update(accepted_at=timezone.now())   # AD3
 
     client.post(f"/api/v1/inquiries/{inquiry_id}/stages/home_check", {"state": "in_progress"},
                content_type="application/json", **_hdr(poster))
@@ -309,6 +311,7 @@ def test_an_invalid_state_value_is_rejected(client):
     poster = AccountFactory()
     listing = _listing(poster)
     inquiry_id = _inquire(client, listing, _verified_member()).json()["inquiry_id"]
+    AdoptionInquiry.objects.filter(pk=inquiry_id).update(accepted_at=timezone.now())   # AD3
     res = client.post(f"/api/v1/inquiries/{inquiry_id}/stages/application",
                       {"state": "passed"},  # not a real StageState value
                       content_type="application/json", **_hdr(poster))
