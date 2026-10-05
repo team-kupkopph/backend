@@ -76,7 +76,8 @@ class _Fixture:
 
         self.placed_listing = _listing(self.other_poster, name="Kalabaw")
         self.placement = AdoptionInquiry.objects.create(
-            listing=self.placed_listing, adopter_account=self.shelter, status=InquiryStatus.ACTIVE)
+            listing=self.placed_listing, adopter_account=self.shelter, status=InquiryStatus.ACTIVE,
+            kind="placement")
         _skip_all_stages(self.placement)
 
 

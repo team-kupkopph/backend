@@ -363,3 +363,18 @@ def test_a_take_back_moves_updated_at_on_the_listing_and_every_closed_inquiry():
     AdoptionListing.objects.filter(pk=did).update(updated_at=old)
     assert _cancel(rescuer, drafted).status_code == 200
     assert AdoptionListing.objects.get(pk=did).updated_at > old + timezone.timedelta(days=2)
+
+
+@pytest.mark.django_db
+def test_a_reserved_public_listing_is_not_mistaken_for_a_placement():
+    """AD22 · a public listing reserved for one applicant is `pending` with one active inquiry —
+    exactly what a placement looked like. Take-back must ask first (D15), not withdraw it as a
+    placement."""
+    rescuer = _verified(AccountFactory()); case = _safe_case(rescuer)
+    lid = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {}, format="json").json()["listing_id"]
+    AdoptionListing.objects.filter(pk=lid).update(status=ListingStatus.PENDING)
+    AdoptionInquiry.objects.create(listing_id=lid, adopter_account=AccountFactory(),
+                                   status=InquiryStatus.ACTIVE, reserved_at=timezone.now())
+    res = _cancel(rescuer, case)
+    assert res.status_code == 409 and res.json()["error"]["code"] == "has_active_inquiries"
+    assert not Notification.objects.filter(type="placement_withdrawn").exists()

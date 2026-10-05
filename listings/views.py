@@ -17,6 +17,7 @@ from listings.models import (
     AdoptionListingPhoto,
     AdoptionStage,
     AdoptionStageKey,
+    InquiryKind,
     InquiryStatus,
     ListingPreference,
     ListingStatus,
@@ -310,6 +311,7 @@ class CasePlaceView(APIView):
                 city=request.data.get("city") or case.report.city or "",
                 adoption_fee=fee_dec, status=ListingStatus.PENDING)
             inquiry = AdoptionInquiry.objects.create(listing=listing, adopter_account=recipient,
+                                                     kind=InquiryKind.PLACEMENT,
                                                      status=InquiryStatus.ACTIVE)
             for key in AdoptionStageKey:
                 stage = AdoptionStage.objects.create(inquiry=inquiry, stage_key=key)
@@ -370,7 +372,9 @@ class CaseHandoffCancelView(APIView):
             active = list(AdoptionInquiry.objects.select_for_update()
                           .filter(listing=listing, status=InquiryStatus.ACTIVE))
             now = timezone.now()
-            if listing.status == ListingStatus.PENDING and len(active) == 1:
+            # AD22 · by kind, not by shape: a public listing reserved for one applicant is also
+            # `pending` with one active inquiry, and must take the D15 two-step below.
+            if len(active) == 1 and active[0].kind == InquiryKind.PLACEMENT:
                 _withdraw_placement(active[0], now)
             elif active:
                 # D15 · two-step: without the flag the rescuer is told how many people asked and
@@ -717,8 +721,7 @@ class PlacementDecisionView(APIView):
             if inq is None or listing is None:      # deleted between the peek and the locks
                 return _no_such_inquiry()
             inq.listing = listing
-            states = set(AdoptionStage.objects.filter(inquiry=inq).values_list("state", flat=True))
-            if states != {StageState.SKIPPED}:
+            if inq.kind != InquiryKind.PLACEMENT:          # AD22
                 return Response({"error": {"code": "not_a_placement",
                                            "message": "This isn't a direct placement"}},
                                 status=409)

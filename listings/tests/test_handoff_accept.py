@@ -13,7 +13,8 @@ def _placement(recipient):
     poster = AccountFactory()
     listing = AdoptionListing.objects.create(posted_by=poster, species="dog", name="Rex",
         city="Manila", adoption_fee="0", status="pending")
-    inq = AdoptionInquiry.objects.create(listing=listing, adopter_account=recipient, status="active")
+    inq = AdoptionInquiry.objects.create(listing=listing, adopter_account=recipient, status="active",
+                                         kind="placement")
     for key in AdoptionStageKey:
         AdoptionStage.objects.create(inquiry=inq, stage_key=key, state=StageState.SKIPPED)
     return listing, inq
