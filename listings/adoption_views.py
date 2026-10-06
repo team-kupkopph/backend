@@ -178,6 +178,8 @@ class ReserveView(APIView):
             listing.save(update_fields=["status", "updated_at"])
             stage = inquiry.stages.get(stage_key=AdoptionStageKey.FINALIZATION)
             if stage.state == StageState.NOT_STARTED:
+                # §5.3 · a re-Reserve drops "Reservation released".
+                stage.note = ""
                 set_stage_state(stage, StageState.IN_PROGRESS, request.user)
             notices.adoption_reserved(inquiry)
         return Response(_poster_row(inquiry))

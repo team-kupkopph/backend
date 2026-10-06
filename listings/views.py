@@ -690,7 +690,13 @@ class InquiryStageView(APIView):
             refusal = _stage_move_refusal(inquiry, stage_key, state)
             if refusal:
                 return refusal
-            set_stage_state(stage, state, request.user, note=s.validated_data.get("note", ""))
+            note = s.validated_data.get("note", "")
+            if not note:
+                # Spec 2026-10-06 §5.3 · a note describes the move it was written with; a move
+                # without one clears it, so a system note ("Not needed when adopting from an
+                # individual.") never outlives the step it explained.
+                stage.note = ""
+            set_stage_state(stage, state, request.user, note=note)
             notify(inquiry.adopter_account, "stage_advanced",
                    title="Your adoption inquiry moved forward",
                    body=f"{stage_key.replace('_', ' ').title()} is now {state.replace('_', ' ')}.",
