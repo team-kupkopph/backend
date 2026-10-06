@@ -17,6 +17,8 @@ from listings.models import (
     AdoptionListingPhoto,
     AdoptionStage,
     AdoptionStageKey,
+    EndReason,
+    InquiryKind,
     InquiryStatus,
     ListingPreference,
     ListingStatus,
@@ -25,15 +27,20 @@ from listings.models import (
     PreferenceKind,
     StageState,
 )
-from listings.permissions import IsVerifiedMember
+from listings.representations import adopter_inquiry_row, adopter_inquiry_rows, poster_inquiry_rows
 from listings.serializers import (
     InquiryCreateSerializer,
     ListingCreateSerializer,
     ListingPatchSerializer,
     StageUpdateSerializer,
 )
-from listings.stages import set_stage_state
-from listings.visibility import account_is_verified_rescuer, public_poster_q
+from listings.stages import INDIVIDUAL_SKIP_NOTE, INDIVIDUAL_SKIPPED_STAGES, set_stage_state
+from listings.visibility import (
+    account_is_verified_member,
+    account_is_verified_rescuer,
+    listing_is_public,
+    public_poster_q,
+)
 from notifications.service import notify
 from sagip import notices
 from sagip.models import RescueCase, StrayReport, StrayStatus
@@ -310,11 +317,12 @@ class CasePlaceView(APIView):
                 city=request.data.get("city") or case.report.city or "",
                 adoption_fee=fee_dec, status=ListingStatus.PENDING)
             inquiry = AdoptionInquiry.objects.create(listing=listing, adopter_account=recipient,
+                                                     kind=InquiryKind.PLACEMENT,
                                                      status=InquiryStatus.ACTIVE)
             for key in AdoptionStageKey:
                 stage = AdoptionStage.objects.create(inquiry=inquiry, stage_key=key)
                 set_stage_state(stage, StageState.SKIPPED, request.user, note="direct placement")
-            notify(recipient, "inquiry_received", title="You've been offered a pet",
+            notify(recipient, "placement_offered", title="You've been offered a pet",
                   body=f"{request.user.display_name} wants to place an animal with you.",
                   data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
         return Response({"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)}, status=201)
@@ -326,7 +334,10 @@ def _withdraw_placement(inquiry, now, reason="cancelled"):
     (`reason`: "cancelled" by the rescuer, or "expired" by D11's sweep)."""
     inquiry.status = InquiryStatus.WITHDRAWN
     inquiry.decided_at = now
-    inquiry.save(update_fields=["status", "decided_at"])
+    inquiry.ended_by_account = inquiry.listing.posted_by if reason == "cancelled" else None
+    inquiry.end_reason = (EndReason.PLACEMENT_EXPIRED if reason == "expired"
+                          else EndReason.PLACEMENT_CANCELLED)
+    inquiry.save(update_fields=["status", "decided_at", "ended_by_account", "end_reason"])
     inquiry.listing.status = ListingStatus.WITHDRAWN
     inquiry.listing.save(update_fields=["status"])
     notices.placement_withdrawn(inquiry.listing, inquiry, reason=reason)
@@ -370,7 +381,9 @@ class CaseHandoffCancelView(APIView):
             active = list(AdoptionInquiry.objects.select_for_update()
                           .filter(listing=listing, status=InquiryStatus.ACTIVE))
             now = timezone.now()
-            if listing.status == ListingStatus.PENDING and len(active) == 1:
+            # AD22 · by kind, not by shape: a public listing reserved for one applicant is also
+            # `pending` with one active inquiry, and must take the D15 two-step below.
+            if len(active) == 1 and active[0].kind == InquiryKind.PLACEMENT:
                 _withdraw_placement(active[0], now)
             elif active:
                 # D15 · two-step: without the flag the rescuer is told how many people asked and
@@ -389,7 +402,11 @@ class CaseHandoffCancelView(APIView):
                 for inquiry in active:
                     inquiry.status = InquiryStatus.WITHDRAWN
                     inquiry.decided_at = now
-                    inquiry.save(update_fields=["status", "decided_at", "updated_at"])
+                    inquiry.ended_by_account = request.user
+                    inquiry.end_reason = EndReason.LISTING_WITHDRAWN
+                    inquiry.reserved_at = None
+                    inquiry.save(update_fields=["status", "decided_at", "ended_by_account",
+                                                "end_reason", "reserved_at", "updated_at"])
                     notices.listing_withdrawn(listing, inquiry)
                     emit("inquiry_decided", outcome="listing_withdrawn")
                 return Response({"status": "withdrawn", "closed_inquiries": len(active)})
@@ -413,6 +430,12 @@ class ListingDetailView(APIView):
                             status=404)
         # D7 · a draft is private to its poster — to anyone else it doesn't exist yet.
         if listing.status == ListingStatus.DRAFT and listing.posted_by_id != getattr(request.user, "pk", None):
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
+        # AD16 · an unverified or deleted poster's listing isn't public by link either; the poster
+        # still reads their own (the edit form and the draft flow load it here).
+        if (listing.posted_by_id != getattr(request.user, "pk", None)
+                and not listing_is_public(listing)):
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
         return Response({
@@ -461,10 +484,33 @@ class ListingDetailView(APIView):
 
 
 class ListingInquiriesView(APIView):
-    """POST /listings/{id}/inquiries — US-A4. Only a Verified Member with a verified
-    phone may inquire; the phone check exists because the inquiry is the first
-    contact-exchange moment ("verify-phone ships with its first trigger")."""
-    permission_classes = [IsVerifiedMember]
+    """POST /listings/{id}/inquiries — US-A4, gate per AQ2 (2026-10-05): any signed-in person
+    with a verified phone may ask; the Verified Member badge is checked at Reserve. A shelter
+    can't adopt (decision 3). The phone check exists because the inquiry leads to the
+    contact-exchange moment (AQ1: phones are shared once the poster accepts for screening)."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, listing_id):
+        """AD2 · GET /listings/{id}/inquiries — the poster's applicants for one listing, newest
+        first, paginated. ?status=open keeps the ones still waiting on an answer."""
+        listing = AdoptionListing.objects.filter(pk=listing_id).first()
+        if listing is None:
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
+        if listing.posted_by_id != request.user.pk:
+            # A draft or an AD16-hidden listing doesn't exist to a stranger: don't confirm it.
+            if listing.status == ListingStatus.DRAFT or not listing_is_public(listing):
+                return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                                status=404)
+            return Response({"error": {"code": "not_your_listing",
+                                       "message": "Only the poster can see who asked"}}, status=403)
+        qs = (AdoptionInquiry.objects.filter(listing=listing)
+              .select_related("listing", "listing__posted_by", "adopter_account")
+              .prefetch_related("stages").order_by("-created_at"))
+        if request.query_params.get("status") == "open":
+            qs = qs.filter(status=InquiryStatus.ACTIVE)
+        page_items, next_page = _paginate(qs, request)
+        return Response({"results": poster_inquiry_rows(page_items), "next": next_page})
 
     def post(self, request, listing_id):
         listing = AdoptionListing.objects.filter(pk=listing_id).first()
@@ -474,6 +520,17 @@ class ListingInquiriesView(APIView):
         if listing.status == ListingStatus.DRAFT:          # D7 · not public yet
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
+        if not listing_is_public(listing):                  # AD16
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
+        if listing.posted_by_id == request.user.pk:         # AD13
+            return Response({"error": {"code": "own_listing",
+                                       "message": "You can't inquire on your own listing"}},
+                            status=422)
+        if request.user.account_type == "shelter":
+            return Response({"error": {"code": "shelter_cannot_adopt",
+                                       "message": "Shelters can't adopt through Kupkop"}},
+                            status=403)
         if request.user.phone_verified_at is None:
             return Response({"error": {"code": "phone_unverified",
                                        "message": "Verify your phone before inquiring"}},
@@ -511,38 +568,23 @@ class ListingInquiriesView(APIView):
                 # silently defaulted, so the history is complete from the first row.
                 inquiry_stage = next(st for st in stages if st.stage_key == AdoptionStageKey.INQUIRY)
                 set_stage_state(inquiry_stage, StageState.DONE, request.user)
+                if listing.posted_by.account_type != "shelter":           # AQ5
+                    for st in stages:
+                        if st.stage_key in INDIVIDUAL_SKIPPED_STAGES:
+                            set_stage_state(st, StageState.SKIPPED, None, note=INDIVIDUAL_SKIP_NOTE)
+                # poster_is_shelter drives the app's interim routing of this push (a shelter
+                # opens Requests, an individual the listing) until the Applicant screen exists.
                 notify(listing.posted_by, "inquiry_received",
                       title="Someone inquired about your listing",
                       body=f"{request.user.display_name} is interested in {listing.name}.",
-                      data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk)})
+                      data={"listing_id": str(listing.pk), "inquiry_id": str(inquiry.pk),
+                            "poster_is_shelter": listing.posted_by.account_type == "shelter"})
         except IntegrityError:
             return Response({"error": {"code": "already_inquired",
                                        "message": "You already inquired on this listing"}},
                             status=409)
-        return Response({"inquiry_id": str(inquiry.pk), "status": inquiry.status}, status=201)
-
-
-def _stage_json(key, stage):
-    if stage is None or stage.state == StageState.NOT_STARTED:
-        return {"stage_key": key, "state": StageState.NOT_STARTED, "updated_at": None, "note": None}
-    return {"stage_key": key, "state": stage.state,
-            "updated_at": stage.updated_at.isoformat(), "note": stage.note or None}
-
-
-def _my_inquiry_row(inquiry):
-    """One adopter-facing inquiry: the /me/inquiries row, and the GET /inquiries/{id} body."""
-    stages = {s.stage_key: s for s in inquiry.stages.all()}
-    return {
-        "inquiry_id": str(inquiry.pk),
-        "listing": {"listing_id": str(inquiry.listing_id), "name": inquiry.listing.name,
-                   "species": inquiry.listing.species},
-        "status": inquiry.status,
-        # All six rows exist from the inquiry's first second, so a row's `updated_at`
-        # is only a date the ladder should show once the stage has MOVED — for a
-        # `not_started` stage it is the creation time, and is sent as null. `note`
-        # is null when empty for the same reason: absent, not "".
-        "stages": [_stage_json(key, stages.get(key)) for key in AdoptionStageKey],
-    }
+        return Response({"inquiry_id": str(inquiry.pk), "status": inquiry.status,
+                         "verified_member": account_is_verified_member(request.user)}, status=201)
 
 
 class MyInquiriesView(APIView):
@@ -553,23 +595,29 @@ class MyInquiriesView(APIView):
 
     def get(self, request):
         qs = (AdoptionInquiry.objects.filter(adopter_account=request.user)
-              .select_related("listing").order_by("-created_at"))
+              .select_related("listing", "listing__posted_by", "adopter_account")
+              .prefetch_related("stages").order_by("-created_at"))
         page_items, next_page = _paginate(qs, request)
-        results = [_my_inquiry_row(inquiry) for inquiry in page_items]
+        member = account_is_verified_member(request.user)
+        results = adopter_inquiry_rows(page_items, verified_member=member)
         return Response({"results": results, "next": next_page})
 
 
 class InquiryDetailView(APIView):
-    """C25 · one of the caller's own inquiries, by id — the Place request screen used to scan page 1
-    of /me/inquiries and called an older placement "not found"."""
+    """C25 + AD1 · one inquiry, by id, in the caller's tier: the adopter's row for the adopter,
+    the poster's row for the listing's poster, and 404 for everyone else (an inquiry's existence
+    isn't revealed)."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request, inquiry_id):
-        inquiry = (AdoptionInquiry.objects.select_related("listing")
-                   .filter(pk=inquiry_id, adopter_account=request.user).first())
-        if inquiry is None:
-            return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
-        return Response(_my_inquiry_row(inquiry))
+        inquiry = (AdoptionInquiry.objects
+                   .select_related("listing", "listing__posted_by", "adopter_account")
+                   .prefetch_related("stages").filter(pk=inquiry_id).first())
+        if inquiry is not None and inquiry.adopter_account_id == request.user.pk:
+            return Response(adopter_inquiry_row(inquiry))
+        if inquiry is not None and inquiry.listing.posted_by_id == request.user.pk:
+            return Response(poster_inquiry_rows([inquiry])[0])
+        return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
 
 
 class MyPetsView(APIView):
@@ -588,32 +636,55 @@ class MyPetsView(APIView):
         return Response({"results": [_repr(p) for p in pets]})
 
 
+def _stage_move_refusal(inquiry, stage_key, state):
+    """AD3 · a stage moves only on an open, public inquiry the poster has accepted for screening.
+    The inquiry step is done the moment someone asks, and finalization is finished by Complete
+    (which does everything else an adoption needs), never by a bare stage move."""
+    def err(code, message):
+        return Response({"error": {"code": code, "message": message}}, status=409)
+    if inquiry.kind != InquiryKind.INQUIRY:
+        return err("is_placement", "A placement has no stages to move")
+    if inquiry.status != InquiryStatus.ACTIVE:
+        return err("inquiry_closed", "This inquiry is already closed")
+    if inquiry.accepted_at is None:
+        return err("not_screening", "Accept this applicant for screening first")
+    if stage_key == AdoptionStageKey.INQUIRY:
+        return err("stage_locked", "The inquiry step is done when they ask")
+    if stage_key == AdoptionStageKey.FINALIZATION and state == StageState.DONE:
+        return err("use_complete", "Finish the adoption with Complete")
+    return None
+
+
 class InquiryStageView(APIView):
     """POST /inquiries/{id}/stages/{stage_key} — US-A4. Only the listing's poster may
     advance a stage."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, inquiry_id, stage_key):
-        inquiry = AdoptionInquiry.objects.select_related("listing").filter(pk=inquiry_id).first()
-        if inquiry is None:
-            return Response({"error": {"code": "not_found", "message": "No such inquiry"}},
-                            status=404)
-        if inquiry.listing.posted_by_id != request.user.pk:
-            return Response({"error": {"code": "not_your_listing",
-                                       "message": "Only the poster can advance this inquiry"}},
-                            status=403)
-        stage = inquiry.stages.filter(stage_key=stage_key).first()
-        if stage is None:
-            return Response({"error": {"code": "not_found", "message": "No such stage"}},
-                            status=404)
-        s = StageUpdateSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
-        set_stage_state(stage, s.validated_data["state"], request.user,
-                        note=s.validated_data.get("note", ""))
-        notify(inquiry.adopter_account, "stage_advanced",
-              title="Your adoption inquiry moved forward",
-              body=f"{stage_key.replace('_', ' ').title()} is now {s.validated_data['state'].replace('_', ' ')}.",
-              data={"inquiry_id": str(inquiry.pk), "stage_key": stage_key})
+        # AD3 · locked and re-checked like every other inquiry write (R1 order).
+        with transaction.atomic():
+            listing, inquiry = _locked_inquiry(inquiry_id)
+            if inquiry is None:
+                return _no_such_inquiry()
+            if listing.posted_by_id != request.user.pk:
+                return Response({"error": {"code": "not_your_listing",
+                                           "message": "Only the poster can advance this inquiry"}},
+                                status=403)
+            stage = inquiry.stages.filter(stage_key=stage_key).first()
+            if stage is None:
+                return Response({"error": {"code": "not_found", "message": "No such stage"}},
+                                status=404)
+            s = StageUpdateSerializer(data=request.data)
+            s.is_valid(raise_exception=True)
+            state = s.validated_data["state"]
+            refusal = _stage_move_refusal(inquiry, stage_key, state)
+            if refusal:
+                return refusal
+            set_stage_state(stage, state, request.user, note=s.validated_data.get("note", ""))
+            notify(inquiry.adopter_account, "stage_advanced",
+                   title="Your adoption inquiry moved forward",
+                   body=f"{stage_key.replace('_', ' ').title()} is now {state.replace('_', ' ')}.",
+                   data={"inquiry_id": str(inquiry.pk), "stage_key": stage_key})
         return Response({"stage_key": stage_key, "state": stage.state})
 
 
@@ -680,6 +751,31 @@ def _lock_handoff(listing_id, source_report_id):
     return listing
 
 
+def _locked_inquiry(inquiry_id):
+    """(listing, inquiry), locked in R1 order, or (None, None) if either is gone.
+    Call inside transaction.atomic(). No select_related on the locked read: a join would lock the
+    adopter's account row too."""
+    peek = (AdoptionInquiry.objects.filter(pk=inquiry_id)
+            .values("listing_id", "listing__source_report_id").first())
+    if peek is None:
+        return None, None
+    listing = _lock_handoff(peek["listing_id"], peek["listing__source_report_id"])
+    inquiry = AdoptionInquiry.objects.select_for_update().filter(pk=inquiry_id).first()
+    if listing is None or inquiry is None:
+        return None, None
+    inquiry.listing = listing
+    return listing, inquiry
+
+
+def _pet_from_listing(listing, owner):
+    """US-H3 / AQ3 · the adopter's own Pet for an animal they just took home: the listing's name,
+    species and photos (primary kept). Shared by a placement Accept and a public Complete."""
+    pet = Pet.objects.create(owner_account=owner, name=listing.name or "Pet", species=listing.species)
+    for ph in listing.photos.all():
+        PetPhoto.objects.create(pet=pet, url=ph.url, is_primary=ph.is_primary)
+    return pet
+
+
 class PlacementDecisionView(APIView):
     """POST /inquiries/{id}/accept | /decline — US-H3. The recipient of a direct
     placement (all stages skipped) accepts or declines it. Accept is the first code
@@ -717,8 +813,7 @@ class PlacementDecisionView(APIView):
             if inq is None or listing is None:      # deleted between the peek and the locks
                 return _no_such_inquiry()
             inq.listing = listing
-            states = set(AdoptionStage.objects.filter(inquiry=inq).values_list("state", flat=True))
-            if states != {StageState.SKIPPED}:
+            if inq.kind != InquiryKind.PLACEMENT:          # AD22
                 return Response({"error": {"code": "not_a_placement",
                                            "message": "This isn't a direct placement"}},
                                 status=409)
@@ -738,11 +833,7 @@ class PlacementDecisionView(APIView):
                     pet, draft = None, _shelter_draft_from(inq.listing, request.user)
                 else:
                     draft = None
-                    pet = Pet.objects.create(owner_account=request.user,
-                                             name=inq.listing.name or "Pet",
-                                             species=inq.listing.species)
-                    for ph in inq.listing.photos.all():
-                        PetPhoto.objects.create(pet=pet, url=ph.url, is_primary=ph.is_primary)
+                    pet = _pet_from_listing(inq.listing, request.user)
                 inq.listing.status = ListingStatus.ADOPTED
                 inq.listing.adopted_pet = pet
                 inq.listing.adopted_by_account = request.user
@@ -769,7 +860,9 @@ class PlacementDecisionView(APIView):
             # decline
             inq.status = InquiryStatus.DECLINED
             inq.decided_at = now
-            inq.save(update_fields=["status", "decided_at"])
+            inq.ended_by_account = request.user
+            inq.end_reason = EndReason.PLACEMENT_DECLINED
+            inq.save(update_fields=["status", "decided_at", "ended_by_account", "end_reason"])
             # ⚠️ WITHDRAWN, not AVAILABLE. A placement listing was never public — the rescuer
             # chose one person, not the adoption feed — so a decline must not publish it. It
             # also frees the case for its next handoff (S20's guard ignores withdrawn rows).

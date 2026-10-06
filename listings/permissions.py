@@ -17,22 +17,3 @@ class IsVerifiedRescuer(IsAuthenticated):
     def has_permission(self, request, view):
         return (super().has_permission(request, view)
                 and account_is_verified_rescuer(request.user))
-
-
-class IsVerifiedMember(IsAuthenticated):
-    """US-A4 · only an approved `rescuer` capability (Verified Member) may inquire —
-    deliberately narrower than `IsVerifiedRescuer`. Adopting is the Pet-Owner path
-    (decision 3); a verified SHELTER receiving an inquiry on someone else's listing
-    isn't the scenario this gates, so it doesn't get the OR-with-shelter treatment
-    listing/claim visibility does."""
-
-    message = "This action requires a Verified Member badge."
-    # US-A4's contract names this exact code (`403 {code:"member_badge_required"}`) — DRF
-    # reads `permission.code` and threads it into the error body via
-    # common.errors.error_handler, so this is the one line that makes the two agree.
-    code = "member_badge_required"
-
-    def has_permission(self, request, view):
-        return (super().has_permission(request, view)
-                and request.user.capabilities.filter(capability="rescuer",
-                                                      status="approved").exists())

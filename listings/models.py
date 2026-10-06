@@ -36,6 +36,32 @@ class InquiryStatus(models.TextChoices):
     WITHDRAWN = "withdrawn"
 
 
+class InquiryKind(models.TextChoices):
+    # AD22 (dev/adoption-build-review.md) · said outright, never inferred from the ladder: AQ5's
+    # pre-skipped stages and any stage move made "every stage skipped" an unreliable test.
+    INQUIRY = "inquiry"       # someone asked about a public listing (US-A4)
+    PLACEMENT = "placement"   # a rescuer offered the animal to one named person (US-H2)
+
+
+class EndReason(models.TextChoices):
+    """Why an inquiry stopped being active (AD6). The first four are the poster's reasons for
+    turning an applicant down (POST /inquiries/{id}/reject); the rest are written by the system."""
+    NOT_A_FIT = "not_a_fit"
+    REQUIREMENTS_NOT_MET = "requirements_not_met"
+    NO_RESPONSE = "no_response"
+    OTHER = "other"
+    ANOTHER_ADOPTER_CHOSEN = "another_adopter_chosen"
+    ADOPTER_WITHDREW = "adopter_withdrew"
+    LISTING_WITHDRAWN = "listing_withdrawn"
+    PLACEMENT_DECLINED = "placement_declined"
+    PLACEMENT_CANCELLED = "placement_cancelled"
+    PLACEMENT_EXPIRED = "placement_expired"
+
+
+REJECT_REASONS = (EndReason.NOT_A_FIT, EndReason.REQUIREMENTS_NOT_MET, EndReason.NO_RESPONSE,
+                  EndReason.OTHER)
+
+
 class AdoptionStageKey(models.TextChoices):
     INQUIRY = "inquiry"
     APPLICATION = "application"
@@ -174,6 +200,17 @@ class AdoptionInquiry(models.Model):
     # Set when status leaves ACTIVE (adopted/declined/withdrawn). The consecutive-withdrawal
     # rule must order by decision time, not updated_at which is overwritten on any edit.
     decided_at = models.DateTimeField(null=True, blank=True)
+    kind = models.CharField(max_length=20, choices=InquiryKind.choices, default=InquiryKind.INQUIRY)
+    # AQ1 · set when the poster accepts the applicant for screening. Both phones are shared from
+    # then on, while the inquiry is active or ended in an adoption.
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    # AQ4 · set while the animal is held for this applicant. At most one per listing among open
+    # inquiries (uq_adoption_inquiry_one_reserved).
+    reserved_at = models.DateTimeField(null=True, blank=True)
+    # AD6 · who closed it and why. A NULL account with an end_reason = the system (an expiry).
+    ended_by_account = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True,
+                                         blank=True, related_name="+")
+    end_reason = models.CharField(max_length=30, choices=EndReason.choices, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -182,6 +219,9 @@ class AdoptionInquiry(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["listing", "adopter_account"],
                                     name="uq_adoption_inquiry_pair"),
+            models.UniqueConstraint(
+                fields=["listing"], condition=models.Q(reserved_at__isnull=False, status="active"),
+                name="uq_adoption_inquiry_one_reserved"),
         ]
 
 

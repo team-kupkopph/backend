@@ -35,7 +35,8 @@ _TYPES = [
     NotificationType("offer_matched", "{report_id, case_id}", True, "kupkop://reports/{report_id}"),
     NotificationType("report_claimed", "{report_id, case_id}", True, "kupkop://reports/{report_id}"),
     NotificationType("offer_received", "{report_id, offer_id}", True, "kupkop://reports/{report_id}"),
-    NotificationType("inquiry_received", "{listing_id, inquiry_id}", True, "kupkop://listings/{listing_id}"),
+    NotificationType("inquiry_received", "{listing_id, inquiry_id, poster_is_shelter}", True,
+                     "kupkop://inquiries/{inquiry_id}"),
     NotificationType("stage_advanced", "{inquiry_id, stage_key}", True, "kupkop://inquiries"),
     NotificationType("signup_requested", "{shift_id, signup_id}", True, "kupkop://shelter/shifts/{shift_id}/requests"),
     NotificationType("shift_confirmed", "{shift_id, signup_id}", True, "kupkop://shifts"),
@@ -68,6 +69,16 @@ _TYPES = [
     NotificationType("placement_decided", "{listing_id, inquiry_id, decision}", True, "kupkop://rescues"),
     NotificationType("placement_withdrawn", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
     NotificationType("listing_withdrawn", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
+    # Adoption poster loop (dev/adoption-build-review.md AD2): the placement recipient's push,
+    # split from the poster's inquiry_received so the app routes each without guessing.
+    NotificationType("placement_offered", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
+    NotificationType("inquiry_accepted", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
+    NotificationType("inquiry_rejected", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
+    NotificationType("inquiry_withdrawn", "{listing_id, inquiry_id, poster_is_shelter}", True, "kupkop://inquiries/{inquiry_id}"),
+    NotificationType("adoption_badge_needed", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
+    NotificationType("adoption_reserved", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
+    NotificationType("reservation_released", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
+    NotificationType("adoption_completed", "{listing_id, inquiry_id, pet_id}", True, "kupkop://inquiries/{inquiry_id}"),
 ]
 
 REGISTRY = {t.key: t for t in _TYPES}

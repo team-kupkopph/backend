@@ -6,8 +6,10 @@ import pytest
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
+from accounts.models import Account, AccountStatus
 from accounts.tokens import tokens_for
 from listings.models import AdoptionInquiry, AdoptionListing, AdoptionStage, AdoptionStageHistory
+from listings.visibility import account_is_verified_rescuer
 from notifications.models import Notification
 from shelter.models import ShelterProfile
 from verifications.models import AccountCapability, VerificationRequest
@@ -32,7 +34,13 @@ def _verified_shelter():
     return acc
 
 
-def _listing(poster, **kw):
+def _listing(poster, verify=True, **kw):
+    # AD16 · only a public poster's listing can be inquired on. Make the poster a Verified Member
+    # unless the test is about an unverified one (verify=False).
+    if verify and not account_is_verified_rescuer(poster):
+        AccountCapability.objects.get_or_create(
+            account=poster, capability="rescuer",
+            defaults={"status": "approved", "granted_at": timezone.now()})
     defaults = dict(name="Bantay", species="dog", city="Marikina", adoption_fee="300.00")
     defaults.update(kw)
     return AdoptionListing.objects.create(posted_by=poster, **defaults)
@@ -53,22 +61,25 @@ def test_a_guest_is_401d(client):
 
 
 @pytest.mark.django_db
-def test_an_unverified_owner_cannot_inquire(client):
+def test_aq2_an_owner_without_the_badge_can_inquire_with_a_verified_phone(client):
+    """AQ2 (2026-10-05) · asking needs a verified phone only. The badge moved to Reserve."""
     listing = _listing(AccountFactory())
     plain = AccountFactory(phone_verified_at=timezone.now())
-    res = _inquire(client, listing, plain)
-    assert res.status_code == 403
-    assert res.json()["error"]["code"] == "member_badge_required"  # matches the story's own contract
+    assert _inquire(client, listing, plain).status_code == 201
 
 
 @pytest.mark.django_db
-def test_a_verified_shelter_cannot_inquire_only_verified_members_can(client):
-    """Deliberately narrower than IsVerifiedRescuer — decision 3, adopting is the
-    Pet-Owner path."""
-    listing = _listing(AccountFactory())
-    shelter = _verified_shelter()
-    res = _inquire(client, listing, shelter)
+def test_a_verified_shelter_cannot_inquire(client):
+    """Decision 3 stands: adopting is the pet-owner path."""
+    res = _inquire(client, _listing(AccountFactory()), _verified_shelter())
     assert res.status_code == 403
+    assert res.json()["error"]["code"] == "shelter_cannot_adopt"
+
+
+@pytest.mark.django_db
+def test_an_owner_without_a_verified_phone_is_blocked(client):
+    res = _inquire(client, _listing(AccountFactory()), AccountFactory())
+    assert res.status_code == 403 and res.json()["error"]["code"] == "phone_unverified"
 
 
 @pytest.mark.django_db
@@ -159,8 +170,10 @@ def test_my_inquiries_lists_only_my_own_with_stage_states(client):
     # that has moved carries a date.
     by_key = {s["stage_key"]: s for s in row["stages"]}
     assert "T" in by_key["inquiry"]["updated_at"]
-    assert by_key["home_check"]["updated_at"] is None
-    assert by_key["home_check"]["note"] is None
+    # `application` rather than `home_check`: on an individual's listing AQ5 starts home_check
+    # SKIPPED (with a date and a note), so it is no longer a not-started stage.
+    assert by_key["application"]["updated_at"] is None
+    assert by_key["application"]["note"] is None
 
 
 @pytest.mark.django_db
@@ -172,8 +185,9 @@ def test_my_inquiries_requires_auth(client):
 @pytest.mark.django_db
 def test_an_adopter_reads_one_inquiry_by_id_and_nobody_else_can(client):
     """C25 · the Place request screen used to scan page 1 of /me/inquiries; the detail is the
-    same object as one list row, and only the adopter may read it (404, not 403, so an
-    inquiry's existence isn't revealed — not even to the listing's own poster)."""
+    same object as one list row, and only the adopter may read it in the adopter tier (a stranger
+    gets 404, not 403, so an inquiry's existence isn't revealed). The listing's own poster now
+    reads the poster tier instead (AD1, test_poster_reads.py)."""
     poster = AccountFactory()
     listing = _listing(poster)
     me = _verified_member()
@@ -184,12 +198,52 @@ def test_an_adopter_reads_one_inquiry_by_id_and_nobody_else_can(client):
     assert row.status_code == 200
     listed = client.get("/api/v1/me/inquiries", **_hdr(me)).json()["results"][0]
     assert row.json() == listed
-    for stranger in (AccountFactory(), poster):
-        res = client.get(f"/api/v1/inquiries/{inq.pk}", **_hdr(stranger))
-        assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+    res = client.get(f"/api/v1/inquiries/{inq.pk}", **_hdr(AccountFactory()))
+    assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
     assert client.get(f"/api/v1/inquiries/{uuid.uuid4()}", **_hdr(me)).status_code == 404
     assert client.get(f"/api/v1/inquiries/{inq.pk}").status_code == 401
 
+
+
+@pytest.mark.django_db
+def test_aq5_an_individuals_listing_starts_with_home_check_and_vet_clearance_skipped(client):
+    listing = _listing(AccountFactory())                      # a person, not a shelter
+    inquiry_id = _inquire(client, listing, _verified_member()).json()["inquiry_id"]
+    stages = {s.stage_key: s for s in AdoptionStage.objects.filter(inquiry_id=inquiry_id)}
+    assert stages["home_check"].state == "skipped" and stages["vet_clearance"].state == "skipped"
+    assert stages["home_check"].note == "Not needed when adopting from an individual."
+    assert stages["application"].state == "not_started"
+    hist = AdoptionStageHistory.objects.get(inquiry_id=inquiry_id, stage_key="home_check")
+    assert hist.changed_by_account is None                    # the system, not a person
+
+
+@pytest.mark.django_db
+def test_aq5_a_shelters_listing_keeps_all_six_steps(client):
+    listing = _listing(_verified_shelter())
+    inquiry_id = _inquire(client, listing, _verified_member()).json()["inquiry_id"]
+    states = dict(AdoptionStage.objects.filter(inquiry_id=inquiry_id).values_list("stage_key", "state"))
+    assert states == {"inquiry": "done", "application": "not_started", "home_check": "not_started",
+                      "interview": "not_started", "vet_clearance": "not_started",
+                      "finalization": "not_started"}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("make_poster,is_shelter", [(_verified_shelter, True),
+                                                    (_verified_member, False)])
+def test_the_posters_push_says_whether_a_shelter_posted(client, make_poster, is_shelter):
+    """Mobile's interim routing: a shelter opens Requests, an individual opens the listing."""
+    poster = make_poster()
+    _inquire(client, _listing(poster), _verified_member())
+    n = Notification.objects.get(account=poster, type="inquiry_received")
+    assert n.data["poster_is_shelter"] is is_shelter
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("member", [True, False])
+def test_the_inquiry_answer_says_whether_the_adopter_holds_the_badge(client, member):
+    adopter = _verified_member() if member else AccountFactory(phone_verified_at=timezone.now())
+    body = _inquire(client, _listing(AccountFactory()), adopter).json()
+    assert body["verified_member"] is member
 
 # ── POST /inquiries/{id}/stages/{stage_key} ──────────────────────────────────────
 @pytest.mark.django_db
@@ -198,6 +252,7 @@ def test_the_poster_can_advance_a_stage(client):
     listing = _listing(poster)
     member = _verified_member()
     inquiry_id = _inquire(client, listing, member).json()["inquiry_id"]
+    AdoptionInquiry.objects.filter(pk=inquiry_id).update(accepted_at=timezone.now())   # AD3
 
     res = client.post(f"/api/v1/inquiries/{inquiry_id}/stages/application",
                       {"state": "done", "note": "Form looks good"},
@@ -227,6 +282,7 @@ def test_advancing_a_stage_notifies_the_adopter(client):
     listing = _listing(poster)
     member = _verified_member()
     inquiry_id = _inquire(client, listing, member).json()["inquiry_id"]
+    AdoptionInquiry.objects.filter(pk=inquiry_id).update(accepted_at=timezone.now())   # AD3
 
     client.post(f"/api/v1/inquiries/{inquiry_id}/stages/home_check", {"state": "in_progress"},
                content_type="application/json", **_hdr(poster))
@@ -255,6 +311,7 @@ def test_an_invalid_state_value_is_rejected(client):
     poster = AccountFactory()
     listing = _listing(poster)
     inquiry_id = _inquire(client, listing, _verified_member()).json()["inquiry_id"]
+    AdoptionInquiry.objects.filter(pk=inquiry_id).update(accepted_at=timezone.now())   # AD3
     res = client.post(f"/api/v1/inquiries/{inquiry_id}/stages/application",
                       {"state": "passed"},  # not a real StageState value
                       content_type="application/json", **_hdr(poster))
@@ -309,3 +366,32 @@ def test_an_inquiry_that_raced_a_take_back_is_refused_not_stranded(client):
     assert res.status_code == 409
     assert res.json()["error"]["code"] == "listing_unavailable"
     assert not AdoptionInquiry.objects.filter(listing=listing).exists()
+
+
+# ── AD13 / AD16 ──────────────────────────────────────────────────────────────────
+@pytest.mark.django_db
+def test_ad13_a_poster_cannot_inquire_on_their_own_listing(client):
+    poster = _verified_member()
+    res = _inquire(client, _listing(poster), poster)
+    assert res.status_code == 422 and res.json()["error"]["code"] == "own_listing"
+    assert not AdoptionInquiry.objects.exists()
+
+
+@pytest.mark.django_db
+def test_ad16_an_unverified_posters_listing_is_404_by_link_except_to_the_poster(client):
+    poster = AccountFactory(phone_verified_at=timezone.now())       # no badge: not public
+    listing = _listing(poster, verify=False)
+    assert client.get(f"/api/v1/listings/{listing.pk}").status_code == 404           # guest
+    assert client.get(f"/api/v1/listings/{listing.pk}", **_hdr(_verified_member())).status_code == 404
+    assert client.get(f"/api/v1/listings/{listing.pk}", **_hdr(poster)).status_code == 200
+    res = _inquire(client, listing, _verified_member())
+    assert res.status_code == 404 and not AdoptionInquiry.objects.exists()
+
+
+@pytest.mark.django_db
+def test_ad16_a_deleted_posters_listing_is_404_by_link(client):
+    poster = _verified_member()
+    listing = _listing(poster)
+    Account.objects.filter(pk=poster.pk).update(status=AccountStatus.DELETED, deleted_at=timezone.now())
+    assert client.get(f"/api/v1/listings/{listing.pk}").status_code == 404
+    assert _inquire(client, listing, _verified_member()).status_code == 404

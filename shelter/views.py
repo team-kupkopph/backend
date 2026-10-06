@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Address
-from listings.models import AdoptionInquiry, ListingStatus, StageState
+from listings.models import AdoptionInquiry, InquiryKind, ListingStatus
 from shelter.models import DonationQr, ShelterProfile
 from shelter.permissions import IsShelter
 from shelter.serializers import (
@@ -95,11 +95,10 @@ class ShelterRequestsView(APIView):
     @staticmethod
     def _adoption_items(shelter):
         # `listing__posted_by=shelter` covers everything the shelter posted; placements
-        # (all stages SKIPPED) are excluded here and surfaced separately by
+        # (`kind=placement`) are excluded here and surfaced separately by
         # `_placement_items` instead, keyed off who the *adopter* is.
         qs = (AdoptionInquiry.objects.filter(listing__posted_by=shelter)
-              .select_related("listing", "adopter_account")
-              .prefetch_related("stages").order_by("-created_at"))
+              .select_related("listing", "adopter_account").order_by("-created_at"))
         items = []
         for inq in qs:
             if _is_placement(inq):
@@ -128,8 +127,7 @@ class ShelterRequestsView(APIView):
     @staticmethod
     def _placement_items(shelter):
         qs = (AdoptionInquiry.objects.filter(adopter_account=shelter)
-              .select_related("listing", "listing__posted_by")
-              .prefetch_related("stages").order_by("-created_at"))
+              .select_related("listing", "listing__posted_by").order_by("-created_at"))
         items = []
         for inq in qs:
             if not _is_placement(inq):
@@ -145,10 +143,9 @@ class ShelterRequestsView(APIView):
 
 def _is_placement(inquiry):
     """A placement is an `AdoptionInquiry` created via the case-worker `.../place` path
-    (decision 9's placement bypass) — every stage on its ladder starts (and stays)
-    SKIPPED, unlike an ordinary inquiry whose stages progress normally."""
-    stages = list(inquiry.stages.all())
-    return bool(stages) and all(s.state == StageState.SKIPPED for s in stages)
+    (decision 9's placement bypass). AD22 · said by its `kind` column: the old test (every
+    stage SKIPPED) broke once AQ5 started public ladders with skipped stages."""
+    return inquiry.kind == InquiryKind.PLACEMENT
 
 
 def _paginate_items(items, request):
