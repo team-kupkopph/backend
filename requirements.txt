@@ -59,5 +59,5 @@ six==1.17.0
 sqlparse==0.6.0               # PYSEC-2026-3696/3697/3698/3699, CVE-2026-84305
 typing_extensions==4.16.0
 urllib3==2.8.0
-Werkzeug==3.1.8
+Werkzeug==3.1.9               # CVE-2026-102598 · via moto (tests only)
 xmltodict==1.0.4
