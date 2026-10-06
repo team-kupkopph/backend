@@ -69,6 +69,37 @@ def test_an_individual_posters_contact_is_their_verified_phone():
 
 
 @pytest.mark.django_db
+def test_the_poster_sees_only_a_verified_adopter_phone():
+    """AQ1 says the adopter's *verified* phone: the phone-change flow clears phone_verified_at, so
+    an unverified number must not reach the poster. The contact card stays, with no number."""
+    poster, adopter = shelter(), person()
+    inq = inquire(adopter, listing(poster))
+    AdoptionInquiry.objects.filter(pk=inq.pk).update(accepted_at=timezone.now())
+    url = f"/api/v1/inquiries/{inq.pk}"
+    assert c(poster).get(url).json()["adopter_contact"]["phone"] == adopter.phone
+    adopter.phone = "+639179999999"; adopter.phone_verified_at = None
+    adopter.save(update_fields=["phone", "phone_verified_at"])
+    for body in (c(poster).get(url).json(),
+                 c(poster).get(f"/api/v1/listings/{inq.listing_id}/inquiries").json()["results"][0]):
+        assert body["adopter_contact"] == {"name": adopter.display_name, "phone": None}
+
+
+@pytest.mark.django_db
+def test_the_applicants_list_does_not_confirm_a_hidden_listing_to_a_stranger():
+    """A draft or an AD16-hidden listing doesn't exist to anyone but its poster: 404, not 403.
+    A public listing still answers a non-poster 403 not_your_listing."""
+    draft = listing(shelter(), status="draft")
+    unverified = listing(person(), verify=False)
+    public = listing(shelter())
+    for hidden in (draft, unverified):
+        res = c(person()).get(f"/api/v1/listings/{hidden.pk}/inquiries")
+        assert res.status_code == 404 and res.json()["error"]["code"] == "not_found"
+        assert c(hidden.posted_by).get(f"/api/v1/listings/{hidden.pk}/inquiries").status_code == 200
+    res = c(person()).get(f"/api/v1/listings/{public.pk}/inquiries")
+    assert res.status_code == 403 and res.json()["error"]["code"] == "not_your_listing"
+
+
+@pytest.mark.django_db
 def test_the_applicants_list_is_the_posters_only_and_filters_open():
     poster = shelter(); the_listing = listing(poster)
     a, b = inquire(person(), the_listing), inquire(person(), the_listing)

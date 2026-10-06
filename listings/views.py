@@ -498,6 +498,10 @@ class ListingInquiriesView(APIView):
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
         if listing.posted_by_id != request.user.pk:
+            # A draft or an AD16-hidden listing doesn't exist to a stranger: don't confirm it.
+            if listing.status == ListingStatus.DRAFT or not listing_is_public(listing):
+                return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                                status=404)
             return Response({"error": {"code": "not_your_listing",
                                        "message": "Only the poster can see who asked"}}, status=403)
         qs = (AdoptionInquiry.objects.filter(listing=listing)

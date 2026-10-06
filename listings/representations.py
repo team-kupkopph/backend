@@ -108,6 +108,8 @@ def poster_inquiry_rows(inquiries):
         row["adopter"] = {"account_id": str(adopter.pk), "display_name": adopter.display_name,
                           "city": cities.get(adopter.pk), "verified_member": adopter.pk in members}
         if contact_revealed(inquiry):
-            row["adopter_contact"] = {"name": adopter.display_name, "phone": adopter.phone}
+            # AQ1 · the adopter's *verified* phone: a phone change clears phone_verified_at.
+            row["adopter_contact"] = {"name": adopter.display_name,
+                                      "phone": adopter.phone if adopter.phone_verified_at else None}
         rows.append(row)
     return rows
