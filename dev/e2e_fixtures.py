@@ -54,6 +54,35 @@ OWNER = "e2e.owner@kupkop.invalid"
 SHELTER = "e2e.shelter@kupkop.invalid"
 
 
+def seed_adoption_applicant(owner, shelter):
+    """Flow 25 · one shelter listing with one fresh inquiry from the owner. The flow completes the
+    adoption, so every run clears what the last one left and starts again from "new"."""
+    from listings.models import (
+        AdoptionInquiry,
+        AdoptionListing,
+        AdoptionStage,
+        AdoptionStageKey,
+        ListingStatus,
+        StageState,
+    )
+    from listings.stages import set_stage_state
+    listing, _ = AdoptionListing.objects.get_or_create(
+        posted_by=shelter, name="E2E Milo",
+        defaults={"species": "dog", "city": "Marikina City", "adoption_fee": "300.00"})
+    AdoptionInquiry.objects.filter(listing=listing).delete()
+    AdoptionListing.objects.filter(pk=listing.pk).update(
+        status=ListingStatus.AVAILABLE, adopted_by_account=None, adopted_pet=None)
+    listing.refresh_from_db()
+    inquiry = AdoptionInquiry.objects.create(
+        listing=listing, adopter_account=owner,
+        message="We have a fenced yard and a lot of time for walks.")
+    for key in AdoptionStageKey:
+        stage = AdoptionStage.objects.create(inquiry=inquiry, stage_key=key)
+        if key == AdoptionStageKey.INQUIRY:
+            set_stage_state(stage, StageState.DONE, owner)
+    return inquiry
+
+
 def refuse(message):
     print(f"REFUSING: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -101,13 +130,16 @@ def main():
     ShelterProfile.objects.update_or_create(
         account=shelter,
         defaults={"org_name": "E2E Test Shelter", "org_type": OrgType.SHELTER,
-                  "tier": ShelterTier.COMMUNITY_RESCUE})
+                  "tier": ShelterTier.COMMUNITY_RESCUE, "official_phone": "+63281234567"})
 
     # P1/D3 · only verified shelters' shifts are public, and flow 30 browses for one.
     from verifications.models import VerificationRequest
     VerificationRequest.objects.get_or_create(account=shelter, type="shelter_org",
                                               defaults={"status": "approved"})
     VerificationRequest.objects.filter(account=shelter, type="shelter_org").update(status="approved")
+
+    # Flow 25 · e2e applicant listing with one fresh inquiry
+    seed_adoption_applicant(owner, shelter)
 
     # An OPEN shift in the future, because 30-volunteer-signup browses for one and there is
     # nothing to sign up for otherwise. The flow failing on an empty list is technically

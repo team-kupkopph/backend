@@ -1,6 +1,9 @@
 """What each side of a public adoption is told (dev/adoption-build-review.md AD1–AD6, AQ1–AQ5).
 The views decide WHEN; this module decides the words. It plays the same role as sagip/notices.py
 for rescues."""
+from django.utils import timezone
+
+from notifications.models import Notification
 from notifications.service import notify
 from shelter.models import ShelterProfile
 
@@ -70,6 +73,13 @@ def inquiry_withdrawn(inquiry, reopened):
 
 def adoption_badge_needed(inquiry):
     """AQ2 · the poster tried to reserve, and the adopter lacks the Verified Member badge."""
+    # Spec 2026-10-06 §5.2 · the app makes Reserve easy to tap, so the adopter hears this at
+    # most once a day per inquiry; Reserve still refuses every time.
+    since = timezone.now() - timezone.timedelta(hours=24)
+    if Notification.objects.filter(account=inquiry.adopter_account, type="adoption_badge_needed",
+                                   data__inquiry_id=str(inquiry.pk), created_at__gte=since).exists():
+        return
+
     listing = inquiry.listing
     notify(inquiry.adopter_account, "adoption_badge_needed",
            title=f"One step before you can adopt {_name(listing)}",

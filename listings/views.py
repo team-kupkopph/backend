@@ -1,7 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -185,12 +185,22 @@ class ListingsView(APIView):
             if status not in ListingStatus.values:
                 return Response({"error": {"code": "bad_status",
                                            "message": "Unknown status"}}, status=422)
+            # Spec 2026-10-06 §5.1 · the poster's own cards say how many people are waiting on an
+            # answer — one annotated query for the page, never one per card.
             qs = (AdoptionListing.objects.filter(status=status, posted_by=request.user)
-                  .select_related("posted_by").order_by("-created_at"))
+                  .select_related("posted_by")
+                  .annotate(open_inquiries=Count(
+                      "inquiries", filter=Q(inquiries__status=InquiryStatus.ACTIVE,
+                                            inquiries__kind=InquiryKind.INQUIRY)))
+                  .order_by("-created_at"))
             page_items, next_page = _paginate(qs, request)
             posters = _poster_infos({item.posted_by for item in page_items})
-            return Response({"results": [_card(item, posters[item.posted_by_id]) for item in page_items],
-                             "next": next_page})
+            cards = []
+            for item in page_items:
+                card = _card(item, posters[item.posted_by_id])
+                card["open_inquiries"] = item.open_inquiries
+                cards.append(card)
+            return Response({"results": cards, "next": next_page})
         # US-N1 · a deleted account's listings leave every public surface at once.
         qs = (AdoptionListing.objects.filter(status="available")
               .exclude(posted_by__status=AccountStatus.DELETED)
@@ -680,7 +690,13 @@ class InquiryStageView(APIView):
             refusal = _stage_move_refusal(inquiry, stage_key, state)
             if refusal:
                 return refusal
-            set_stage_state(stage, state, request.user, note=s.validated_data.get("note", ""))
+            note = s.validated_data.get("note", "")
+            if not note:
+                # Spec 2026-10-06 §5.3 · a note describes the move it was written with; a move
+                # without one clears it, so a system note ("Not needed when adopting from an
+                # individual.") never outlives the step it explained.
+                stage.note = ""
+            set_stage_state(stage, state, request.user, note=note)
             notify(inquiry.adopter_account, "stage_advanced",
                    title="Your adoption inquiry moved forward",
                    body=f"{stage_key.replace('_', ' ').title()} is now {state.replace('_', ' ')}.",
