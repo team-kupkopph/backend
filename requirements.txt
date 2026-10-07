@@ -47,7 +47,7 @@ pytest-django==4.12.0
 pytest-cov==7.1.0
 coverage==7.16.0
 requests==2.34.2
-responses==0.26.2
+responses==0.26.3
 # US-C2 · the linter §16.3 has claimed CI runs since v0.1. Config in pyproject.toml.
 ruff==0.16.6
 # US-K3 · §12.4 "Dependabot + pip-audit in CI; patch known CVEs". Dev/CI tool.
