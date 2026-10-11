@@ -22,7 +22,7 @@ Faker==40.36.0
 # certs) in accounts/social.py; the audience allow-list check is ours. Pulls cachetools,
 # pyasn1-modules, rsa.
 google-auth==2.59.1
-idna==3.19
+idna==3.20
 iniconfig==2.3.0
 jmespath==1.1.0
 # moto[s3] and its own deps below · US-D2 · mocks S3 for the presigned-upload/EXIF-strip
