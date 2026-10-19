@@ -19,6 +19,7 @@ from listings.views import (
     ListingPublishView,
     ListingsView,
     MyInquiriesView,
+    MyPetDetailView,
     MyPetsView,
     PlacementDecisionView,
     ShortlistItemView,
@@ -32,6 +33,7 @@ urlpatterns = [
     path("listings/<uuid:listing_id>/inquiries", ListingInquiriesView.as_view()),
     path("me/inquiries", MyInquiriesView.as_view()),
     path("me/pets", MyPetsView.as_view()),
+    path("me/pets/<uuid:pet_id>", MyPetDetailView.as_view()),   # AQ8
     path("me/shortlist", ShortlistView.as_view()),
     path("me/shortlist/<uuid:listing_id>", ShortlistItemView.as_view()),
     path("inquiries/<uuid:inquiry_id>", InquiryDetailView.as_view()),

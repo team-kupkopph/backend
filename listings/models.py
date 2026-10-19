@@ -128,6 +128,24 @@ class PetPhoto(models.Model):
         db_table = "pet_photo"
 
 
+class PetOwnershipHistory(models.Model):
+    """AQ8 · append-only: a Pet changed owners because a rehoming listing was completed. The new
+    owner keeps the vet and medical fields on the Pet row; this records who it came from."""
+
+    history_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    pet = models.ForeignKey(Pet, on_delete=models.CASCADE, related_name="ownership_history")
+    from_account = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True,
+                                     related_name="+")
+    to_account = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="+")
+    listing = models.ForeignKey("AdoptionListing", on_delete=models.SET_NULL, null=True, blank=True,
+                                related_name="+")
+    transferred_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "pet_ownership_history"
+
+
 class AdoptionListing(models.Model):
     """Matches kupkop_mvp_schema.sql `adoption_listing`. The listing carries its OWN
     descriptive snapshot of the animal (name/species/breed/sex/…) rather than pointing
@@ -167,6 +185,10 @@ class AdoptionListing(models.Model):
     location_text = models.CharField(max_length=160, blank=True)
     status = models.CharField(max_length=20, choices=ListingStatus.choices,
                               default=ListingStatus.AVAILABLE)
+    # AQ8 · set when an owner lists one of their own pets for rehoming (POST /listings {pet_id}).
+    # On Complete this Pet changes hands (PetOwnershipHistory) instead of a fresh one being made.
+    rehome_pet = models.ForeignKey("Pet", on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

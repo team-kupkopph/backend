@@ -2,14 +2,21 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from listings.models import Sex, StageState
+from listings.models import Sex, SizeCategory, StageState
 from sagip.models import Species
 
 ZERO = Decimal("0")
 
 
+MAX_PHOTOS = 6   # AD9 · what a listing's photo strip holds
+
+
 class PhotoSerializer(serializers.Serializer):
     file_url = serializers.CharField()
+    is_primary = serializers.BooleanField(required=False, default=False)
+
+
+SIZES = [c.value for c in SizeCategory]
 
 
 class PetFieldsSerializer(serializers.Serializer):
@@ -25,6 +32,7 @@ class PetFieldsSerializer(serializers.Serializer):
 
 class ListingCreateSerializer(serializers.Serializer):
     pet = PetFieldsSerializer()
+    pet_id = serializers.UUIDField(required=False)   # AQ8 · list one of the poster's own pets
     description = serializers.CharField(required=False, allow_blank=True)
     adoption_fee = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=ZERO)
     city = serializers.CharField(max_length=80)
@@ -59,3 +67,20 @@ class StageUpdateSerializer(serializers.Serializer):
     cover — see the story-file note."""
     state = serializers.ChoiceField(choices=[c.value for c in StageState if c != StageState.NOT_STARTED])
     note = serializers.CharField(required=False, allow_blank=True)
+
+
+class PetCreateSerializer(serializers.Serializer):
+    """AQ8 · POST /me/pets. The fields that matter to the next owner travel with the Pet when it
+    is rehomed (vet contact, medical notes, temperament...)."""
+    name = serializers.CharField(max_length=80)
+    species = serializers.ChoiceField(choices=[c.value for c in Species])
+    breed = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    sex = serializers.ChoiceField(choices=[c.value for c in Sex], required=False)
+    birthdate = serializers.DateField(required=False, allow_null=True)
+    color_markings = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    size_category = serializers.ChoiceField(choices=SIZES, required=False, allow_blank=True)
+    spayed_neutered = serializers.BooleanField(required=False, allow_null=True)
+    temperament = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    medical_conditions = serializers.CharField(required=False, allow_blank=True)
+    vet_contact = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    photos = PhotoSerializer(many=True, required=False, max_length=MAX_PHOTOS)

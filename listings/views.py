@@ -23,6 +23,7 @@ from listings.models import (
     ListingPreference,
     ListingStatus,
     Pet,
+    PetOwnershipHistory,
     PetPhoto,
     PreferenceKind,
     StageState,
@@ -32,6 +33,7 @@ from listings.serializers import (
     InquiryCreateSerializer,
     ListingCreateSerializer,
     ListingPatchSerializer,
+    PetCreateSerializer,
     StageUpdateSerializer,
 )
 from listings.stages import INDIVIDUAL_SKIP_NOTE, INDIVIDUAL_SKIPPED_STAGES, set_stage_state
@@ -235,7 +237,22 @@ class ListingsView(APIView):
                                        "details": {"cap": cap}}}, status=422)
         pet = data["pet"]
         with transaction.atomic():
+            rehome = None
+            if data.get("pet_id"):
+                # AQ8 · only your own pet, and one live listing per pet. The pet row is locked so
+                # two taps can't both list it.
+                rehome = Pet.objects.select_for_update().filter(
+                    pk=data["pet_id"], owner_account=request.user).first()
+                if rehome is None:
+                    return Response({"error": {"code": "not_found", "message": "No such pet"}},
+                                    status=404)
+                if AdoptionListing.objects.filter(rehome_pet=rehome).exclude(
+                        status=ListingStatus.WITHDRAWN).exists():
+                    return Response({"error": {"code": "pet_already_listed",
+                                               "message": "This pet already has a listing"}},
+                                    status=409)
             listing = AdoptionListing.objects.create(
+                rehome_pet=rehome,
                 posted_by=request.user, name=pet["name"], species=pet["species"],
                 breed=pet.get("breed", ""), sex=pet.get("sex", ""),
                 date_of_birth=pet.get("birthdate"), city=data["city"],
@@ -630,20 +647,64 @@ class InquiryDetailView(APIView):
         return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
 
 
+def _primary_photo(pet):
+    photos = sorted(pet.photos.all(), key=lambda ph: ph.uploaded_at)
+    return next((ph for ph in photos if ph.is_primary), None) or (photos[0] if photos else None)
+
+
 class MyPetsView(APIView):
     """GET /me/pets — US-H3. The owner's own pets, newest first, each with its primary
-    photo (or earliest-uploaded if none is primary) for the mobile My-pets tab."""
+    photo (or earliest-uploaded if none is primary) for the mobile My-pets tab.
+    POST /me/pets — AQ8 · an owner adds a pet they already have (before: the only Pet writer was
+    a placement Accept), so they can keep its details and rehome it later."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         def _repr(p):
-            photos = sorted(p.photos.all(), key=lambda ph: ph.uploaded_at)
-            primary = next((ph for ph in photos if ph.is_primary), None)
-            ph = primary or (photos[0] if photos else None)
+            ph = _primary_photo(p)
             return {"pet_id": str(p.pk), "name": p.name, "species": p.species,
                     "photo_url": (ph.url if ph else None)}
         pets = request.user.pets.order_by("-created_at").prefetch_related("photos")
         return Response({"results": [_repr(p) for p in pets]})
+
+    def post(self, request):
+        s = PetCreateSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        d = s.validated_data
+        with transaction.atomic():
+            pet = Pet.objects.create(
+                owner_account=request.user, name=d["name"], species=d["species"],
+                breed=d.get("breed", ""), sex=d.get("sex", "unknown"),
+                date_of_birth=d.get("birthdate"), color_markings=d.get("color_markings", ""),
+                size_category=d.get("size_category", ""), spayed_neutered=d.get("spayed_neutered"),
+                temperament=d.get("temperament", ""),
+                medical_conditions=d.get("medical_conditions", ""),
+                vet_contact=d.get("vet_contact", ""))
+            photos = d.get("photos", [])
+            flagged = next((i for i, p in enumerate(photos) if p.get("is_primary")), 0)
+            for i, photo in enumerate(photos):
+                PetPhoto.objects.create(pet=pet, url=photo["file_url"], is_primary=(i == flagged))
+        return Response({"pet_id": str(pet.pk)}, status=201)
+
+
+class MyPetDetailView(APIView):
+    """GET /me/pets/{id} — AQ8 · everything the owner entered, for the pet screen and for
+    prefilling a rehoming listing. Private: another account's pet is a 404."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pet_id):
+        pet = request.user.pets.prefetch_related("photos").filter(pk=pet_id).first()
+        if pet is None:
+            return Response({"error": {"code": "not_found", "message": "No such pet"}}, status=404)
+        photos = sorted(pet.photos.all(), key=lambda ph: (not ph.is_primary, ph.uploaded_at))
+        return Response({
+            "pet_id": str(pet.pk), "name": pet.name, "species": pet.species,
+            "breed": pet.breed or None, "sex": pet.sex or None,
+            "birthdate": pet.date_of_birth.isoformat() if pet.date_of_birth else None,
+            "color_markings": pet.color_markings or None, "size_category": pet.size_category or None,
+            "spayed_neutered": pet.spayed_neutered, "temperament": pet.temperament or None,
+            "medical_conditions": pet.medical_conditions or None,
+            "vet_contact": pet.vet_contact or None, "photos": [ph.url for ph in photos]})
 
 
 def _stage_move_refusal(inquiry, stage_key, state):
@@ -784,8 +845,18 @@ def _locked_inquiry(inquiry_id):
 
 
 def _pet_from_listing(listing, owner):
-    """US-H3 / AQ3 · the adopter's own Pet for an animal they just took home: the listing's name,
-    species and photos (primary kept). Shared by a placement Accept and a public Complete."""
+    """US-H3 / AQ3 / AQ8 · the adopter's Pet for an animal they just took home. A listing made from
+    one of the poster's own pets hands that very Pet over (ownership history kept, so the vet and
+    medical fields go with it); any other listing gets a fresh Pet from its name, species and
+    photos (primary kept). Shared by a placement Accept and a public Complete."""
+    if listing.rehome_pet_id:
+        pet = Pet.objects.select_for_update().filter(pk=listing.rehome_pet_id).first()
+        if pet is not None:
+            PetOwnershipHistory.objects.create(pet=pet, from_account=pet.owner_account,
+                                               to_account=owner, listing=listing)
+            pet.owner_account = owner
+            pet.save(update_fields=["owner_account", "updated_at"])
+            return pet
     pet = Pet.objects.create(owner_account=owner, name=listing.name or "Pet", species=listing.species)
     for ph in listing.photos.all():
         PetPhoto.objects.create(pet=pet, url=ph.url, is_primary=ph.is_primary)
