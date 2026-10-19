@@ -73,8 +73,12 @@ def nudge_stale_inquiries(now=None):
     """AD23 · tell the poster, once, about an inquiry that has waited STALE_NUDGE_DAYS."""
     now = now or timezone.now()
     cutoff = now - timezone.timedelta(days=STALE_NUDGE_DAYS)
+    # Run 7 · one already old enough to close is closed by the next sweep step; nudging the poster
+    # about it a moment before would be noise (it happens when no sweep has run for weeks).
+    too_old = now - timezone.timedelta(days=STALE_CLOSE_DAYS)
     nudged = []
-    for pk, listing_id, source_report_id in _stale_candidates(cutoff).filter(nudged_at__isnull=True):
+    candidates = _stale_candidates(cutoff).filter(nudged_at__isnull=True, created_at__gt=too_old)
+    for pk, listing_id, source_report_id in candidates:
         with transaction.atomic():
             inq = _locked_stale(pk, listing_id, source_report_id, cutoff)
             if inq is None or inq.nudged_at is not None:

@@ -79,3 +79,15 @@ def test_the_sweep_is_registered_with_run_sweeps():
     from sagip.management.commands.run_sweeps import SWEEPS
     labels = [label for label, _ in SWEEPS]
     assert "inquiries_nudged" in labels and "inquiries_closed" in labels
+
+
+@pytest.mark.django_db
+def test_an_inquiry_already_old_enough_to_close_is_not_nudged_first():
+    """Found on the Run 7 sweep: with no sweep for weeks (a fresh deploy), one run nudged the
+    poster about an inquiry it closed a moment later."""
+    poster, adopter = person(), person()
+    inq = inquire(adopter, listing(poster))
+    _age(inq, STALE_CLOSE_DAYS + 1)
+    assert nudge_stale_inquiries() == []
+    assert types(poster).count("inquiry_waiting") == 0
+    assert [i.pk for i in close_stale_inquiries()] == [inq.pk]
