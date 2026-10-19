@@ -1,7 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -924,6 +924,28 @@ class ShortlistView(APIView):
         for listing_id, kind in rows:
             out[kind].append(str(listing_id))
         return Response(out)
+
+
+class ShortlistListingsView(APIView):
+    """GET /me/shortlist/listings — AD18 · the Saved list: the listings this person swiped right
+    on, as feed cards, newest save first, paginated. A saved listing stays while it is reserved or
+    adopted (the card says so); it leaves when it was withdrawn, is still a draft, or its poster
+    is no longer public — the same predicate as the feed."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        saved = ListingPreference.objects.filter(account=request.user, kind=PreferenceKind.SAVED)
+        qs = (AdoptionListing.objects
+              .filter(preferences__in=saved,
+                      status__in=(ListingStatus.AVAILABLE, ListingStatus.PENDING, ListingStatus.ADOPTED))
+              .exclude(posted_by__status=AccountStatus.DELETED)
+              .filter(public_poster_q()).select_related("posted_by").distinct()
+              .annotate(saved_at=Max("preferences__updated_at", filter=Q(preferences__account=request.user)))
+              .order_by("-saved_at"))
+        page_items, next_page = _paginate(qs, request)
+        posters = _poster_infos({item.posted_by for item in page_items})
+        return Response({"results": [_card(item, posters[item.posted_by_id]) for item in page_items],
+                         "next": next_page})
 
 
 class ShortlistItemView(APIView):

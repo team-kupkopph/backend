@@ -107,3 +107,41 @@ def test_exported_with_the_account_and_gone_when_anonymized(client):
     ]
     anonymize_account(me, now=timezone.now())
     assert ListingPreference.objects.filter(account=me).count() == 0
+
+
+# ── AD18 · the Saved list ───────────────────────────────────────────────────────
+@pytest.mark.django_db
+def test_saved_listings_come_back_as_cards_newest_save_first(client):
+    from listings.tests.adoption_helpers import listing as public_listing, person
+    me, poster = AccountFactory(), person()
+    a, b = public_listing(poster, name="A"), public_listing(poster, name="B")
+    hidden = public_listing(poster, name="Nope")
+    _put(client, me, a, "saved"); _put(client, me, b, "saved"); _put(client, me, hidden, "hidden")
+    body = client.get("/api/v1/me/shortlist/listings", **_hdr(me)).json()
+    assert [r["pet"]["name"] for r in body["results"]] == ["B", "A"]
+    assert body["next"] is None and body["results"][0]["poster"]["account_id"] == str(poster.pk)
+
+
+@pytest.mark.django_db
+def test_saved_listings_leave_when_they_stop_being_public_or_were_never_live(client):
+    from listings.models import ListingStatus
+    from listings.tests.adoption_helpers import listing as public_listing, person
+    me, poster, unverified = AccountFactory(), person(), person()
+    live = public_listing(poster, name="Live")
+    reserved = public_listing(poster, name="Reserved", status=ListingStatus.PENDING)
+    adopted = public_listing(poster, name="Adopted", status=ListingStatus.ADOPTED)
+    draft = public_listing(poster, name="Draft", status=ListingStatus.DRAFT)
+    withdrawn = public_listing(poster, name="Gone", status=ListingStatus.WITHDRAWN)
+    shady = public_listing(unverified, name="Shady", verify=False)
+    for item in (live, reserved, adopted, draft, withdrawn, shady):
+        ListingPreference.objects.create(account=me, listing=item, kind="saved")
+    names = {r["pet"]["name"] for r in client.get("/api/v1/me/shortlist/listings", **_hdr(me)).json()["results"]}
+    # reserved and adopted stay (the card says so); a draft, a withdrawn or an unverified poster's does not
+    assert names == {"Live", "Reserved", "Adopted"}
+
+
+@pytest.mark.django_db
+def test_the_saved_list_is_private_and_needs_sign_in(client):
+    assert client.get("/api/v1/me/shortlist/listings").status_code == 401
+    me, other = AccountFactory(), AccountFactory()
+    assert client.get("/api/v1/me/shortlist/listings", **_hdr(other)).json()["results"] == []

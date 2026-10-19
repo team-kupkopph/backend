@@ -22,6 +22,7 @@ from listings.views import (
     MyPetsView,
     PlacementDecisionView,
     ShortlistItemView,
+    ShortlistListingsView,
     ShortlistView,
 )
 
@@ -33,6 +34,7 @@ urlpatterns = [
     path("me/inquiries", MyInquiriesView.as_view()),
     path("me/pets", MyPetsView.as_view()),
     path("me/shortlist", ShortlistView.as_view()),
+    path("me/shortlist/listings", ShortlistListingsView.as_view()),     # AD18
     path("me/shortlist/<uuid:listing_id>", ShortlistItemView.as_view()),
     path("inquiries/<uuid:inquiry_id>", InquiryDetailView.as_view()),
     path("inquiries/<uuid:inquiry_id>/stages/<str:stage_key>", InquiryStageView.as_view()),
