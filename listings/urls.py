@@ -2,10 +2,12 @@ from django.urls import path
 
 from listings.adoption_views import (
     CompleteView,
+    MarkAdoptedView,
     RejectView,
     ReserveView,
     ScreenView,
     UnreserveView,
+    WithdrawListingView,
     WithdrawView,
 )
 from listings.views import (
@@ -29,6 +31,8 @@ urlpatterns = [
     path("listings", ListingsView.as_view()),
     path("listings/<uuid:listing_id>", ListingDetailView.as_view()),
     path("listings/<uuid:listing_id>/publish", ListingPublishView.as_view()),   # D7
+    path("listings/<uuid:listing_id>/withdraw", WithdrawListingView.as_view()),     # AD10
+    path("listings/<uuid:listing_id>/mark-adopted", MarkAdoptedView.as_view()),     # AD10
     path("listings/<uuid:listing_id>/inquiries", ListingInquiriesView.as_view()),
     path("me/inquiries", MyInquiriesView.as_view()),
     path("me/pets", MyPetsView.as_view()),

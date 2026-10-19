@@ -33,11 +33,11 @@ def account_is_verified_member(account):
 
 def listing_is_public(listing):
     """AD16 · whether people other than its poster may see `listing`: its poster passes
-    public_poster_q() and the account isn't deleted (US-N1). The browse feed has always filtered on
+    public_poster_q(), the account isn't deleted (US-N1) and no takedown holds it (AD7). The browse feed has always filtered on
     this. Detail and inquiry now do too, so a link an unverified poster shares off-platform leads
     nowhere."""
     from accounts.models import AccountStatus
     from listings.models import AdoptionListing
-    return (AdoptionListing.objects.filter(pk=listing.pk)
+    return (AdoptionListing.objects.filter(pk=listing.pk, hidden_at__isnull=True)
             .exclude(posted_by__status=AccountStatus.DELETED)
             .filter(public_poster_q()).exists())
