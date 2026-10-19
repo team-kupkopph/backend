@@ -3,6 +3,7 @@ from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
 from listings.models import AdoptionListing, ListingStatus
+from verifications.models import AccountCapability
 from sagip.models import RescueCase, StrayReport, StrayReportPhoto, StrayStatus
 
 
@@ -92,6 +93,7 @@ def test_listing_a_rescue_makes_a_private_draft_with_the_reports_photos():
 @pytest.mark.django_db
 def test_the_rescuer_publishing_the_draft_makes_it_available():
     rescuer = AccountFactory()
+    AccountCapability.objects.create(account=rescuer, capability="rescuer", status="approved")   # AD12
     case = _safe_case(rescuer)
     res = _c(rescuer).post(f"/api/v1/cases/{case.pk}/list", {"name": "Tisoy"}, format="json")
     listing = AdoptionListing.objects.get(pk=res.json()["listing_id"])

@@ -69,6 +69,8 @@ _TYPES = [
     NotificationType("placement_decided", "{listing_id, inquiry_id, decision}", True, "kupkop://rescues"),
     NotificationType("placement_withdrawn", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
     NotificationType("listing_withdrawn", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
+    # AD7: the poster hears a moderation takedown of their listing.
+    NotificationType("listing_removed", "{listing_id}", True, "kupkop://listings/{listing_id}"),
     # Adoption poster loop (dev/adoption-build-review.md AD2): the placement recipient's push,
     # split from the poster's inquiry_received so the app routes each without guessing.
     NotificationType("placement_offered", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
