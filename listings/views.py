@@ -116,6 +116,20 @@ def _paginate(qs, request):
     return items[:PAGE_SIZE], (page + 1 if has_next else None)
 
 
+def _set_photos(listing, photos):
+    """AD9 · replace a listing's photo set. The first photo flagged primary is the primary; with
+    none flagged, the first photo is."""
+    listing.photos.all().delete()
+    flagged = next((i for i, p in enumerate(photos) if p.get("is_primary")), 0)
+    for i, photo in enumerate(photos):
+        AdoptionListingPhoto.objects.create(listing=listing, url=photo["file_url"],
+                                            is_primary=(i == flagged))
+
+
+def _photo_urls(listing):
+    return [p.url for p in sorted(listing.photos.all(), key=lambda p: not p.is_primary)]
+
+
 def _pet_fields(listing):
     return {"name": listing.name, "species": listing.species, "breed": listing.breed or None,
             "sex": listing.sex or None,
@@ -239,9 +253,11 @@ class ListingsView(APIView):
                 posted_by=request.user, name=pet["name"], species=pet["species"],
                 breed=pet.get("breed", ""), sex=pet.get("sex", ""),
                 date_of_birth=pet.get("birthdate"), city=data["city"],
+                size_category=pet.get("size_category", ""), spayed_neutered=pet.get("spayed_neutered"),
+                vaccinated=pet.get("vaccinated"), walkable=pet.get("walkable", False),
+                temperament=pet.get("temperament", ""), requirements=data.get("requirements", ""),
                 story=data.get("description", ""), adoption_fee=data["adoption_fee"])
-            for photo in data.get("photos", []):
-                AdoptionListingPhoto.objects.create(listing=listing, url=photo["file_url"])
+            _set_photos(listing, data.get("photos", []))
         return Response({"listing_id": str(listing.pk), "listing_status": listing.status},
                         status=201)
 
@@ -453,7 +469,7 @@ class ListingDetailView(APIView):
             "description": listing.story or None, "adoption_fee": str(listing.adoption_fee),
             "requirements": listing.requirements or None, "city": listing.city,
             "status": listing.status,
-            "photos": [p.url for p in listing.photos.all()],
+            "photos": _photo_urls(listing),
             "poster": _poster_info(listing.posted_by),
         })
 
@@ -476,6 +492,7 @@ class ListingDetailView(APIView):
                                            "message": f"The adoption fee can't exceed ₱{cap}",
                                            "details": {"cap": cap}}}, status=422)
         field_map = {"birthdate": "date_of_birth", "description": "story"}
+        photos = data.pop("photos", None)
         changed = []
         for key, value in data.items():
             field = field_map.get(key, key)
@@ -484,11 +501,15 @@ class ListingDetailView(APIView):
         # Final review #2 · write only what the patch set. A whole-row save() would write back the
         # status this request read, undoing an accept/decline/take-back/expiry that committed in
         # between; the status is then re-read so the answer reports what is really there.
-        listing.save(update_fields=[*changed, "updated_at"])
+        with transaction.atomic():
+            listing.save(update_fields=[*changed, "updated_at"])
+            if photos is not None:
+                _set_photos(listing, photos)
         listing.refresh_from_db(fields=["status"])
         return Response({
             "listing_id": str(listing.pk), "pet": _pet_fields(listing),
             "description": listing.story or None, "adoption_fee": str(listing.adoption_fee),
+            "requirements": listing.requirements or None, "photos": _photo_urls(listing),
             "city": listing.city, "status": listing.status,
         })
 
@@ -568,7 +589,8 @@ class ListingInquiriesView(APIView):
                                                           "for adoption."}}, status=409)
                 inquiry = AdoptionInquiry.objects.create(
                     listing=listing, adopter_account=request.user,
-                    message=s.validated_data.get("message", ""))
+                    message=s.validated_data.get("message", ""),
+                    application=dict(s.validated_data.get("application") or {}))
                 stages = []
                 for key in AdoptionStageKey:
                     stage = AdoptionStage.objects.create(inquiry=inquiry, stage_key=key)

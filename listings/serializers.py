@@ -2,14 +2,21 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from listings.models import Sex, StageState
+from listings.models import Sex, SizeCategory, StageState
 from sagip.models import Species
 
 ZERO = Decimal("0")
 
 
+MAX_PHOTOS = 6   # AD9 · what a listing's photo strip holds
+
+
 class PhotoSerializer(serializers.Serializer):
     file_url = serializers.CharField()
+    is_primary = serializers.BooleanField(required=False, default=False)
+
+
+SIZES = [c.value for c in SizeCategory]
 
 
 class PetFieldsSerializer(serializers.Serializer):
@@ -21,6 +28,12 @@ class PetFieldsSerializer(serializers.Serializer):
     breed = serializers.CharField(max_length=80, required=False, allow_blank=True)
     sex = serializers.ChoiceField(choices=[c.value for c in Sex], required=False)
     birthdate = serializers.DateField(required=False, allow_null=True)
+    # AD11 · what shelters list with, and what the detail's health tags read.
+    size_category = serializers.ChoiceField(choices=SIZES, required=False, allow_blank=True)
+    spayed_neutered = serializers.BooleanField(required=False, allow_null=True)
+    vaccinated = serializers.BooleanField(required=False, allow_null=True)
+    walkable = serializers.BooleanField(required=False)
+    temperament = serializers.CharField(max_length=160, required=False, allow_blank=True)
 
 
 class ListingCreateSerializer(serializers.Serializer):
@@ -28,7 +41,8 @@ class ListingCreateSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
     adoption_fee = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=ZERO)
     city = serializers.CharField(max_length=80)
-    photos = PhotoSerializer(many=True, required=False)
+    requirements = serializers.CharField(required=False, allow_blank=True)
+    photos = PhotoSerializer(many=True, required=False, max_length=MAX_PHOTOS)
 
 
 class ListingPatchSerializer(serializers.Serializer):
@@ -44,10 +58,33 @@ class ListingPatchSerializer(serializers.Serializer):
     adoption_fee = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=ZERO,
                                             required=False)
     city = serializers.CharField(max_length=80, required=False)
+    requirements = serializers.CharField(required=False, allow_blank=True)
+    size_category = serializers.ChoiceField(choices=SIZES, required=False, allow_blank=True)
+    spayed_neutered = serializers.BooleanField(required=False, allow_null=True)
+    vaccinated = serializers.BooleanField(required=False, allow_null=True)
+    walkable = serializers.BooleanField(required=False)
+    temperament = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    # AD9 · present = the whole new set (the first flagged primary, else the first); absent = untouched.
+    photos = PhotoSerializer(many=True, required=False, max_length=MAX_PHOTOS)
+
+
+HOME_TYPES = ("house", "apartment", "condo", "other")
+
+
+class ApplicationSerializer(serializers.Serializer):
+    """AD8 · the adopter's quick answers. A closed set of keys: anything else is dropped, so the
+    JSON column can't be used to stash arbitrary data on someone else's screen."""
+    home_type = serializers.ChoiceField(choices=HOME_TYPES, required=False)
+    rents = serializers.BooleanField(required=False)
+    landlord_ok = serializers.BooleanField(required=False)
+    other_pets = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    experience = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    schedule = serializers.CharField(max_length=500, required=False, allow_blank=True)
 
 
 class InquiryCreateSerializer(serializers.Serializer):
     message = serializers.CharField(required=False, allow_blank=True)
+    application = ApplicationSerializer(required=False)
 
 
 class StageUpdateSerializer(serializers.Serializer):
