@@ -57,6 +57,11 @@ LIVE_HANDOFF_STATUSES = (ListingStatus.DRAFT, ListingStatus.AVAILABLE,
                          ListingStatus.PENDING, ListingStatus.ADOPTED)
 
 
+def _listing_removed():
+    return Response({"error": {"code": "listing_removed",
+                               "message": "Our moderators removed this listing."}}, status=409)
+
+
 def _case_expired():
     """A lapsed or released claim. The case row outlives it and still names its old claimer,
     while the report can be claimed again under a NEW case — so without this check a former
@@ -213,10 +218,11 @@ class ListingsView(APIView):
             for item in page_items:
                 card = _card(item, posters[item.posted_by_id])
                 card["open_inquiries"] = item.open_inquiries
+                card["removed_by_moderation"] = item.hidden_at is not None   # AD7
                 cards.append(card)
             return Response({"results": cards, "next": next_page})
         # US-N1 · a deleted account's listings leave every public surface at once.
-        qs = (AdoptionListing.objects.filter(status="available")
+        qs = (AdoptionListing.objects.filter(status="available", hidden_at__isnull=True)
               .exclude(posted_by__status=AccountStatus.DELETED)
               .filter(public_poster_q()).select_related("posted_by").distinct().order_by("-created_at"))
         city = request.query_params.get("city")
@@ -256,7 +262,8 @@ class ListingsView(APIView):
                 size_category=pet.get("size_category", ""), spayed_neutered=pet.get("spayed_neutered"),
                 vaccinated=pet.get("vaccinated"), walkable=pet.get("walkable", False),
                 temperament=pet.get("temperament", ""), requirements=data.get("requirements", ""),
-                story=data.get("description", ""), adoption_fee=data["adoption_fee"])
+                story=data.get("description", ""), adoption_fee=data["adoption_fee"],
+                status=ListingStatus.DRAFT)    # AD12 · draft first; POST .../publish goes live
             _set_photos(listing, data.get("photos", []))
         return Response({"listing_id": str(listing.pk), "listing_status": listing.status},
                         status=201)
@@ -370,6 +377,53 @@ def _withdraw_placement(inquiry, now, reason="cancelled"):
     emit("inquiry_decided", outcome="expired" if reason == "expired" else "withdrawn")
 
 
+def _take_back(listing, user, data):
+    """C14 / D15 / AD10 · take `listing` (locked by the caller, inside transaction.atomic()) off the
+    market: an unanswered placement is withdrawn; a listing people have asked about needs
+    {"close_inquiries": true} and closes every open inquiry (the reserved one too); anything else
+    is simply withdrawn. Shared by a rescuer's POST /cases/{id}/handoff/cancel and any poster's
+    POST /listings/{id}/withdraw, so the two can't drift."""
+    if listing.status == ListingStatus.ADOPTED:
+        return Response({"error": {"code": "already_adopted",
+                                   "message": "This animal already has a home"}}, status=409)
+    active = list(AdoptionInquiry.objects.select_for_update()
+                  .filter(listing=listing, status=InquiryStatus.ACTIVE))
+    now = timezone.now()
+    # AD22 · by kind, not by shape: a public listing reserved for one applicant is also
+    # `pending` with one active inquiry, and must take the D15 two-step below.
+    if len(active) == 1 and active[0].kind == InquiryKind.PLACEMENT:
+        _withdraw_placement(active[0], now)
+    elif active:
+        # D15 · two-step: without the flag the poster is told how many people asked and
+        # nothing changes; with it (a real JSON boolean — "true"/1 don't count) the listing
+        # and every open inquiry close inside these same locks.
+        # A JSON list/string body has no .get — it is just "not true", not a 500.
+        body = data if isinstance(data, dict) else {}
+        if body.get("close_inquiries") is not True:
+            return Response({"error": {"code": "has_active_inquiries",
+                                       "message": "People have asked about this animal, so it "
+                                                  "can't be taken down from here.",
+                                       "details": {"active_inquiries": len(active)}}},
+                            status=409)
+        listing.status = ListingStatus.WITHDRAWN
+        listing.save(update_fields=["status", "updated_at"])
+        for inquiry in active:
+            inquiry.status = InquiryStatus.WITHDRAWN
+            inquiry.decided_at = now
+            inquiry.ended_by_account = user
+            inquiry.end_reason = EndReason.LISTING_WITHDRAWN
+            inquiry.reserved_at = None
+            inquiry.save(update_fields=["status", "decided_at", "ended_by_account",
+                                        "end_reason", "reserved_at", "updated_at"])
+            notices.listing_withdrawn(listing, inquiry)
+            emit("inquiry_decided", outcome="listing_withdrawn")
+        return Response({"status": "withdrawn", "closed_inquiries": len(active)})
+    else:
+        listing.status = ListingStatus.WITHDRAWN
+        listing.save(update_fields=["status", "updated_at"])
+    return Response({"status": "withdrawn"})
+
+
 class CaseHandoffCancelView(APIView):
     """C14 / D11 · POST /cases/{id}/handoff/cancel — the rescuer takes back a handoff that hasn't
     happened yet: a draft, an unanswered placement, or a public listing nobody has inquired on —
@@ -401,45 +455,7 @@ class CaseHandoffCancelView(APIView):
                 return Response({"error": {"code": "no_handoff",
                                            "message": "This animal isn't listed or offered to anyone"}},
                                 status=404)
-            if listing.status == ListingStatus.ADOPTED:
-                return Response({"error": {"code": "already_adopted",
-                                           "message": "This animal already has a home"}}, status=409)
-            active = list(AdoptionInquiry.objects.select_for_update()
-                          .filter(listing=listing, status=InquiryStatus.ACTIVE))
-            now = timezone.now()
-            # AD22 · by kind, not by shape: a public listing reserved for one applicant is also
-            # `pending` with one active inquiry, and must take the D15 two-step below.
-            if len(active) == 1 and active[0].kind == InquiryKind.PLACEMENT:
-                _withdraw_placement(active[0], now)
-            elif active:
-                # D15 · two-step: without the flag the rescuer is told how many people asked and
-                # nothing changes; with it (a real JSON boolean — "true"/1 don't count) the listing
-                # and every open inquiry close inside these same locks.
-                # A JSON list/string body has no .get — it is just "not true", not a 500.
-                body = request.data if isinstance(request.data, dict) else {}
-                if body.get("close_inquiries") is not True:
-                    return Response({"error": {"code": "has_active_inquiries",
-                                               "message": "People have asked about this animal, so it "
-                                                          "can't be taken down from here.",
-                                               "details": {"active_inquiries": len(active)}}},
-                                    status=409)
-                listing.status = ListingStatus.WITHDRAWN
-                listing.save(update_fields=["status", "updated_at"])
-                for inquiry in active:
-                    inquiry.status = InquiryStatus.WITHDRAWN
-                    inquiry.decided_at = now
-                    inquiry.ended_by_account = request.user
-                    inquiry.end_reason = EndReason.LISTING_WITHDRAWN
-                    inquiry.reserved_at = None
-                    inquiry.save(update_fields=["status", "decided_at", "ended_by_account",
-                                                "end_reason", "reserved_at", "updated_at"])
-                    notices.listing_withdrawn(listing, inquiry)
-                    emit("inquiry_decided", outcome="listing_withdrawn")
-                return Response({"status": "withdrawn", "closed_inquiries": len(active)})
-            else:
-                listing.status = ListingStatus.WITHDRAWN
-                listing.save(update_fields=["status", "updated_at"])
-        return Response({"status": "withdrawn"})
+            return _take_back(listing, request.user, request.data)
 
 
 class ListingDetailView(APIView):
@@ -471,6 +487,7 @@ class ListingDetailView(APIView):
             "status": listing.status,
             "photos": _photo_urls(listing),
             "poster": _poster_info(listing.posted_by),
+            "removed_by_moderation": listing.hidden_at is not None,   # AD7 · only its poster gets here
         })
 
     def patch(self, request, listing_id):
@@ -482,6 +499,8 @@ class ListingDetailView(APIView):
             return Response({"error": {"code": "not_your_listing",
                                        "message": "Only the poster can edit this listing"}},
                             status=403)
+        if listing.hidden_at is not None:
+            return _listing_removed()
         s = ListingPatchSerializer(data=request.data, partial=True)
         s.is_valid(raise_exception=True)
         data = s.validated_data
@@ -761,9 +780,17 @@ class ListingPublishView(APIView):
                 return Response({"error": {"code": "not_your_listing",
                                            "message": "Only the poster can publish this listing"}},
                                 status=403)
+            if listing.hidden_at is not None:
+                return _listing_removed()
             if listing.status != ListingStatus.DRAFT:
                 return Response({"error": {"code": "not_draft",
                                            "message": "Only a draft can be published"}}, status=409)
+            # AD12 · refuse now rather than go "live" to nobody: an unverified poster's listing is
+            # invisible (public_poster_q) and would turn public, unreviewed, the day they verify.
+            if not account_is_verified_rescuer(request.user):
+                return Response({"error": {"code": "verification_required",
+                                           "message": "Get verified before you publish a listing"}},
+                                status=403)
             listing.status = ListingStatus.AVAILABLE
             listing.save(update_fields=["status", "updated_at"])
         return Response({"listing_id": str(listing.pk), "status": listing.status})

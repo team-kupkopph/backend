@@ -5,7 +5,7 @@ from django.utils import timezone
 
 from listings.models import AdoptionInquiry, InquiryStatus, ListingStatus
 from listings.sweeps import STALE_CLOSE_DAYS, STALE_NUDGE_DAYS, close_stale_inquiries, nudge_stale_inquiries
-from listings.tests.adoption_helpers import c, inquire, listing, person, post, types
+from listings.tests.adoption_helpers import inquire, listing, person, post, types
 
 
 def _age(inq, days):

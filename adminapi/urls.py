@@ -15,6 +15,7 @@ from adminapi.moderation_views import (
     FlagDismissView,
     FlagQueueView,
     FlagReviewView,
+    ListingRestoreView,
     ReportRestoreView,
 )
 from adminapi.shelters_views import (
@@ -79,6 +80,7 @@ urlpatterns = [
 
     # U1 · a mistaken takedown of a Sagip report, undone by staff.
     path("reports/<uuid:report_id>/restore", ReportRestoreView.as_view()),
+    path("listings/<uuid:listing_id>/restore", ListingRestoreView.as_view()),   # AD7
 
     # US-E1/E2 · members.
     path("members", MemberQueueView.as_view()),

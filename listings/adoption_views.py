@@ -16,6 +16,7 @@ from listings import notices
 from listings.models import (
     REJECT_REASONS,
     AdoptionInquiry,
+    AdoptionListing,
     AdoptionStageKey,
     EndReason,
     InquiryKind,
@@ -25,7 +26,13 @@ from listings.models import (
 )
 from listings.representations import poster_contact_phone, poster_inquiry_rows
 from listings.stages import set_stage_state
-from listings.views import _locked_inquiry, _no_such_inquiry, _pet_from_listing
+from listings.views import (
+    _lock_handoff,
+    _locked_inquiry,
+    _no_such_inquiry,
+    _pet_from_listing,
+    _take_back,
+)
 from listings.visibility import account_is_verified_member
 from sagip import notices as sagip_notices
 from sagip.models import StrayStatus
@@ -270,3 +277,80 @@ class CompleteView(APIView):
             emit("adoption_completed")
         return Response({"inquiry_id": str(inquiry.pk), "listing_id": str(listing.pk),
                          "pet_id": str(pet.pk)})
+
+
+def _locked_own_listing(listing_id, user):
+    """(listing, None) locked in R1 order for its poster, else (None, error response). Call inside
+    transaction.atomic()."""
+    peek = (AdoptionListing.objects.filter(pk=listing_id).values("source_report_id").first())
+    if peek is None:
+        return None, _err("not_found", "No such listing", 404)
+    listing = _lock_handoff(listing_id, peek["source_report_id"])
+    if listing is None:
+        return None, _err("not_found", "No such listing", 404)
+    if listing.posted_by_id != user.pk:
+        return None, _err("not_your_listing", "Only the poster can do this", 403)
+    return listing, None
+
+
+class WithdrawListingView(APIView):
+    """AD10 / D15 · POST /listings/{id}/withdraw {"close_inquiries"?} — the poster takes their own
+    listing off Kupkop: a draft, a live listing, one that's reserved, or an unanswered placement.
+    People who asked are never closed on silently: without {"close_inquiries": true} the poster
+    is told how many, and nothing changes. The rescuer's POST /cases/{id}/handoff/cancel runs
+    the same code."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, listing_id):
+        with transaction.atomic():
+            listing, error = _locked_own_listing(listing_id, request.user)
+            if error:
+                return error
+            if listing.status == ListingStatus.WITHDRAWN:
+                return _err("not_withdrawable", "This listing is already withdrawn", 409)
+            return _take_back(listing, request.user, request.data)
+
+
+class MarkAdoptedView(APIView):
+    """AD10 · POST /listings/{id}/mark-adopted — the animal found a home outside Kupkop. The
+    listing reads Adopted, with no adopter account and no Pet (there is no one to give one to);
+    every open applicant is declined as "another adopter was chosen" and told; a rescue report is
+    resolved. If an applicant holds the reservation the poster completes it with them instead,
+    so the adoption lands in that person's My Pets."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, listing_id):
+        from community.badges import award_badges_for  # deferred: avoids an import cycle
+
+        with transaction.atomic():
+            listing, error = _locked_own_listing(listing_id, request.user)
+            if error:
+                return error
+            if listing.status not in (ListingStatus.AVAILABLE, ListingStatus.PENDING):
+                return _err("not_markable", "Only a listing that's on the feed or reserved can be "
+                                            "marked adopted", 409)
+            active = list(AdoptionInquiry.objects.select_for_update()
+                          .filter(listing=listing, status=InquiryStatus.ACTIVE).order_by("pk"))
+            if any(i.reserved_at is not None for i in active):
+                return _err("use_complete", "Someone holds the reservation. Complete the adoption "
+                                            "with them instead.", 409)
+            if any(i.kind == InquiryKind.PLACEMENT for i in active):
+                return _err("placement_pending", "This animal is offered to someone. Withdraw the "
+                                                 "offer first.", 409)
+            now = timezone.now()
+            listing.status = ListingStatus.ADOPTED
+            listing.save(update_fields=["status", "updated_at"])
+            for other in active:
+                other.listing = listing
+                _end(other, InquiryStatus.DECLINED, request.user,
+                     EndReason.ANOTHER_ADOPTER_CHOSEN, now)
+                notices.inquiry_rejected(other)
+            if listing.source_report_id is not None:
+                report = listing.source_report
+                if resolve_report(report, request.user, note="adopted outside Kupkop"):
+                    case = report.cases.filter(expired_at__isnull=True).first()
+                    if case is not None:
+                        sagip_notices.case_progress(report, case, StrayStatus.RESOLVED)
+            award_badges_for(listing.posted_by)
+            emit("adoption_completed")
+        return Response({"status": "adopted", "closed_inquiries": len(active)})

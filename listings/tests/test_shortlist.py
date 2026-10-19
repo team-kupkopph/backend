@@ -112,7 +112,8 @@ def test_exported_with_the_account_and_gone_when_anonymized(client):
 # ── AD18 · the Saved list ───────────────────────────────────────────────────────
 @pytest.mark.django_db
 def test_saved_listings_come_back_as_cards_newest_save_first(client):
-    from listings.tests.adoption_helpers import listing as public_listing, person
+    from listings.tests.adoption_helpers import listing as public_listing
+    from listings.tests.adoption_helpers import person
     me, poster = AccountFactory(), person()
     a, b = public_listing(poster, name="A"), public_listing(poster, name="B")
     hidden = public_listing(poster, name="Nope")
@@ -125,7 +126,8 @@ def test_saved_listings_come_back_as_cards_newest_save_first(client):
 @pytest.mark.django_db
 def test_saved_listings_leave_when_they_stop_being_public_or_were_never_live(client):
     from listings.models import ListingStatus
-    from listings.tests.adoption_helpers import listing as public_listing, person
+    from listings.tests.adoption_helpers import listing as public_listing
+    from listings.tests.adoption_helpers import person
     me, poster, unverified = AccountFactory(), person(), person()
     live = public_listing(poster, name="Live")
     reserved = public_listing(poster, name="Reserved", status=ListingStatus.PENDING)
@@ -143,5 +145,5 @@ def test_saved_listings_leave_when_they_stop_being_public_or_were_never_live(cli
 @pytest.mark.django_db
 def test_the_saved_list_is_private_and_needs_sign_in(client):
     assert client.get("/api/v1/me/shortlist/listings").status_code == 401
-    me, other = AccountFactory(), AccountFactory()
+    other = AccountFactory()
     assert client.get("/api/v1/me/shortlist/listings", **_hdr(other)).json()["results"] == []

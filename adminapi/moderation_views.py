@@ -10,6 +10,8 @@ from rest_framework.response import Response
 from adminapi.pagination import decode_cursor, paginate
 from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
+from listings.models import AdoptionListing
+from listings.moderation import ListingNotHidden, restore_listing
 from moderation.actions import DECIDABLE, ModerationError, resolve_flag
 from moderation.models import FlagStatus, FlagTarget, ModerationFlag
 from sagip.models import StrayReport
@@ -187,3 +189,31 @@ class ReportRestoreView(StaffView):
         request._request._audit_body = {"notes": reason}
         return Response({"report_id": str(report.pk), "status": report.status,
                          "hidden": report.hidden_at is not None})
+
+
+class ListingRestoreView(StaffView):
+    """POST /admin-api/listings/{listing_id}/restore {"reason"} · AD7.
+
+    The way back for a mistaken listing takedown. A reason is required, as for every staff action
+    that reverses another's decision. It only un-hides: the inquiries the takedown closed stay
+    closed and nobody is notified."""
+
+    def post(self, request, listing_id):
+        listing = AdoptionListing.objects.filter(pk=listing_id).first()
+        if listing is None:
+            return Response({"error": {"code": "not_found", "message": "No such listing."}},
+                            status=404)
+        reason = request.data.get("reason") if isinstance(request.data, dict) else None
+        reason = reason.strip() if isinstance(reason, str) else ""
+        if not reason:
+            return Response({"error": {"code": "reason_required",
+                                       "message": "Say why the listing is being restored."}},
+                            status=422)
+        try:
+            listing = restore_listing(listing, admin_account_for(request), reason)
+        except ListingNotHidden:
+            return Response({"error": {"code": "not_hidden",
+                                       "message": "That listing isn't hidden."}}, status=409)
+        request._request._audit_body = {"notes": reason}
+        return Response({"listing_id": str(listing.pk), "status": listing.status,
+                         "hidden": listing.hidden_at is not None})

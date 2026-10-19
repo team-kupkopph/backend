@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('listings', '0007_adoption_inquiry_poster_loop'),
+        ('listings', '0008_listing_hidden_at'),
     ]
 
     operations = [

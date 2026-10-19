@@ -60,6 +60,15 @@ def resolve_flag(flag, reviewer, status, notes=""):
             hide_report(report, reviewer)
             side_effects["report_hidden"] = str(report.pk)
 
+    if status == FlagStatus.ACTIONED and flag.target_type == FlagTarget.LISTING:
+        # AD7 / AQ7 · hide, never delete — same shape as the report takedown above.
+        from listings.models import AdoptionListing
+        from listings.moderation import hide_listing
+        listing = AdoptionListing.objects.filter(pk=flag.target_id).first()
+        if listing is not None:
+            hide_listing(listing, reviewer)
+            side_effects["listing_hidden"] = str(listing.pk)
+
     # ⚠️ Actioning a flag does NOT suspend an account, even for target_type='account'.
     # Suspension has its own side effects (token revocation, US-E2) and its own audit trail.
     # A flag resolved as `actioned` records the JUDGEMENT; the action is taken separately and

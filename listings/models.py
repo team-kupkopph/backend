@@ -168,6 +168,10 @@ class AdoptionListing(models.Model):
     location_text = models.CharField(max_length=160, blank=True)
     status = models.CharField(max_length=20, choices=ListingStatus.choices,
                               default=ListingStatus.AVAILABLE)
+    # AD7 · set by a moderation takedown (listings.moderation.hide_listing). A hidden listing is
+    # gone for everyone but its poster, who reads it as "Removed by moderation". Orthogonal to
+    # `status`: a reserved or adopted listing can be hidden without reversing the adoption.
+    hidden_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
