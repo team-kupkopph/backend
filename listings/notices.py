@@ -47,6 +47,13 @@ def inquiry_rejected(inquiry):
     """AD6 · the adopter hears why. Another adopter being chosen (AQ3) is a happier sentence: the
     animal found a home."""
     listing = inquiry.listing
+    if inquiry.end_reason == "inquiry_expired":
+        # AD23 · nobody answered. Say it plainly and kindly: it isn't the adopter's fault.
+        notify(inquiry.adopter_account, "inquiry_rejected", title="Your inquiry has closed",
+               body=(f"{_poster_name(listing)} didn't get back to you about {_name(listing)}, so we've "
+                     f"closed your inquiry. There are more animals waiting on the Adopt tab."),
+               data=_data(inquiry))
+        return
     if inquiry.end_reason == "another_adopter_chosen":
         title = f"{_cap(_name(listing))} found a home"
         body = f"{_cap(_name(listing))} was adopted by someone else. Thank you for offering them one."
@@ -110,3 +117,12 @@ def adoption_completed(inquiry, pet):
            title=f"Welcome home, {_name(listing)}!",
            body=f"{_cap(_name(listing))} is now in My Pets. Thank you for adopting.",
            data=_data(inquiry, pet_id=str(pet.pk)))
+
+
+def inquiry_waiting(inquiry):
+    """AD23 · the poster is nudged once about an inquiry nobody has answered."""
+    listing = inquiry.listing
+    notify(listing.posted_by, "inquiry_waiting", title="Someone is waiting to hear from you",
+           body=(f"{inquiry.adopter_account.display_name} asked about {_name(listing)} a week ago "
+                 f"and hasn't had an answer."),
+           data=_data(inquiry, poster_is_shelter=listing.posted_by.account_type == "shelter"))

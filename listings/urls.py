@@ -2,10 +2,12 @@ from django.urls import path
 
 from listings.adoption_views import (
     CompleteView,
+    MarkAdoptedView,
     RejectView,
     ReserveView,
     ScreenView,
     UnreserveView,
+    WithdrawListingView,
     WithdrawView,
 )
 from listings.views import (
@@ -23,6 +25,7 @@ from listings.views import (
     MyPetsView,
     PlacementDecisionView,
     ShortlistItemView,
+    ShortlistListingsView,
     ShortlistView,
 )
 
@@ -30,11 +33,14 @@ urlpatterns = [
     path("listings", ListingsView.as_view()),
     path("listings/<uuid:listing_id>", ListingDetailView.as_view()),
     path("listings/<uuid:listing_id>/publish", ListingPublishView.as_view()),   # D7
+    path("listings/<uuid:listing_id>/withdraw", WithdrawListingView.as_view()),     # AD10
+    path("listings/<uuid:listing_id>/mark-adopted", MarkAdoptedView.as_view()),     # AD10
     path("listings/<uuid:listing_id>/inquiries", ListingInquiriesView.as_view()),
     path("me/inquiries", MyInquiriesView.as_view()),
     path("me/pets", MyPetsView.as_view()),
     path("me/pets/<uuid:pet_id>", MyPetDetailView.as_view()),   # AQ8
     path("me/shortlist", ShortlistView.as_view()),
+    path("me/shortlist/listings", ShortlistListingsView.as_view()),     # AD18
     path("me/shortlist/<uuid:listing_id>", ShortlistItemView.as_view()),
     path("inquiries/<uuid:inquiry_id>", InquiryDetailView.as_view()),
     path("inquiries/<uuid:inquiry_id>/stages/<str:stage_key>", InquiryStageView.as_view()),

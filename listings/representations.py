@@ -104,6 +104,7 @@ def poster_inquiry_rows(inquiries):
         adopter = inquiry.adopter_account
         row = _base(inquiry, "poster")
         row["message"] = inquiry.message or None
+        row["application"] = inquiry.application or None      # AD8
         row["created_at"] = inquiry.created_at.isoformat()
         row["adopter"] = {"account_id": str(adopter.pk), "display_name": adopter.display_name,
                           "city": cities.get(adopter.pk), "verified_member": adopter.pk in members}

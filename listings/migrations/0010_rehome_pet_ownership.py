@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('accounts', '0009_account_anonymized_at'),
-        ('listings', '0007_adoption_inquiry_poster_loop'),
+        ('listings', '0009_inquiry_application_nudge'),
     ]
 
     operations = [

@@ -69,12 +69,16 @@ _TYPES = [
     NotificationType("placement_decided", "{listing_id, inquiry_id, decision}", True, "kupkop://rescues"),
     NotificationType("placement_withdrawn", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
     NotificationType("listing_withdrawn", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
+    # AD7: the poster hears a moderation takedown of their listing.
+    NotificationType("listing_removed", "{listing_id}", True, "kupkop://listings/{listing_id}"),
     # Adoption poster loop (dev/adoption-build-review.md AD2): the placement recipient's push,
     # split from the poster's inquiry_received so the app routes each without guessing.
     NotificationType("placement_offered", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
     NotificationType("inquiry_accepted", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("inquiry_rejected", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("inquiry_withdrawn", "{listing_id, inquiry_id, poster_is_shelter}", True, "kupkop://inquiries/{inquiry_id}"),
+    # AD23: the poster is nudged once when an inquiry has waited a week for an answer.
+    NotificationType("inquiry_waiting", "{listing_id, inquiry_id, poster_is_shelter}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("adoption_badge_needed", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("adoption_reserved", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("reservation_released", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),

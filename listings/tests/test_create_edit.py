@@ -133,7 +133,7 @@ def test_created_listing_fields_map_correctly(client):
     assert str(listing.adoption_fee) == "300.00"
     assert listing.city == "Marikina"
     assert listing.posted_by_id == member.pk
-    assert listing.status == "available"
+    assert listing.status == "draft"      # AD12 · draft first; publish goes live
     assert AdoptionListingPhoto.objects.filter(listing=listing).count() == 1
 
 
@@ -144,7 +144,7 @@ def test_response_shape(client):
                       **_hdr(member))
     body = res.json()
     assert set(body.keys()) == {"listing_id", "listing_status"}
-    assert body["listing_status"] == "available"
+    assert body["listing_status"] == "draft"
 
 
 # ── PATCH ─────────────────────────────────────────────────────────────────────────
