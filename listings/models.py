@@ -56,6 +56,7 @@ class EndReason(models.TextChoices):
     PLACEMENT_DECLINED = "placement_declined"
     PLACEMENT_CANCELLED = "placement_cancelled"
     PLACEMENT_EXPIRED = "placement_expired"
+    INQUIRY_EXPIRED = "inquiry_expired"   # AD23 · nobody answered it for three weeks
 
 
 REJECT_REASONS = (EndReason.NOT_A_FIT, EndReason.REQUIREMENTS_NOT_MET, EndReason.NO_RESPONSE,
@@ -198,6 +199,9 @@ class AdoptionInquiry(models.Model):
     adopter_account = models.ForeignKey(Account, on_delete=models.PROTECT,
                                         related_name="adoption_inquiries")
     message = models.TextField(blank=True)
+    # AD8 · the adopter's quick answers (home type, rent/own, other pets, experience, schedule),
+    # validated by listings.serializers.ApplicationSerializer — the keys are a closed set.
+    application = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=InquiryStatus.choices,
                               default=InquiryStatus.ACTIVE)
     notes = models.TextField(blank=True)
@@ -211,6 +215,8 @@ class AdoptionInquiry(models.Model):
     # AQ4 · set while the animal is held for this applicant. At most one per listing among open
     # inquiries (uq_adoption_inquiry_one_reserved).
     reserved_at = models.DateTimeField(null=True, blank=True)
+    # AD23 · set once the poster has been nudged about an unanswered inquiry (never nudged twice).
+    nudged_at = models.DateTimeField(null=True, blank=True)
     # AD6 · who closed it and why. A NULL account with an end_reason = the system (an expiry).
     ended_by_account = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True,
                                          blank=True, related_name="+")

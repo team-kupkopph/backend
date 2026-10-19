@@ -3,8 +3,8 @@ from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
 from listings.models import AdoptionListing, ListingStatus
-from verifications.models import AccountCapability
 from sagip.models import RescueCase, StrayReport, StrayReportPhoto, StrayStatus
+from verifications.models import AccountCapability
 
 
 def _c(a):

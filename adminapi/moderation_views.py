@@ -10,10 +10,10 @@ from rest_framework.response import Response
 from adminapi.pagination import decode_cursor, paginate
 from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
-from moderation.actions import DECIDABLE, ModerationError, resolve_flag
-from moderation.models import FlagStatus, FlagTarget, ModerationFlag
 from listings.models import AdoptionListing
 from listings.moderation import ListingNotHidden, restore_listing
+from moderation.actions import DECIDABLE, ModerationError, resolve_flag
+from moderation.models import FlagStatus, FlagTarget, ModerationFlag
 from sagip.models import StrayReport
 from sagip.moderation import ReportNotHidden, restore_report
 

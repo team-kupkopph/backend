@@ -77,6 +77,8 @@ _TYPES = [
     NotificationType("inquiry_accepted", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("inquiry_rejected", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("inquiry_withdrawn", "{listing_id, inquiry_id, poster_is_shelter}", True, "kupkop://inquiries/{inquiry_id}"),
+    # AD23: the poster is nudged once when an inquiry has waited a week for an answer.
+    NotificationType("inquiry_waiting", "{listing_id, inquiry_id, poster_is_shelter}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("adoption_badge_needed", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("adoption_reserved", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),
     NotificationType("reservation_released", "{listing_id, inquiry_id}", True, "kupkop://inquiries/{inquiry_id}"),

@@ -64,7 +64,7 @@ def test_a_poster_can_withdraw_a_draft_or_a_listing_nobody_asked_about():
 def test_withdraw_is_two_step_when_people_have_asked():
     poster, a, b = person(), person(), person()
     live = listing(poster)
-    ia, ib = inquire(a, live), inquire(b, live)
+    ia = inquire(a, live); inquire(b, live)
     first = _withdraw(poster, live)
     assert first.status_code == 409 and first.json()["error"]["code"] == "has_active_inquiries"
     assert first.json()["error"]["details"]["active_inquiries"] == 2
@@ -107,6 +107,7 @@ def test_only_the_poster_can_withdraw_and_not_once_adopted_or_withdrawn():
 @pytest.mark.django_db
 def test_withdrawing_a_rescue_listing_frees_the_case_like_a_take_back():
     from django.contrib.gis.geos import Point
+
     from sagip.models import RescueCase, StrayReport, StrayStatus
     rescuer = person(member=True)
     report = StrayReport.objects.create(species="dog", condition="injured", city="Marikina",
@@ -119,6 +120,7 @@ def test_withdrawing_a_rescue_listing_frees_the_case_like_a_take_back():
 @pytest.mark.django_db
 def test_withdrawing_an_unanswered_placement_cancels_it_and_tells_the_recipient():
     from django.contrib.gis.geos import Point
+
     from sagip.models import RescueCase, StrayReport, StrayStatus
     rescuer, recipient = person(member=True), person(member=True)
     report = StrayReport.objects.create(species="dog", condition="injured", city="Marikina",
@@ -140,7 +142,7 @@ def _mark(who, the_listing):
 def test_mark_adopted_closes_every_applicant_kindly_and_creates_no_pet():
     poster, a, b = person(), person(), person()
     live = listing(poster)
-    ia, ib = inquire(a, live), inquire(b, live)
+    ia = inquire(a, live); inquire(b, live)
     res = _mark(poster, live)
     assert res.status_code == 200 and res.json() == {"status": "adopted", "closed_inquiries": 2}
     live.refresh_from_db(); ia.refresh_from_db()
@@ -168,6 +170,7 @@ def test_mark_adopted_resolves_a_rescue_report_and_refuses_a_draft_or_withdrawn_
     assert _mark(poster, listing(poster, status=ListingStatus.DRAFT)).status_code == 409
     assert _mark(poster, listing(poster, status=ListingStatus.WITHDRAWN)).status_code == 409
     from django.contrib.gis.geos import Point
+
     from sagip.models import RescueCase, StrayReport, StrayStatus
     report = StrayReport.objects.create(species="dog", condition="injured", city="Marikina",
         status=StrayStatus.SAFE, geom=Point(121.05, 14.63, srid=4326))

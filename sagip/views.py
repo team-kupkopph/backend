@@ -678,8 +678,10 @@ class ReportDetailView(APIView):
             # S27 · a claimer reading their report (from a push, or the map) can find the
             # case; S9 · and see when it lapses.
             mine = r.cases.get(claimed_by_account=request.user, expired_at__isnull=True)
+            from listings.handoff import handoff_summary  # deferred: listings imports sagip
             body["my_case"] = {"case_id": str(mine.pk), "claim_due_at": _iso(claim_due_at(mine)),
-                               "contact_shared": mine.contact_share_consent}   # D1
+                               "contact_shared": mine.contact_share_consent,   # D1
+                               "handoff": handoff_summary(r)}                  # AD20
 
         if request.user.is_authenticated:
             # D1 · the viewer's own offers here, so a helper can see (and change) their consent.

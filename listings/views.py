@@ -1,7 +1,7 @@
 from decimal import Decimal, InvalidOperation
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -119,6 +119,20 @@ def _paginate(qs, request):
     items = list(qs[start:start + PAGE_SIZE + 1])
     has_next = len(items) > PAGE_SIZE
     return items[:PAGE_SIZE], (page + 1 if has_next else None)
+
+
+def _set_photos(listing, photos):
+    """AD9 · replace a listing's photo set. The first photo flagged primary is the primary; with
+    none flagged, the first photo is."""
+    listing.photos.all().delete()
+    flagged = next((i for i, p in enumerate(photos) if p.get("is_primary")), 0)
+    for i, photo in enumerate(photos):
+        AdoptionListingPhoto.objects.create(listing=listing, url=photo["file_url"],
+                                            is_primary=(i == flagged))
+
+
+def _photo_urls(listing):
+    return [p.url for p in sorted(listing.photos.all(), key=lambda p: not p.is_primary)]
 
 
 def _pet_fields(listing):
@@ -245,10 +259,12 @@ class ListingsView(APIView):
                 posted_by=request.user, name=pet["name"], species=pet["species"],
                 breed=pet.get("breed", ""), sex=pet.get("sex", ""),
                 date_of_birth=pet.get("birthdate"), city=data["city"],
+                size_category=pet.get("size_category", ""), spayed_neutered=pet.get("spayed_neutered"),
+                vaccinated=pet.get("vaccinated"), walkable=pet.get("walkable", False),
+                temperament=pet.get("temperament", ""), requirements=data.get("requirements", ""),
                 story=data.get("description", ""), adoption_fee=data["adoption_fee"],
                 status=ListingStatus.DRAFT)    # AD12 · draft first; POST .../publish goes live
-            for photo in data.get("photos", []):
-                AdoptionListingPhoto.objects.create(listing=listing, url=photo["file_url"])
+            _set_photos(listing, data.get("photos", []))
         return Response({"listing_id": str(listing.pk), "listing_status": listing.status},
                         status=201)
 
@@ -469,7 +485,7 @@ class ListingDetailView(APIView):
             "description": listing.story or None, "adoption_fee": str(listing.adoption_fee),
             "requirements": listing.requirements or None, "city": listing.city,
             "status": listing.status,
-            "photos": [p.url for p in listing.photos.all()],
+            "photos": _photo_urls(listing),
             "poster": _poster_info(listing.posted_by),
             "removed_by_moderation": listing.hidden_at is not None,   # AD7 · only its poster gets here
         })
@@ -495,6 +511,7 @@ class ListingDetailView(APIView):
                                            "message": f"The adoption fee can't exceed ₱{cap}",
                                            "details": {"cap": cap}}}, status=422)
         field_map = {"birthdate": "date_of_birth", "description": "story"}
+        photos = data.pop("photos", None)
         changed = []
         for key, value in data.items():
             field = field_map.get(key, key)
@@ -503,11 +520,15 @@ class ListingDetailView(APIView):
         # Final review #2 · write only what the patch set. A whole-row save() would write back the
         # status this request read, undoing an accept/decline/take-back/expiry that committed in
         # between; the status is then re-read so the answer reports what is really there.
-        listing.save(update_fields=[*changed, "updated_at"])
+        with transaction.atomic():
+            listing.save(update_fields=[*changed, "updated_at"])
+            if photos is not None:
+                _set_photos(listing, photos)
         listing.refresh_from_db(fields=["status"])
         return Response({
             "listing_id": str(listing.pk), "pet": _pet_fields(listing),
             "description": listing.story or None, "adoption_fee": str(listing.adoption_fee),
+            "requirements": listing.requirements or None, "photos": _photo_urls(listing),
             "city": listing.city, "status": listing.status,
         })
 
@@ -587,7 +608,8 @@ class ListingInquiriesView(APIView):
                                                           "for adoption."}}, status=409)
                 inquiry = AdoptionInquiry.objects.create(
                     listing=listing, adopter_account=request.user,
-                    message=s.validated_data.get("message", ""))
+                    message=s.validated_data.get("message", ""),
+                    application=dict(s.validated_data.get("application") or {}))
                 stages = []
                 for key in AdoptionStageKey:
                     stage = AdoptionStage.objects.create(inquiry=inquiry, stage_key=key)
@@ -929,6 +951,28 @@ class ShortlistView(APIView):
         for listing_id, kind in rows:
             out[kind].append(str(listing_id))
         return Response(out)
+
+
+class ShortlistListingsView(APIView):
+    """GET /me/shortlist/listings — AD18 · the Saved list: the listings this person swiped right
+    on, as feed cards, newest save first, paginated. A saved listing stays while it is reserved or
+    adopted (the card says so); it leaves when it was withdrawn, is still a draft, or its poster
+    is no longer public — the same predicate as the feed."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        saved = ListingPreference.objects.filter(account=request.user, kind=PreferenceKind.SAVED)
+        qs = (AdoptionListing.objects
+              .filter(preferences__in=saved,
+                      status__in=(ListingStatus.AVAILABLE, ListingStatus.PENDING, ListingStatus.ADOPTED))
+              .exclude(posted_by__status=AccountStatus.DELETED)
+              .filter(public_poster_q()).select_related("posted_by").distinct()
+              .annotate(saved_at=Max("preferences__updated_at", filter=Q(preferences__account=request.user)))
+              .order_by("-saved_at"))
+        page_items, next_page = _paginate(qs, request)
+        posters = _poster_infos({item.posted_by for item in page_items})
+        return Response({"results": [_card(item, posters[item.posted_by_id]) for item in page_items],
+                         "next": next_page})
 
 
 class ShortlistItemView(APIView):

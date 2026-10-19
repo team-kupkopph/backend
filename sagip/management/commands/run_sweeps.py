@@ -23,7 +23,7 @@ from django.core.management.base import CommandError
 
 from common.management_base import SingletonCommand
 from community.sweeps import award_badges
-from listings.sweeps import expire_placements
+from listings.sweeps import close_stale_inquiries, expire_placements, nudge_stale_inquiries
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims, warn_due_claims
 from volunteer.sweeps import nudge_attendance, remind_shifts
 
@@ -44,6 +44,8 @@ SWEEPS = [
     ("warned", warn_due_claims),         # S9 · before `expired`, so a warning can't trail it
     ("expired", expire_stalled_claims),
     ("placements_expired", expire_placements),   # C14 / D11 · an unanswered placement lapses
+    ("inquiries_nudged", nudge_stale_inquiries),   # AD23 · a week unanswered nudges the poster
+    ("inquiries_closed", close_stale_inquiries),   # AD23 · three weeks unanswered closes politely
     ("reminded", remind_shifts),
     ("attendance_nudged", nudge_attendance),
     ("badged", award_badges),

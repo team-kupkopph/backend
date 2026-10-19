@@ -2,6 +2,7 @@
 notice, the poster told, a staff restore. A reserved or adopted listing is hidden but the adoption
 isn't reversed."""
 import pytest
+
 from listings.models import AdoptionListing, InquiryStatus, ListingStatus
 from listings.moderation import ListingNotHidden, hide_listing, restore_listing
 from listings.tests.adoption_helpers import c, inquire, listing, person, post, types
