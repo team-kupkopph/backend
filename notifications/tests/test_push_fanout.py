@@ -46,3 +46,27 @@ def test_push_failure_never_breaks_notify(django_capture_on_commit_callbacks):
         with django_capture_on_commit_callbacks(execute=True):
             n = notify(a, "shift_confirmed", title="x", body="y", data={})   # must not raise
     assert n.notification_id is not None   # the in-app row still exists
+
+
+@pytest.mark.django_db
+def test_the_pushed_data_names_the_type_and_is_all_strings(django_capture_on_commit_callbacks):
+    """Found by Run 10: the app routes a tapped push on `data.type`, and `notify()` sent only the deep-link
+    payload, so a real push would open nothing. FCM data values must also be strings; the payload had
+    booleans (`poster_is_shelter`) and ids."""
+    a = AccountFactory()
+    DeviceToken.objects.create(account=a, fcm_token="t1", platform="ios")
+    with patch("notifications.service.send_push", return_value=pushmod.PushResult(ok=True)) as sp:
+        with django_capture_on_commit_callbacks(execute=True):
+            notify(a, "inquiry_received", title="x", body="y",
+                   data={"listing_id": "l", "inquiry_id": "i", "poster_is_shelter": True})
+    sent = sp.call_args.kwargs["data"]
+    assert sent == {"type": "inquiry_received", "listing_id": "l", "inquiry_id": "i", "poster_is_shelter": "true"}
+
+
+@pytest.mark.django_db
+def test_the_in_app_row_keeps_its_original_typed_data(django_capture_on_commit_callbacks):
+    from notifications.models import Notification
+    a = AccountFactory()
+    with django_capture_on_commit_callbacks(execute=True):
+        notify(a, "inquiry_received", title="x", body="y", data={"inquiry_id": "i", "poster_is_shelter": True})
+    assert Notification.objects.get(account=a).data == {"inquiry_id": "i", "poster_is_shelter": True}

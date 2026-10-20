@@ -21,6 +21,15 @@ class UnregisteredNotificationType(Exception):
     register the type (with its `data` shape) instead of catching this."""
 
 
+def _push_data(type, data):
+    """What goes on the wire: the type the app routes on, then the deep-link payload, every value a string.
+    FCM's `data` map takes strings only (a bool or an id would be rejected), and the app reads
+    `poster_is_shelter` as "true" / "false" from a push. The in-app row keeps the original typed data."""
+    def text(v):
+        return ("true" if v else "false") if isinstance(v, bool) else str(v)
+    return {"type": type, **{k: text(v) for k, v in (data or {}).items() if v is not None}}
+
+
 def _fan_out_push(account, type, title, body, data):
     """US-P2 · post-commit push fan-out for `notify()`. Runs only after the transaction
     that created the in-app row commits — a rolled-back transaction sends nothing. Every
@@ -36,7 +45,7 @@ def _fan_out_push(account, type, title, body, data):
         from devices.models import DeviceToken
         for tok in DeviceToken.objects.filter(account=account):
             try:
-                res = send_push(tok.fcm_token, title=title, body=body, data=data)
+                res = send_push(tok.fcm_token, title=title, body=body, data=_push_data(type, data))
                 if res.unregistered:
                     tok.delete()
             except Exception:
