@@ -46,8 +46,10 @@ class ShelterNeed(models.Model):
     description = models.TextField(blank=True)
     quantity_needed = models.IntegerField(default=1)
     quantity_received = models.IntegerField(default=0)
+    unit = models.CharField(max_length=16, blank=True, default="")
     status = models.CharField(max_length=10, choices=NeedStatus.choices,
                               default=NeedStatus.OPEN)
+    fulfilled_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -77,8 +79,13 @@ class NeedPledge(models.Model):
     pledger_account = models.ForeignKey(Account, on_delete=models.PROTECT,
                                         related_name="need_pledges")
     quantity = models.IntegerField(default=1)
+    quantity_received = models.IntegerField(null=True, blank=True)
     status = models.CharField(max_length=10, choices=PledgeStatus.choices,
                               default=PledgeStatus.PLEDGED)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    cancel_reason = models.CharField(max_length=12, null=True, blank=True,
+                                     choices=[("donor", "donor"), ("need_closed", "need_closed")])
+    note = models.CharField(max_length=280, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -86,10 +93,18 @@ class NeedPledge(models.Model):
         indexes = [
             models.Index(fields=["need"], name="idx_need_pledge_need"),
             models.Index(fields=["pledger_account"], name="idx_need_pledge_pledger"),
+            models.Index(fields=["need", "status"], name="idx_need_pledge_need_status"),
         ]
         constraints = [
             models.CheckConstraint(condition=models.Q(quantity__gte=1),
                                    name="need_pledge_quantity_min1"),
+            models.CheckConstraint(
+                condition=models.Q(quantity_received__isnull=True) | models.Q(quantity_received__gte=1),
+                name="need_pledge_received_min1"),
+            models.CheckConstraint(
+                condition=models.Q(cancel_reason__isnull=True)
+                | models.Q(cancel_reason__in=["donor", "need_closed"]),
+                name="need_pledge_cancel_reason_values"),
         ]
 
 
