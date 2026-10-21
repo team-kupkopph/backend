@@ -13,7 +13,7 @@ from accounts.models import AccountStatus
 from common.analytics import emit
 from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCreateThrottle
 from notifications.service import notify
-from shelter.permissions import IsShelter
+from shelter.permissions import IsShelter, IsVerifiedShelterForNeeds
 
 from .badges import impact_counts
 from .models import (
@@ -27,7 +27,7 @@ from .models import (
     StoryStatus,
     StoryType,
 )
-from .needs import NeedError, apply_received, cancel_pledge, create_pledge
+from .needs import NeedError, apply_received, cancel_pledge, create_pledge, live_needs
 from .serializers import (
     NeedCreateSerializer,
     NeedPatchSerializer,
@@ -46,6 +46,7 @@ def _err(code, message, status):
 _NEED_ERRORS = {
     # code: (status, default message)
     "not_found": (404, "No such need."),
+    "own_need": (403, "A shelter can't pledge to its own wishlist."),
     "need_not_open": (409, "This need is no longer open for pledges."),
     "pledge_decided": (409, ""),
     "total_overflow": (422, "That would take this need's received total past the maximum."),
@@ -68,10 +69,11 @@ def _need_repr(need):
 
 
 class ShelterNeedsView(APIView):
-    """GET a shelter's wishlist (public); POST a new need (that shelter only)."""
+    """GET a shelter's wishlist (public, live shelters only — the owner always sees its own);
+    POST a new need (that shelter only, and only once its organisation is approved)."""
 
     def get_permissions(self):
-        return [IsShelter()] if self.request.method == "POST" else [AllowAny()]
+        return [IsVerifiedShelterForNeeds()] if self.request.method == "POST" else [AllowAny()]
 
     def get_throttles(self):
         # US-K2 · the WRITE is rate-limited; the public read is not. A class-level
@@ -79,7 +81,11 @@ class ShelterNeedsView(APIView):
         return [NeedCreateThrottle()] if self.request.method == "POST" else []
 
     def get(self, request, account_id):
-        qs = ShelterNeed.objects.filter(shelter_account_id=account_id)
+        # AW2/AW31 · everyone but the owning shelter sees only a live shelter's needs.
+        user = request.user
+        owner = user.is_authenticated and str(user.pk) == str(account_id)
+        qs = ShelterNeed.objects.all() if owner else live_needs()
+        qs = qs.filter(shelter_account_id=account_id)
         status = request.query_params.get("status")
         if status:
             qs = qs.filter(status=status)

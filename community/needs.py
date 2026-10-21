@@ -12,6 +12,9 @@ before the lock (that was the double-count: AW1).
 """
 from django.db import transaction
 
+from accounts.models import Account, AccountStatus
+from verifications.models import VerificationRequest
+
 from .models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
 
 MAX_QTY = 100_000          # per need target, per pledge, and per received-confirm
@@ -20,13 +23,31 @@ MAX_TOTAL = 2_000_000_000  # running `quantity_received` ceiling (int4 max is 2_
 
 class NeedError(ValueError):
     """A wishlist transition that can't be applied. `code` is the machine string the view
-    maps to a status (`not_found`, `need_not_open`, `pledge_decided`, `total_overflow`);
+    maps to a status (`not_found`, `need_not_open`, `pledge_decided`, `total_overflow`,
+    `own_need`);
     `message` optionally overrides the view's default wording for that code."""
 
     def __init__(self, code, message=""):
         super().__init__(code)
         self.code = code
         self.message = message
+
+
+def live_shelter_ids():
+    """AW2/AW31 · the shelters whose wishlist the public may see and pledge to: an `active`
+    shelter account with an approved `shelter_org` verification. A suspended or deleted
+    shelter, or one still awaiting approval, is not live."""
+    approved = VerificationRequest.objects.filter(type="shelter_org", status="approved")
+    return (Account.objects
+            .filter(account_type="shelter", status=AccountStatus.ACTIVE,
+                    pk__in=approved.values("account_id"))
+            .values_list("pk", flat=True))
+
+
+def live_needs():
+    """Every public read of needs, and `create_pledge`, starts from here. The owning shelter's
+    own view of its wishlist is the one deliberate exception (see `ShelterNeedsView.get`)."""
+    return ShelterNeed.objects.filter(shelter_account_id__in=live_shelter_ids())
 
 
 def _lock_need(need_id):
@@ -41,8 +62,17 @@ def create_pledge(need_id, pledger, quantity):
     """Record a `pledged` pledge by `pledger` against the need — only while it is `open`.
 
     The need row is locked and its status re-read, so a pledge can't slip in after a close
-    (or a fulfil) that committed first. Over-pledging an open need is allowed."""
+    (or a fulfil) that committed first. Over-pledging an open need is allowed.
+
+    Trust gates, in this order: a shelter can't pledge to its own need (`own_need`) — checked
+    first so an unapproved shelter pledging to its own wishlist is told why, not "not found";
+    then the need must belong to a live shelter (`not_found`, so a suspended shelter's wishlist
+    is indistinguishable from a missing one)."""
     need = _lock_need(need_id)
+    if pledger.pk == need.shelter_account_id:
+        raise NeedError("own_need")
+    if not live_needs().filter(pk=need.pk).exists():
+        raise NeedError("not_found", "No such need.")
     if need.status != NeedStatus.OPEN:
         raise NeedError("need_not_open")
     return NeedPledge.objects.create(need=need, pledger_account=pledger, quantity=quantity)
