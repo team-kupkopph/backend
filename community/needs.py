@@ -177,7 +177,9 @@ def edit_need(need_id, owner, fields):
 
     `fields` is a dict drawn from `EDITABLE_FIELDS`. Raises `NeedError`: `not_found`,
     `forbidden`, `need_not_open` (only an open need is editable), or `below_received` (the new
-    target is under what has already arrived; `details` carries the received count)."""
+    target is under what has already arrived; `details` carries the received count). Lowering
+    the target to exactly what has arrived flips the need to `fulfilled` (stamping
+    `fulfilled_at`), inside the same lock."""
     owned_need_id(need_id, owner, "Only the owning shelter can edit this need.")
     need = _lock_need(need_id)
     if need.status != NeedStatus.OPEN:
@@ -191,6 +193,11 @@ def edit_need(need_id, owner, fields):
     changed = [f for f in EDITABLE_FIELDS if f in fields]
     for f in changed:
         setattr(need, f, fields[f])
+    if need.quantity_received >= need.quantity_needed:
+        # Same rule as `apply_received`'s flip: an open need at 100% is fulfilled.
+        need.status = NeedStatus.FULFILLED
+        need.fulfilled_at = timezone.now()
+        changed += ["status", "fulfilled_at"]
     if changed:
         need.save(update_fields=changed)
     return need
@@ -211,7 +218,10 @@ def complete_need(need_id):
     if need.status != NeedStatus.OPEN:
         return need, []
     now = timezone.now()
-    cancelled = list(NeedPledge.objects.select_for_update()
+    # `of=("self",)`: without it Postgres also row-locks the joined `account` rows, a third
+    # table no other writer locks, in pledge order — two completes sharing donors in opposite
+    # order could deadlock, and the donors' own writes would block.
+    cancelled = list(NeedPledge.objects.select_for_update(of=("self",))
                      .filter(need=need, status=PledgeStatus.PLEDGED)
                      .select_related("pledger_account").order_by("created_at"))
     if cancelled:

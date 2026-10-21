@@ -4,13 +4,14 @@ Schema first: the columns the refactor adds, and the CHECKs that keep them hones
 writer is bypassed.
 """
 import pytest
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.test import Client
 
 from accounts.factories import AccountFactory
 from community.models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
 from community.tests.test_needs import _hdr, _need, _pledge, _shelter
-from community.tests.test_needs_integrity import _race_pair
+from community.tests.test_needs_integrity import _race, _race_pair
 from notifications.models import Notification
 from shelter.models import ShelterProfile
 
@@ -414,3 +415,83 @@ def test_a_confirm_racing_a_target_edit_below_the_total_resolves_one_way():
             assert need.quantity_needed == 4 and need.status == NeedStatus.FULFILLED
         else:
             assert out[1] == 422 and need.quantity_needed == 100
+
+
+# --- fix round 1 -------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_the_cascade_locks_only_pledge_rows_not_the_donor_accounts():
+    """`select_for_update` over a `select_related` join locks the joined `account` rows too —
+    a third table no other writer locks. The cascade must say `OF "need_pledge"`."""
+    from community.needs import complete_need
+    need = _need(needed=10, received=1)
+    _pledge(need)
+    with CaptureQueriesContext(connection) as ctx:
+        complete_need(need.pk)
+    locking = [q["sql"] for q in ctx.captured_queries if "need_pledge" in q["sql"]
+               and "FOR UPDATE" in q["sql"]]
+    assert locking, "the cascade took no pledge locks at all"
+    for sql in locking:
+        assert 'FOR UPDATE OF "need_pledge"' in sql, sql
+
+
+@pytest.mark.django_db(transaction=True)
+def test_two_needs_sharing_donors_in_opposite_order_complete_without_deadlock():
+    donors = [AccountFactory() for _ in range(6)]
+    for _ in range(5):
+        a, b = _need(needed=100, received=1), _need(needed=100, received=1)
+        for d in donors:
+            _pledge(a, pledger=d)
+        for d in reversed(donors):
+            _pledge(b, pledger=d)
+        out = _race_pair(lambda: _complete(a), lambda: _complete(b))
+        assert out == [200, 200]
+        for need in (a, b):
+            need.refresh_from_db()
+            assert need.status == NeedStatus.CLOSED
+            assert not NeedPledge.objects.filter(need=need, status=PledgeStatus.PLEDGED).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_two_completes_at_once_notify_each_donor_once():
+    for _ in range(10):
+        need = _need(needed=100, received=1)
+        pledges = [_pledge(need) for _ in range(3)]
+        bodies = []
+
+        def call():
+            res = _complete(need)
+            bodies.append(res.json())
+            return res
+
+        codes = _race(2, call)
+        assert codes == [200, 200]
+        assert sorted(b["cancelled_pledges"] for b in bodies) == [0, 3]
+        assert all(b["need_status"] == "closed" for b in bodies)
+        for p in pledges:
+            assert Notification.objects.filter(account=p.pledger_account,
+                                               type="need_closed").count() == 1
+
+
+@pytest.mark.django_db
+def test_lowering_the_target_to_the_received_count_flips_to_fulfilled():
+    need = _need(needed=20, received=8)
+    res = _patch(need.shelter_account, need, {"quantity_needed": 8})
+    assert res.status_code == 200 and res.json()["status"] == "fulfilled"
+    need.refresh_from_db()
+    assert need.status == NeedStatus.FULFILLED and need.fulfilled_at is not None
+    assert need.quantity_needed == 8
+    # and now it is no longer editable, like any fulfilled need
+    assert _patch(need.shelter_account, need, {"title": "x"}).status_code == 409
+
+
+@pytest.mark.django_db
+def test_an_edit_that_does_not_meet_the_target_leaves_the_need_open():
+    need = _need(needed=20, received=8)
+    res = _patch(need.shelter_account, need, {"quantity_needed": 9, "title": "More"})
+    assert res.status_code == 200 and res.json()["status"] == "open"
+    need.refresh_from_db()
+    assert need.status == NeedStatus.OPEN and need.fulfilled_at is None
+    # a non-target edit of an already-at-target-by-received-zero need never flips either
+    empty = _need(needed=5, received=0)
+    assert _patch(empty.shelter_account, empty, {"title": "Y"}).json()["status"] == "open"
