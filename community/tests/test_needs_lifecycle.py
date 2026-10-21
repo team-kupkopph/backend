@@ -5,8 +5,8 @@ writer is bypassed.
 """
 import pytest
 from django.db import IntegrityError, connection, transaction
-from django.test.utils import CaptureQueriesContext
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 
 from accounts.factories import AccountFactory
 from community.models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
