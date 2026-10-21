@@ -1,7 +1,8 @@
 """US-W1 · Abot-tulong wishlist endpoints (needs & pledges).
 
 The `quantity_received` math and the `open -> fulfilled` flip are never done here — they go
-through `community/needs.py::apply_received` under a row lock (D-S6-7).
+through `community/needs.py` (create_pledge / cancel_pledge / apply_received) under the need's
+row lock (D-S6-7).
 """
 from django.db.models import Count
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -19,7 +20,6 @@ from .models import (
     AccountBadge,
     NeedPledge,
     NeedStatus,
-    PledgeStatus,
     ShelterNeed,
     StoryPhoto,
     StoryPost,
@@ -27,7 +27,7 @@ from .models import (
     StoryStatus,
     StoryType,
 )
-from .needs import NeedError, apply_received
+from .needs import NeedError, apply_received, cancel_pledge, create_pledge
 from .serializers import (
     NeedCreateSerializer,
     NeedPatchSerializer,
@@ -41,6 +41,24 @@ PAGE_SIZE = 20
 
 def _err(code, message, status):
     return Response({"error": {"code": code, "message": message}}, status=status)
+
+
+_NEED_ERRORS = {
+    # code: (status, default message)
+    "not_found": (404, "No such need."),
+    "need_not_open": (409, "This need is no longer open for pledges."),
+    "pledge_decided": (409, ""),
+    "total_overflow": (422, "That would take this need's received total past the maximum."),
+}
+_PLEDGE_DECIDED_MESSAGE = "This pledge has already been decided."
+
+
+def _need_error(e, *, decided_message=_PLEDGE_DECIDED_MESSAGE):
+    """Map a `NeedError` from `community/needs.py` onto the error envelope."""
+    status, default = _NEED_ERRORS[e.code]
+    if e.code == "pledge_decided":
+        default = decided_message
+    return _err(e.code, e.message or default, status)
 
 
 def _need_repr(need):
@@ -125,15 +143,13 @@ class NeedPledgesView(APIView):
              "created_at": p.created_at.isoformat()} for p in pledges]})
 
     def post(self, request, need_id):
-        need = ShelterNeed.objects.filter(pk=need_id).first()
-        if need is None:
-            return _err("not_found", "No such need.", 404)
-        if need.status != NeedStatus.OPEN:
-            return _err("need_not_open", "This need is no longer open for pledges.", 409)
         s = PledgeCreateSerializer(data=request.data)
         s.is_valid(raise_exception=True)
-        pledge = NeedPledge.objects.create(need=need, pledger_account=request.user,
-                                           quantity=s.validated_data["quantity"])
+        try:
+            pledge = create_pledge(need_id, request.user, s.validated_data["quantity"])
+        except NeedError as e:
+            return _need_error(e)
+        need = pledge.need
         notify(need.shelter_account, "pledge_received",
                title="New pledge", body=f"Someone pledged to “{need.title}”.",
                data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
@@ -146,14 +162,10 @@ class PledgeCancelView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pledge_id):
-        pledge = NeedPledge.objects.filter(pk=pledge_id,
-                                           pledger_account=request.user).first()
-        if pledge is None:
-            return _err("not_found", "No such pledge.", 404)
-        if pledge.status != PledgeStatus.PLEDGED:
-            return _err("pledge_decided", "This pledge can no longer be cancelled.", 409)
-        pledge.status = PledgeStatus.CANCELLED
-        pledge.save(update_fields=["status"])
+        try:
+            pledge = cancel_pledge(pledge_id, request.user)
+        except NeedError as e:
+            return _need_error(e, decided_message="This pledge can no longer be cancelled.")
         return Response({"status": pledge.status})
 
 
@@ -185,14 +197,13 @@ class NeedReceivedView(APIView):
             return _err("forbidden", "Only the owning shelter can confirm receipt.", 403)
         s = ReceivedSerializer(data=request.data)
         s.is_valid(raise_exception=True)
-        pledge = NeedPledge.objects.filter(pk=s.validated_data["pledge_id"],
-                                           need=need).first()
-        if pledge is None:
-            return _err("not_found", "No such pledge for this need.", 404)
+        pledge_id = s.validated_data["pledge_id"]
         try:
-            need = apply_received(need.pk, pledge, s.validated_data["quantity_received"])
+            need = apply_received(need.pk, pledge_id, s.validated_data["quantity_received"])
         except NeedError as e:
-            return _err(str(e), "This pledge has already been decided.", 409)
+            return _need_error(e)
+        # `pledger_account` never changes, so reading it after the writer committed is safe.
+        pledge = NeedPledge.objects.select_related("pledger_account").get(pk=pledge_id)
         notify(pledge.pledger_account, "pledge_confirmed",
                title="Pledge received", body=f"“{need.title}” confirmed your pledge. Salamat!",
                data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
