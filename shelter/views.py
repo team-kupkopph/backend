@@ -4,7 +4,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Address
+from accounts.models import AccountStatus, Address
 from listings.models import AdoptionInquiry, InquiryKind, ListingStatus
 from shelter.models import DonationQr, ShelterProfile
 from shelter.permissions import IsShelter
@@ -271,8 +271,13 @@ class ShelterDonationQrPublicView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, account_id):
+        # ⚠️ A THIRD KEY, added after the Abot-tulong QR test plan (AT9/AT25): the account must be ACTIVE.
+        # Suspending or deleting a shelter changes `account.status` and revokes its sessions, but neither
+        # touches the org approval or the QR row, so a suspended or erased shelter's payment QR kept being
+        # served to donors. Reads as the same 404 "No such shelter" as any non-org, so it leaks nothing.
         approved = VerificationRequest.objects.filter(
-            account_id=account_id, type="shelter_org", status="approved").exists()
+            account_id=account_id, type="shelter_org", status="approved",
+            account__status=AccountStatus.ACTIVE).exists()
         if not approved:
             return Response({"error": {"code": "not_found", "message": "No such shelter"}},
                             status=404)
