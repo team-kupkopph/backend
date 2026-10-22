@@ -208,7 +208,21 @@ class ShelterDashboardView(APIView):
                        "donations": 0},
             "gates": {"can_publish": approved, "donations_enabled": donations_enabled},
             "volunteer": volunteer,
+            "wishlist": _wishlist_summary(request.user),
         })
+
+
+def _wishlist_summary(shelter):
+    """US-W3 · the Home card's wishlist numbers, derived (§3.5). A leftover `pledged` pledge on a
+    `fulfilled` need still needs confirming (R1); a `closed` need has none."""
+    from community.models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
+    return {
+        "open_needs": ShelterNeed.objects.filter(shelter_account=shelter,
+                                                 status=NeedStatus.OPEN).count(),
+        "pledges_awaiting_confirm": NeedPledge.objects.filter(
+            need__shelter_account=shelter, status=PledgeStatus.PLEDGED,
+            need__status__in=[NeedStatus.OPEN, NeedStatus.FULFILLED]).count(),
+    }
 
 
 def _rescue_summary(shelter):
@@ -291,4 +305,5 @@ def _profile_repr(p):
             "contact_person_name": p.contact_person_name or None,
             "contact_person_role": p.contact_person_role or None,
             "official_phone": p.official_phone or None, "website_url": p.website_url or None,
-            "vet_name": p.vet_name or None, "vet_prc_number": p.vet_prc_number or None}
+            "vet_name": p.vet_name or None, "vet_prc_number": p.vet_prc_number or None,
+            "donation_instructions": p.donation_instructions}

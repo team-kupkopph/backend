@@ -40,7 +40,7 @@ def test_an_unapproved_shelters_needs_are_not_listed(client):
     _need(sh)
     res = client.get(f"/api/v1/shelters/{sh.pk}/needs")
     assert res.status_code == 200
-    assert res.json() == {"results": []}
+    assert res.json()["results"] == []
 
 
 @pytest.mark.django_db
@@ -52,8 +52,8 @@ def test_the_owning_shelter_still_sees_its_own_needs_whatever_its_state(client):
     assert [n["need_id"] for n in mine.json()["results"]] == [str(need.pk)]
     # ...but another signed-in account, and a guest, get nothing.
     other = client.get(f"/api/v1/shelters/{sh.pk}/needs", **_hdr(AccountFactory()))
-    assert other.json() == {"results": []}
-    assert client.get(f"/api/v1/shelters/{sh.pk}/needs").json() == {"results": []}
+    assert other.json()["results"] == []
+    assert client.get(f"/api/v1/shelters/{sh.pk}/needs").json()["results"] == []
 
 
 @pytest.mark.django_db
@@ -67,7 +67,7 @@ def test_an_inactive_shelters_needs_are_hidden_and_unpledgeable(client, status):
     giver = AccountFactory()
 
     listed = client.get(f"/api/v1/shelters/{sh.pk}/needs")
-    assert listed.status_code == 200 and listed.json() == {"results": []}
+    assert listed.status_code == 200 and listed.json()["results"] == []
 
     res = _pledge_to(client, need, giver)
     assert res.status_code == 404

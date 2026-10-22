@@ -215,3 +215,76 @@ def test_dashboard_carries_the_volunteer_summary(client):
     assert body["volunteer"]["pending_requests"] == 1
     assert body["volunteer"]["attendance_due"] == 1
     assert body["volunteer"]["next_shift"]["shift_id"] == str(future.pk)
+
+
+# ---------- US-W3 · wishlist block on the dashboard, drop-off instructions on the profile ----------
+
+@pytest.mark.django_db
+def test_dashboard_wishlist_counts(client):
+    from community.models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
+    shelter = _shelter()
+    other = _shelter()
+
+    def need(owner, status=NeedStatus.OPEN):
+        return ShelterNeed.objects.create(shelter_account=owner, title="Rice", category="food",
+                                          quantity_needed=10, status=status)
+
+    def pledge(n, status=PledgeStatus.PLEDGED):
+        return NeedPledge.objects.create(need=n, pledger_account=AccountFactory(), quantity=1,
+                                         status=status)
+
+    a, b = need(shelter), need(shelter)
+    left_over = need(shelter, NeedStatus.FULFILLED)     # R1 · a leftover pledge still needs confirming
+    closed = need(shelter, NeedStatus.CLOSED)
+    pledge(a)
+    pledge(a)
+    pledge(b)
+    pledge(left_over)
+    pledge(a, PledgeStatus.DELIVERED)                   # decided: not awaiting
+    pledge(b, PledgeStatus.CANCELLED)
+    pledge(closed, PledgeStatus.CANCELLED)
+    pledge(need(other))                                 # someone else's wishlist: not counted
+    body = client.get("/api/v1/shelter/dashboard", **_hdr(shelter)).json()
+    assert body["wishlist"] == {"open_needs": 2, "pledges_awaiting_confirm": 4}
+    # the existing blocks are untouched
+    assert {"rescue", "verification", "counts", "gates", "volunteer"} <= set(body)
+
+
+@pytest.mark.django_db
+def test_dashboard_wishlist_is_zero_for_a_shelter_with_no_needs(client):
+    body = client.get("/api/v1/shelter/dashboard", **_hdr(_shelter())).json()
+    assert body["wishlist"] == {"open_needs": 0, "pledges_awaiting_confirm": 0}
+
+
+@pytest.mark.django_db
+def test_profile_patch_sets_donation_instructions(client):
+    acc = _shelter()
+    ShelterProfile.objects.create(account=acc, org_name="PAWS", org_type="shelter",
+                                  tier="community_rescue")
+    res = client.patch("/api/v1/shelter/profile", {"donation_instructions": "Gate B, 9-5 daily."},
+                       content_type="application/json", **_hdr(acc))
+    assert res.status_code == 200
+    acc.shelter_profile.refresh_from_db()
+    assert acc.shelter_profile.donation_instructions == "Gate B, 9-5 daily."
+    # blank clears it
+    res = client.patch("/api/v1/shelter/profile", {"donation_instructions": ""},
+                       content_type="application/json", **_hdr(acc))
+    assert res.status_code == 200
+    acc.shelter_profile.refresh_from_db()
+    assert acc.shelter_profile.donation_instructions == ""
+
+
+@pytest.mark.django_db
+def test_profile_patch_rejects_501_char_donation_instructions(client):
+    acc = _shelter()
+    ShelterProfile.objects.create(account=acc, org_name="PAWS", org_type="shelter",
+                                  tier="community_rescue", donation_instructions="keep me")
+    res = client.patch("/api/v1/shelter/profile", {"donation_instructions": "x" * 501},
+                       content_type="application/json", **_hdr(acc))
+    assert res.status_code == 400
+    assert res.json()["error"]["field"] == "donation_instructions"
+    acc.shelter_profile.refresh_from_db()
+    assert acc.shelter_profile.donation_instructions == "keep me"
+    ok = client.patch("/api/v1/shelter/profile", {"donation_instructions": "x" * 500},
+                      content_type="application/json", **_hdr(acc))
+    assert ok.status_code == 200

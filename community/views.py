@@ -10,7 +10,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import AccountStatus
+from accounts.models import Account, AccountStatus
 from common.analytics import emit
 from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCreateThrottle
 from notifications.service import notify
@@ -35,8 +35,16 @@ from .needs import (
     complete_need,
     create_pledge,
     edit_need,
-    live_needs,
     owned_need_id,
+)
+from .reads import (
+    donation_instructions,
+    my_pledge_rows,
+    need_rows,
+    page_window,
+    pledge_rows,
+    trim_page,
+    visible_needs,
 )
 from .serializers import (
     NeedCreateSerializer,
@@ -46,7 +54,7 @@ from .serializers import (
     StoryCreateSerializer,
 )
 
-PAGE_SIZE = 20
+PAGE_SIZE = 20     # stories only; the wishlist lists page through `community/reads.py`
 
 
 def _err(code, message, status):
@@ -77,10 +85,9 @@ def _need_error(e, *, decided_message=_PLEDGE_DECIDED_MESSAGE):
     return Response({"error": body}, status=status)
 
 
-def _need_repr(need):
-    return {"need_id": str(need.pk), "title": need.title, "category": need.category,
-            "description": need.description, "quantity_needed": need.quantity_needed,
-            "quantity_received": need.quantity_received, "status": need.status}
+def _need_repr(need, viewer):
+    """One need as a row (the PATCH response). Same shape as a list row."""
+    return need_rows(ShelterNeed.objects.filter(pk=need.pk), viewer)[0]
 
 
 class ShelterNeedsView(APIView):
@@ -96,16 +103,16 @@ class ShelterNeedsView(APIView):
         return [NeedCreateThrottle()] if self.request.method == "POST" else []
 
     def get(self, request, account_id):
-        # AW2/AW31 · everyone but the owning shelter sees only a live shelter's needs.
-        user = request.user
-        owner = user.is_authenticated and str(user.pk) == str(account_id)
-        qs = ShelterNeed.objects.all() if owner else live_needs()
-        qs = qs.filter(shelter_account_id=account_id)
+        # AW2/AW31 · everyone but the owning shelter sees only a live shelter's needs (R3).
+        qs = visible_needs(request.user).filter(shelter_account_id=account_id)
         status = request.query_params.get("status")
         if status:
             qs = qs.filter(status=status)
-        qs = qs.order_by("-created_at")[:PAGE_SIZE]
-        return Response({"results": [_need_repr(n) for n in qs]})
+        page, window = page_window(request)
+        rows = need_rows(qs.order_by("-created_at", "need_id"), request.user, window)
+        rows, nxt = trim_page(rows, page)
+        return Response({"results": rows, "next": nxt,
+                         "donation_instructions": donation_instructions(account_id, request.user)})
 
     def post(self, request, account_id):
         if str(request.user.pk) != str(account_id):
@@ -126,10 +133,25 @@ def _notify_need_closed(need, shelter, cancelled):
 
 
 class NeedDetailView(APIView):
-    """US-W3 · the owning shelter edits a need (while open) or closes it. Both go through
-    the need-locked writers in `community/needs.py`; `status: "closed"` is what shipped app
-    builds still send, and now means Mark complete (the cascade included)."""
-    permission_classes = [IsShelter]
+    """US-W3 · GET one need (public); the owning shelter edits a need (while open) or closes
+    it. Both go through the need-locked writers in `community/needs.py`; `status: "closed"` is
+    what shipped app builds still send, and now means Mark complete (the cascade included)."""
+
+    def get_permissions(self):
+        return [IsShelter()] if self.request.method == "PATCH" else [AllowAny()]
+
+    def get(self, request, need_id):
+        """One need, with its aggregates, the shelter's name and drop-off instructions. Outside
+        `live_needs()` it is a 404 for everyone but the owning shelter (R3)."""
+        qs = visible_needs(request.user).filter(pk=need_id)
+        account_id = qs.values_list("shelter_account_id", flat=True).first()
+        if account_id is None:
+            return _err("not_found", "No such need.", 404)
+        row = need_rows(qs, request.user)[0]
+        row.update({"shelter_name": Account.objects.get(pk=account_id).display_name,
+                    "shelter_account_id": str(account_id),
+                    "donation_instructions": donation_instructions(account_id, request.user)})
+        return Response(row)
 
     def patch(self, request, need_id):
         try:
@@ -147,7 +169,7 @@ class NeedDetailView(APIView):
                 need = edit_need(need_id, request.user, d)
         except NeedError as e:
             return _need_error(e)
-        return Response(_need_repr(need))
+        return Response(_need_repr(need, request.user))
 
 
 class NeedCompleteView(APIView):
@@ -180,11 +202,8 @@ class NeedPledgesView(APIView):
             return _err("not_found", "No such need.", 404)
         if need.shelter_account_id != request.user.pk:
             return _err("forbidden", "Only the owning shelter can see these pledges.", 403)
-        pledges = (need.pledges.select_related("pledger_account").order_by("-created_at"))
-        return Response({"results": [
-            {"pledge_id": str(p.pk), "quantity": p.quantity, "status": p.status,
-             "pledger_name": p.pledger_account.display_name,
-             "created_at": p.created_at.isoformat()} for p in pledges]})
+        pledges = need.pledges.select_related("pledger_account").order_by("-created_at")
+        return Response({"results": pledge_rows(pledges)})
 
     def post(self, request, need_id):
         s = PledgeCreateSerializer(data=request.data)
@@ -223,15 +242,12 @@ class MyPledgesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        page, window = page_window(request)
         qs = (NeedPledge.objects.filter(pledger_account=request.user)
-              .select_related("need", "need__shelter_account").order_by("-created_at")[:PAGE_SIZE])
-        return Response({"results": [
-            {"pledge_id": str(p.pk), "quantity": p.quantity, "status": p.status,
-             "created_at": p.created_at.isoformat(),
-             "need": {"need_id": str(p.need_id), "title": p.need.title,
-                      "category": p.need.category,
-                      "shelter_name": p.need.shelter_account.display_name}}
-            for p in qs]})
+              .select_related("need", "need__shelter_account")
+              .order_by("-created_at", "pledge_id")[window])
+        rows, nxt = trim_page(list(qs), page)
+        return Response({"results": my_pledge_rows(rows), "next": nxt})
 
 
 class NeedReceivedView(APIView):
