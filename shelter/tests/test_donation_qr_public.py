@@ -78,3 +78,32 @@ def test_route_is_public_no_auth_needed(client):
     _qr(shelter, verified=True)
     res = client.get(_url(shelter))  # no Authorization header at all
     assert res.status_code == 200
+
+
+# Abot-tulong QR plan Run 1/2 · AT9 + AT25. The gate read the org approval and the QR, never the account:
+# a suspended or deleted shelter's payment QR stayed public (a donor still saw it on a device).
+@pytest.mark.django_db
+@pytest.mark.parametrize("status", ["suspended", "deleted"])
+def test_a_suspended_or_deleted_shelters_qr_is_not_public(client, status):
+    shelter = _approved_shelter()
+    _qr(shelter, verified=True)
+    assert client.get(_url(shelter)).status_code == 200
+    if status == "deleted":
+        from accounts.lifecycle import soft_delete_account
+        soft_delete_account(shelter)
+    else:
+        shelter.status = "suspended"
+        shelter.save(update_fields=["status"])
+    res = client.get(_url(shelter))
+    assert res.status_code == 404
+    assert "donation_qrs" not in res.json()
+
+
+@pytest.mark.django_db
+def test_reinstating_a_suspended_shelter_restores_its_qr(client):
+    shelter = _approved_shelter()
+    _qr(shelter, verified=True)
+    shelter.status = "suspended"; shelter.save(update_fields=["status"])
+    assert client.get(_url(shelter)).status_code == 404
+    shelter.status = "active"; shelter.save(update_fields=["status"])
+    assert client.get(_url(shelter)).status_code == 200
