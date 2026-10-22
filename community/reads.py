@@ -17,12 +17,14 @@ from .models import PledgeStatus, ShelterNeed
 from .needs import live_needs, live_shelter_ids
 
 PAGE_SIZE = 20
+MAX_PAGE = 10**6
 
 
 def page_number(request):
     """`?page=` as a positive int; anything else (missing, non-integer, 0, negative) is page 1."""
     try:
-        return max(1, int(request.query_params.get("page") or 1))
+        # Clamped: a 40-digit page would overflow the OFFSET's bigint and 500 a public read.
+        return min(max(1, int(request.query_params.get("page") or 1)), MAX_PAGE)
     except (TypeError, ValueError):
         return 1
 

@@ -46,7 +46,7 @@ class ShelterNeed(models.Model):
     description = models.TextField(blank=True)
     quantity_needed = models.IntegerField(default=1)
     quantity_received = models.IntegerField(default=0)
-    unit = models.CharField(max_length=16, blank=True, default="")
+    unit = models.CharField(max_length=16, blank=True, default="", db_default="")
     status = models.CharField(max_length=10, choices=NeedStatus.choices,
                               default=NeedStatus.OPEN)
     fulfilled_at = models.DateTimeField(null=True, blank=True)
@@ -85,7 +85,7 @@ class NeedPledge(models.Model):
     decided_at = models.DateTimeField(null=True, blank=True)
     cancel_reason = models.CharField(max_length=12, null=True, blank=True,
                                      choices=[("donor", "donor"), ("need_closed", "need_closed")])
-    note = models.CharField(max_length=280, blank=True, default="")
+    note = models.CharField(max_length=280, blank=True, default="", db_default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

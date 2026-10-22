@@ -24,7 +24,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='needpledge',
             name='note',
-            field=models.CharField(blank=True, default='', max_length=280),
+            field=models.CharField(blank=True, db_default='', default='', max_length=280),
         ),
         migrations.AddField(
             model_name='needpledge',
@@ -39,7 +39,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='shelterneed',
             name='unit',
-            field=models.CharField(blank=True, default='', max_length=16),
+            field=models.CharField(blank=True, db_default='', default='', max_length=16),
         ),
         migrations.AddIndex(
             model_name='needpledge',

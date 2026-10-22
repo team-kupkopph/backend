@@ -79,6 +79,10 @@ def anonymize_account(account, now=None):
     # person, and no animal's record depends on it.
     from listings.models import ListingPreference
     ListingPreference.objects.filter(account=account).delete()
+    # A pledge is the shelter's record (quantity, outcome) and stays; the free-text note the
+    # donor typed may hold a phone number or a name, so that goes (R10).
+    from community.models import NeedPledge
+    NeedPledge.objects.filter(pledger_account=account).update(note="")
 
     return account
 

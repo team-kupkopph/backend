@@ -51,7 +51,8 @@ class ShelterProfile(models.Model):
     vet_name = models.CharField(max_length=120, blank=True)         # tier 2 only
     vet_prc_number = models.CharField(max_length=30, blank=True)    # tier 2; format-checked here, register-checked by a reviewer
     is_escalation_partner = models.BooleanField(default=False)
-    donation_instructions = models.CharField(max_length=500, blank=True, default="")  # drop-off how-to shown on the wishlist
+    donation_instructions = models.CharField(max_length=500, blank=True, default="",
+                                            db_default="")  # drop-off how-to shown on the wishlist
 
     class Meta:
         db_table = "shelter_profile"

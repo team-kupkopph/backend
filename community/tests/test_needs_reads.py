@@ -409,3 +409,63 @@ def test_my_pledges_is_one_query_per_page(client):
         res = client.get("/api/v1/me/pledges", **_hdr(giver))
     assert len(res.json()["results"]) == 20
     assert len(ctx) <= 3         # the token's account lookup + the page
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("page", [str(10**18), str(10**30), "9" * 40])
+def test_a_huge_page_is_an_empty_page_not_a_500(client, page):
+    """The OFFSET of a 40-digit page overflows bigint; the page number is clamped instead."""
+    sh = _shelter()
+    _need(sh)
+    giver = AccountFactory()
+    _pledge(_need(sh), pledger=giver)
+    listed = _list(client, sh, f"?page={page}")
+    assert listed.status_code == 200
+    assert listed.json()["results"] == [] and listed.json()["next"] is None
+    mine = client.get(f"/api/v1/me/pledges?page={page}", **_hdr(giver))
+    assert mine.status_code == 200
+    assert mine.json() == {"results": [], "next": None}
+
+
+# --- expand/contract · the previous release must still be able to insert ------------
+
+NEW_TEXT_COLUMNS = [("shelter_need", "unit"), ("need_pledge", "note"),
+                    ("shelter_profile", "donation_instructions")]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("table,column", NEW_TEXT_COLUMNS)
+def test_new_not_null_text_columns_keep_a_database_default(table, column):
+    """Migrate runs before the new code ships, and a rollback leaves the schema: the old
+    release's INSERTs omit these columns, so the DB itself must default them."""
+    with connection.cursor() as cur:
+        cur.execute("SELECT column_default, is_nullable FROM information_schema.columns "
+                    "WHERE table_name = %s AND column_name = %s", [table, column])
+        default, nullable = cur.fetchone()
+    assert nullable == "NO" and default is not None and "''" in default
+
+
+@pytest.mark.django_db
+def test_a_raw_insert_omitting_the_new_columns_succeeds():
+    """What the previous release's pledge / need / profile inserts look like."""
+    import uuid
+    sh = _shelter()
+    now = timezone.now()
+    need_id, pledge_id = uuid.uuid4(), uuid.uuid4()
+    with connection.cursor() as cur:
+        cur.execute("INSERT INTO shelter_need (need_id, shelter_account_id, title, category, "
+                    "description, quantity_needed, quantity_received, status, created_at) "
+                    "VALUES (%s, %s, 'Rice', 'food', '', 5, 0, 'open', %s)",
+                    [need_id, sh.pk, now])
+        cur.execute("INSERT INTO need_pledge (pledge_id, need_id, pledger_account_id, quantity, "
+                    "status, created_at) VALUES (%s, %s, %s, 1, 'pledged', %s)",
+                    [pledge_id, need_id, AccountFactory().pk, now])
+        cur.execute("SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'shelter_profile' AND is_nullable = 'NO' "
+                    "AND column_default IS NULL")
+        required = {r[0] for r in cur.fetchall()}
+    assert ShelterNeed.objects.get(pk=need_id).unit == ""
+    assert NeedPledge.objects.get(pk=pledge_id).note == ""
+    # the profile table has other required columns the old release always supplied; the new
+    # one must not add to that list.
+    assert "donation_instructions" not in required
