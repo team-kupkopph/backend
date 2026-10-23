@@ -21,6 +21,15 @@ class QrProvider(models.TextChoices):
     MAYA = "maya"
 
 
+class QrStatus(models.TextChoices):
+    """DW2 · the life of one donation-QR row. A first upload or a replacement starts `pending`; the reviewer makes it `live` (a replacement
+    withdraws the live row it replaces in the same transaction) or `refused`; the shelter or a reviewer can `withdraw` a live or pending one."""
+    PENDING = "pending"
+    LIVE = "live"
+    REFUSED = "refused"
+    WITHDRAWN = "withdrawn"
+
+
 class RegType(models.TextChoices):
     SEC = "SEC"
     DTI = "DTI"
@@ -70,9 +79,37 @@ class DonationQr(models.Model):
     provider = models.CharField(max_length=10, choices=QrProvider.choices)
     account_name = models.CharField(max_length=120)
     qr_image_url = models.TextField()
+    # DW2 · `status` is authoritative. `verified` is DERIVED from it (`status == live`) and kept as a stored mirror for one release, so the
+    # public gate, the dashboard and the console's `?verified=` filter keep working unchanged; it is dropped the release after.
+    status = models.CharField(max_length=10, choices=QrStatus.choices, default=QrStatus.PENDING)
     verified = models.BooleanField(default=False)
+    # The live row this pending one would replace (null for a first upload). Rows are immutable once decided: the audit trail a reviewer's
+    # decision refers to.
+    replaces = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="replacements")
+    decision_note = models.TextField(blank=True, default="")
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.ForeignKey(Account, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def __init__(self, *args, **kwargs):
+        # Legacy callers (tests, fixtures) create rows with `verified=True`; map that onto `status` so one rule holds.
+        legacy = kwargs.get("verified")
+        super().__init__(*args, **kwargs)
+        if legacy is not None and "status" not in kwargs and not args:
+            self.status = QrStatus.LIVE if legacy else QrStatus.PENDING
+
+    def save(self, *args, **kwargs):
+        self.verified = self.status == QrStatus.LIVE
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and ("status" in update_fields or "verified" in update_fields):
+            kwargs["update_fields"] = list(set(update_fields) | {"status", "verified"})
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "donation_qr"
         indexes = [models.Index(fields=["account"], name="idx_donation_qr_account")]
+        constraints = [
+            # At most one live and one pending row per (account, provider): a replacement withdraws the previous pending one.
+            models.UniqueConstraint(fields=["account", "provider"], condition=models.Q(status="live"), name="uq_donation_qr_one_live"),
+            models.UniqueConstraint(fields=["account", "provider"], condition=models.Q(status="pending"), name="uq_donation_qr_one_pending"),
+        ]

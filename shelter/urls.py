@@ -1,6 +1,7 @@
 from django.urls import path
 
 from shelter.views import (
+                           DonationQrOfflineView,
                            DonationQrView,
                            ShelterDashboardView,
                            ShelterDonationQrPublicView,
@@ -12,6 +13,7 @@ urlpatterns = [
     path("shelter/profile", ShelterProfileView.as_view()),
     path("shelter/dashboard", ShelterDashboardView.as_view()),
     path("shelter/donation-qr", DonationQrView.as_view()),
+    path("shelter/donation-qr/<uuid:donation_qr_id>/offline", DonationQrOfflineView.as_view()),
     path("shelter/requests", ShelterRequestsView.as_view()),
     path("shelters/<uuid:account_id>/donation-qr", ShelterDonationQrPublicView.as_view()),
 ]

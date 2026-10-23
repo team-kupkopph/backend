@@ -53,6 +53,8 @@ _TYPES = [
     NotificationType("need_closed", "{need_id, pledge_id}", True, "kupkop://donations"),
     # D-S6-5: a badge is a celebration, in-app only — push:false, so it never buzzes a phone
     # (pushing badges would cheapen push for a match or a pledge).
+    # DW2 / AT11: the shelter hears a reviewer's decision on its donation QR (verified, refused replacement, taken down), with the reason.
+    NotificationType("donation_qr_decided", "{donation_qr_id, provider, decision}", True, "kupkop://shelter/donate"),
     NotificationType("badge_earned", "{badge_code}", False, "kupkop://impact"),
     # §11.3: a strong lost<->found suggestion pushes both reporters — a reunion is time-sensitive.
     NotificationType("match_suggested", "{report_id}", True, "kupkop://reports/{report_id}"),

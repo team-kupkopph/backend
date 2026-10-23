@@ -1,13 +1,16 @@
 """Shelters and donation QRs (US-S1, US-Q1)."""
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
+from django.utils import timezone
 from rest_framework.response import Response
 
 from adminapi.pagination import decode_cursor, paginate
+from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
 from listings.models import AdoptionListing
 from sagip.geo import centroid_for
-from shelter.models import DonationQr, ShelterProfile, ShelterTier
+from shelter.models import DonationQr, QrStatus, ShelterProfile, ShelterTier
+from shelter.qr_rules import is_overdue, notify_decision
 from verifications.models import VerificationRequest
 
 
@@ -55,7 +58,8 @@ def shelter_detail(profile):
         "verifications": [{"verification_id": str(v.verification_id), "status": v.status,
                            "submitted_at": v.submitted_at.isoformat()} for v in verifications],
         "donation_qrs": [{"donation_qr_id": str(q.donation_qr_id), "provider": q.provider,
-                          "account_name": q.account_name, "verified": q.verified} for q in qrs],
+                          "account_name": q.account_name, "verified": q.verified,
+                          "status": q.status} for q in qrs],
         # ⚠️ Decision B's gating table, rendered as data rather than left for a reviewer to
         # infer. This is what lets them answer "why can't this shelter receive donations?"
         # without reading the spec — and each `blocked_by` names the ONE thing to fix.
@@ -182,15 +186,18 @@ class RemoveEscalationPartnerView(EscalationPartnerDecisionView):
     partner = False
 
 
-# -- US-Q1 · donation QRs ------------------------------------------------------------------
+# -- US-Q1 / DW2 · donation QRs ------------------------------------------------------------------
 class DonationQrQueueView(StaffView):
-    """GET /admin-api/donation-qrs?verified=&cursor="""
+    """GET /admin-api/donation-qrs?verified=&cursor=  — `verified=false` is the to-check list (pending rows, each with the live code it would
+    replace), `verified=true` the live ones, no filter everything (decided history included)."""
 
     def get(self, request):
         verified = request.query_params.get("verified")
-        qs = DonationQr.objects.select_related("account")
-        if verified in ("true", "false"):
-            qs = qs.filter(verified=(verified == "true"))
+        qs = DonationQr.objects.select_related("account", "replaces")
+        if verified == "false":
+            qs = qs.filter(status=QrStatus.PENDING)
+        elif verified == "true":
+            qs = qs.filter(status=QrStatus.LIVE)
         qs = qs.order_by("created_at", "donation_qr_id")
         rows, next_cursor = paginate(qs, decode_cursor(request.query_params.get("cursor", "")),
                                      ["created_at", "donation_qr_id"])
@@ -200,49 +207,78 @@ class DonationQrQueueView(StaffView):
     def row(qr):
         org_verified = VerificationRequest.objects.filter(
             account=qr.account, type="shelter_org", status="approved").exists()
+        replaces = qr.replaces
         return {
             "donation_qr_id": str(qr.donation_qr_id),
             "provider": qr.provider,
             "account_name": qr.account_name,
             "qr_image_url": qr.qr_image_url,
             "verified": qr.verified,
+            "status": qr.status,
+            # DW2 · a replacement is shown NEXT TO the live code it would replace, so the reviewer compares the two.
+            "replaces": ({"donation_qr_id": str(replaces.pk), "qr_image_url": replaces.qr_image_url,
+                          "account_name": replaces.account_name} if replaces else None),
+            "decision_note": qr.decision_note,
+            "overdue": is_overdue(qr),
             "created_at": qr.created_at.isoformat(),
             "account": {"account_id": str(qr.account.account_id),
                         "display_name": qr.account.display_name},
-            # ⚠️ BOTH gates, always. The public donate path needs the org approved AND the QR
-            # verified; a reviewer shown only the second cannot explain why donations are still
-            # off after they verified the QR.
+            # ⚠️ BOTH gates, always. The public donate path needs the org approved AND a live QR; a reviewer shown only the second cannot
+            # explain why donations are still off after they verified the QR.
             "org_verified": org_verified,
             "donations_live": org_verified and qr.verified,
         }
 
 
 class DonationQrDecisionView(StaffView):
-    verify = None
+    """verify (pending -> live, atomically withdrawing the live row it replaces), unverify (live -> withdrawn, reason required) and refuse
+    (pending -> refused, reason required, the live code untouched). The reason is STORED (AT26) and the shelter is told (AT11)."""
+    action = None   # "verify" | "unverify" | "refuse"
 
     def post(self, request, donation_qr_id):
         notes = (request.data.get("notes") or "").strip()
-        if not self.verify and not notes:
-            # Taking a live donation channel down is the action most likely to be questioned.
+        if self.action != "verify" and not notes:
+            # Taking a live donation channel down, or refusing a submission, is the action most likely to be questioned.
             return Response({"error": {"code": "reason_required"}}, status=422)
 
         with transaction.atomic():
             qr = DonationQr.objects.select_for_update().filter(donation_qr_id=donation_qr_id).first()
             if qr is None:
                 return Response({"error": {"code": "not_found"}}, status=404)
-            if qr.verified == self.verify:
-                return Response({"error": {"code": "already_decided",
-                                           "verified": qr.verified}}, status=409)
-            qr.verified = self.verify
-            qr.save(update_fields=["verified"])
+            allowed = QrStatus.LIVE if self.action == "unverify" else QrStatus.PENDING
+            if qr.status != allowed:
+                return Response({"error": {"code": "already_decided", "verified": qr.verified,
+                                           "status": qr.status}}, status=409)
+            if self.action == "verify":
+                # Withdraw whatever is live for this provider (the row it replaces) in the SAME transaction: there is never a moment with two
+                # live rows (the constraint forbids it) or none.
+                for old in DonationQr.objects.select_for_update().filter(
+                        account=qr.account, provider=qr.provider, status=QrStatus.LIVE).exclude(pk=qr.pk):
+                    old.status = QrStatus.WITHDRAWN
+                    old.decided_at = timezone.now()
+                    old.save()
+                qr.status = QrStatus.LIVE
+            elif self.action == "unverify":
+                qr.status = QrStatus.WITHDRAWN
+            else:
+                qr.status = QrStatus.REFUSED
+            qr.decision_note = notes
+            qr.decided_at = timezone.now()
+            qr.decided_by = admin_account_for(request)
+            qr.save()
+            notify_decision(qr, {"verify": "verified", "unverify": "taken_down", "refuse": "refused"}[self.action], notes)
 
         qr.refresh_from_db()
         return Response(DonationQrQueueView.row(qr))
 
 
 class VerifyQrView(DonationQrDecisionView):
-    verify = True
+    action = "verify"
 
 
 class UnverifyQrView(DonationQrDecisionView):
-    verify = False
+    action = "unverify"
+
+
+class RefuseQrView(DonationQrDecisionView):
+    action = "refuse"
