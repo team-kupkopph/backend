@@ -195,3 +195,25 @@ def test_export_is_throttled(client, settings):
     codes = [_export(client, account).status_code for _ in range(5)]
 
     assert 429 in codes, f"expected a 429 within 5 calls, got {codes}"
+
+
+# AT29 (Abot-tulong QR plan, Run 1/6): a shelter's data export left out its own donation QRs.
+@pytest.mark.django_db
+def test_export_includes_the_shelters_own_donation_qrs_but_not_another_shelters(client):
+    from shelter.models import DonationQr, QrStatus
+    mine, other = AccountFactory(account_type="shelter"), AccountFactory(account_type="shelter")
+    DonationQr.objects.create(account=mine, provider="gcash", account_name="Marikina AWG", qr_image_url="https://x/donation_qr/a/live.png",
+                              status=QrStatus.LIVE)
+    DonationQr.objects.create(account=mine, provider="gcash", account_name="Marikina AWG", qr_image_url="https://x/donation_qr/a/bad.png",
+                              status=QrStatus.REFUSED, decision_note="Blurry")
+    DonationQr.objects.create(account=other, provider="maya", account_name="Someone Else", qr_image_url="https://x/donation_qr/b/o.png",
+                              status=QrStatus.LIVE)
+    qrs = _export(client, mine).json()["donation_qrs"]
+    assert {(q["provider"], q["status"]) for q in qrs} == {("gcash", "live"), ("gcash", "refused")}
+    assert next(q for q in qrs if q["status"] == "refused")["decision_note"] == "Blurry"
+    assert "Someone Else" not in str(qrs)
+
+
+@pytest.mark.django_db
+def test_a_personal_account_exports_an_empty_donation_qrs_list(client):
+    assert _export(client, AccountFactory()).json()["donation_qrs"] == []
