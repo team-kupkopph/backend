@@ -66,8 +66,8 @@ def test_donations_need_BOTH_keys_and_the_message_follows_the_missing_one(client
     caps = client.get(url, **auth).json()["capabilities"]
     assert caps["donations_enabled"]["blocked_by"] == "The donation QR is not verified yet."
 
-    qr.verified = True
-    qr.save(update_fields=["verified"])
+    qr.status = "live"
+    qr.save()
     caps = client.get(url, **auth).json()["capabilities"]
     assert caps["donations_enabled"]["enabled"] is True
     assert caps["donations_enabled"]["blocked_by"] is None
@@ -211,3 +211,93 @@ def test_partner_changes_need_a_staff_token(client):
     assert client.post(_partner_url(profile), {}, content_type="application/json").status_code in (401, 403)
     profile.refresh_from_db()
     assert profile.is_escalation_partner is False
+
+
+# ── DW2 · the reviewer's side of a no-gap replacement ────────────────────────────────────────────────────────────────
+from shelter.models import QrStatus  # noqa: E402
+
+
+def _live_and_pending(name="Gap Org"):
+    profile = make_shelter(name, verified=True)
+    live = DonationQr.objects.create(account=profile.account, provider="gcash", account_name=name,
+                                     qr_image_url="s3://live.png", status=QrStatus.LIVE)
+    pend = DonationQr.objects.create(account=profile.account, provider="gcash", account_name=name,
+                                     qr_image_url="s3://new.png", status=QrStatus.PENDING, replaces=live)
+    return profile, live, pend
+
+
+@pytest.mark.django_db
+def test_the_queue_shows_a_replacement_next_to_the_live_code_it_replaces(client, auth):
+    _, live, pend = _live_and_pending()
+    rows = client.get("/admin-api/donation-qrs?verified=false", **auth).json()["results"]
+    assert [r["donation_qr_id"] for r in rows] == [str(pend.pk)]
+    assert rows[0]["status"] == "pending"
+    assert rows[0]["replaces"] == {"donation_qr_id": str(live.pk), "qr_image_url": "s3://live.png", "account_name": "Gap Org"}
+
+
+@pytest.mark.django_db
+def test_verifying_a_replacement_swaps_it_in_atomically(client, auth):
+    profile, live, pend = _live_and_pending()
+    res = client.post(f"/admin-api/donation-qrs/{pend.pk}/verify", {"notes": "matches the org"},
+                      content_type="application/json", **auth)
+    assert res.status_code == 200
+    live.refresh_from_db(); pend.refresh_from_db()
+    assert pend.status == QrStatus.LIVE and live.status == QrStatus.WITHDRAWN
+    assert pend.decision_note == "matches the org" and pend.decided_at is not None
+    assert DonationQr.objects.filter(account=profile.account, provider="gcash", status=QrStatus.LIVE).count() == 1
+
+
+@pytest.mark.django_db
+def test_refusing_a_replacement_needs_a_reason_and_leaves_the_live_code(client, auth):
+    _, live, pend = _live_and_pending()
+    url = f"/admin-api/donation-qrs/{pend.pk}/refuse"
+    no = client.post(url, {}, content_type="application/json", **auth)
+    assert no.status_code == 422 and no.json()["error"]["code"] == "reason_required"
+    ok = client.post(url, {"notes": "Not the org's account"}, content_type="application/json", **auth)
+    assert ok.status_code == 200
+    live.refresh_from_db(); pend.refresh_from_db()
+    assert live.status == QrStatus.LIVE
+    assert pend.status == QrStatus.REFUSED and pend.decision_note == "Not the org's account"
+
+
+@pytest.mark.django_db
+def test_the_decision_is_stored_and_a_second_decision_is_409(client, auth):
+    _, live, pend = _live_and_pending()
+    client.post(f"/admin-api/donation-qrs/{pend.pk}/verify", {}, content_type="application/json", **auth)
+    again = client.post(f"/admin-api/donation-qrs/{pend.pk}/verify", {}, content_type="application/json", **auth)
+    assert again.status_code == 409 and again.json()["error"]["code"] == "already_decided"
+    assert client.post(f"/admin-api/donation-qrs/{pend.pk}/refuse", {"notes": "x"},
+                       content_type="application/json", **auth).status_code == 409
+
+
+@pytest.mark.django_db
+def test_unverify_stores_the_reason(client, auth):
+    profile = make_shelter("Down Org", verified=True)
+    live = DonationQr.objects.create(account=profile.account, provider="gcash", account_name="X",
+                                     qr_image_url="s3://q.png", status=QrStatus.LIVE)
+    client.post(f"/admin-api/donation-qrs/{live.pk}/unverify", {"notes": "Closed wallet"},
+                content_type="application/json", **auth)
+    live.refresh_from_db()
+    assert live.status == QrStatus.WITHDRAWN and live.decision_note == "Closed wallet"
+
+
+@pytest.mark.django_db
+def test_an_overdue_replacement_is_flagged_after_two_business_days(client, auth):
+    from datetime import timedelta
+
+    from django.utils import timezone
+    _, _, pend = _live_and_pending("Slow Org")
+    row = client.get("/admin-api/donation-qrs?verified=false", **auth).json()["results"][0]
+    assert row["overdue"] is False
+    DonationQr.objects.filter(pk=pend.pk).update(created_at=timezone.now() - timedelta(days=5))
+    row = client.get("/admin-api/donation-qrs?verified=false", **auth).json()["results"][0]
+    assert row["overdue"] is True
+
+
+@pytest.mark.django_db
+def test_the_shelter_hears_the_decision(client, auth):
+    from notifications.models import Notification
+    profile, _, pend = _live_and_pending("Notify Org")
+    client.post(f"/admin-api/donation-qrs/{pend.pk}/refuse", {"notes": "Blurry"}, content_type="application/json", **auth)
+    n = Notification.objects.get(account=profile.account, type="donation_qr_decided")
+    assert "Blurry" in n.body and n.data["decision"] == "refused"

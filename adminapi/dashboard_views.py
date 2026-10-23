@@ -32,7 +32,7 @@ class DashboardView(StaffView):
                 "href": "/moderation?status=open",
             },
             "unverified_donation_qrs": {
-                "count": DonationQr.objects.filter(verified=False).count(),
+                "count": DonationQr.objects.filter(status="pending").count(),
                 "href": "/donations?verified=false",
             },
             "new_members_this_week": {

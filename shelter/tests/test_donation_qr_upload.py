@@ -50,36 +50,40 @@ def test_guest_is_refused(client):
 
 
 @pytest.mark.django_db
-def test_reposting_the_same_provider_edits_the_existing_row_not_a_second_one(client):
+def test_reposting_the_same_provider_before_review_replaces_the_pending_row(client):
+    # DW2: still ONE pending row per provider (the newer upload withdraws the older one), so the reviewer's queue never holds two for a provider.
     shelter = _shelter()
-    client.post("/api/v1/shelter/donation-qr",
-               {"provider": "gcash", "account_name": "Marikina AWG",
-                "file_url": "https://example.invalid/qr1.png"}, **_hdr(shelter))
+    first = client.post("/api/v1/shelter/donation-qr",
+                        {"provider": "gcash", "account_name": "Marikina AWG",
+                         "file_url": "https://example.invalid/qr1.png"}, **_hdr(shelter)).json()["donation_qr_id"]
 
     res = client.post("/api/v1/shelter/donation-qr",
                       {"provider": "gcash", "account_name": "Marikina AWG (new)",
                        "file_url": "https://example.invalid/qr2.png"}, **_hdr(shelter))
 
-    assert DonationQr.objects.filter(account=shelter, provider="gcash").count() == 1
-    qr = DonationQr.objects.get(account=shelter, provider="gcash")
+    assert DonationQr.objects.filter(account=shelter, provider="gcash", status="pending").count() == 1
+    assert DonationQr.objects.get(pk=first).status == "withdrawn"
+    qr = DonationQr.objects.get(pk=res.json()["donation_qr_id"])
     assert qr.qr_image_url == "https://example.invalid/qr2.png"
     assert qr.account_name == "Marikina AWG (new)"
-    assert res.json()["donation_qr_id"] == str(qr.pk)
 
 
 @pytest.mark.django_db
-def test_editing_an_already_verified_qr_resets_verified_to_false(client):
+def test_editing_an_already_verified_qr_keeps_it_verified_until_the_replacement_is_reviewed(client):
+    # Was `test_editing_an_already_verified_qr_resets_verified_to_false`, which encoded the OLD rule (DW2 / OQ3 replaced it).
     shelter = _shelter()
+    shelter.set_password("pw-123456-x"); shelter.save()
     qr = DonationQr.objects.create(account=shelter, provider="gcash", account_name="Marikina AWG",
                                    qr_image_url="https://example.invalid/qr1.png", verified=True)
 
     res = client.post("/api/v1/shelter/donation-qr",
                       {"provider": "gcash", "account_name": "Marikina AWG",
-                       "file_url": "https://example.invalid/qr2-swapped.png"}, **_hdr(shelter))
+                       "file_url": "https://example.invalid/qr2-swapped.png", "current_password": "pw-123456-x"},
+                      **_hdr(shelter))
 
     qr.refresh_from_db()
-    assert qr.verified is False
-    assert res.json()["verified"] is False
+    assert qr.verified is True and qr.status == "live"
+    assert res.json()["verified"] is False and res.json()["status"] == "pending"
 
 
 @pytest.mark.django_db

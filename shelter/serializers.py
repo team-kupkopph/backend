@@ -68,3 +68,5 @@ class DonationQrUploadSerializer(serializers.Serializer):
     provider = serializers.ChoiceField(choices=QrProvider.values)
     account_name = serializers.CharField(max_length=120)
     file_url = serializers.CharField()
+    # DW2 / owner decision Q3: replacing a LIVE QR needs the account password (a stolen session swapping the image is the fraud case).
+    current_password = serializers.CharField(required=False, allow_blank=True, write_only=True)

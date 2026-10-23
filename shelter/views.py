@@ -6,8 +6,9 @@ from rest_framework.views import APIView
 
 from accounts.models import AccountStatus, Address
 from listings.models import AdoptionInquiry, InquiryKind, ListingStatus
-from shelter.models import DonationQr, ShelterProfile
+from shelter.models import DonationQr, QrStatus, ShelterProfile
 from shelter.permissions import IsShelter
+from shelter.qr_rules import own_repr
 from shelter.serializers import (
     DonationQrUploadSerializer,
     ShelterProfileCreateSerializer,
@@ -178,7 +179,7 @@ class ShelterDashboardView(APIView):
         draft_listings = request.user.listings.filter(status=ListingStatus.DRAFT).count()   # AD15
         # US-X3 · donations are a TWO-key gate: org approved AND a reviewer-verified QR on file.
         # Still fully derived (§3.5) — no stored donations flag; the QR's `verified` is the check.
-        donations_enabled = approved and request.user.donation_qrs.filter(verified=True).exists()
+        donations_enabled = approved and request.user.donation_qrs.filter(status=QrStatus.LIVE).exists()
         # K27/G12 · the inbox row and dashboard both need a volunteer-facing summary: how
         # many signups are awaiting a decision, how many past shifts still need attendance
         # marked, and what's coming up next — all derived from VolunteerShift/Signup, no
@@ -248,33 +249,68 @@ def _rescue_summary(shelter):
 
 
 class DonationQrView(APIView):
-    """US-Q1 · upload (or replace) a donation QR. One row per (account, provider) — a
-    second POST for the same provider is an edit, not a second QR. Uploading is not
-    gated on the org's own approval (decision 2's draft-first pattern, same as listings)
-    — the public gate (US-Q2) is the separate, always-both-keys check."""
+    """US-Q1 / DW2 · the shelter's own QRs. A first upload or a replacement creates a `pending` row; it NEVER touches the live row, so the reviewed
+    code stays public until the reviewer verifies the replacement. Uploading is not gated on the org's own approval (decision 2's draft-first
+    pattern); the public gate (US-Q2) is the separate, always-both-keys check. Replacing a LIVE QR needs the account password (DW2 Q3)."""
     permission_classes = [IsShelter]
+
+    def get(self, request):
+        """AT3 · what the shelter itself can see: per provider the live row, the pending replacement, and the latest refusal (with its reason)."""
+        rows = list(DonationQr.objects.filter(account=request.user).order_by("created_at"))
+        out, refused_seen = [], set()
+        for r in reversed(rows):                       # newest first so we keep only the LATEST refusal per provider
+            if r.status in (QrStatus.LIVE, QrStatus.PENDING):
+                out.append(r)
+            elif r.status == QrStatus.REFUSED and r.provider not in refused_seen:
+                refused_seen.add(r.provider)
+                out.append(r)
+        out.sort(key=lambda r: (r.provider, r.status != QrStatus.LIVE))
+        return Response({"donation_qrs": [own_repr(r) for r in out]})
 
     def post(self, request):
         s = DonationQrUploadSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         d = s.validated_data
-        # ⚠️ Any edit resets `verified` — the obvious fraud is swapping the image after
-        # a reviewer already checked it. This endpoint's only job is "submit an image
-        # for this provider," so every call here is by definition a new image to check.
-        # No unique(account, provider) constraint exists in the DDL, so this looks up
-        # the latest row rather than relying on get_or_create's implicit uniqueness.
-        qr = (DonationQr.objects.filter(account=request.user, provider=d["provider"])
-              .order_by("-created_at").first())
-        if qr is not None:
-            qr.account_name = d["account_name"]
-            qr.qr_image_url = d["file_url"]
-            qr.verified = False
-            qr.save(update_fields=["account_name", "qr_image_url", "verified"])
-        else:
+        with transaction.atomic():
+            mine = DonationQr.objects.select_for_update().filter(account=request.user, provider=d["provider"])
+            live = mine.filter(status=QrStatus.LIVE).first()
+            # Owner decision Q1: a refusal is final for THAT image; a different one is fine.
+            if mine.filter(status=QrStatus.REFUSED, qr_image_url=d["file_url"]).exists():
+                return Response({"error": {"code": "refused_image", "field": "file_url",
+                                           "message": "That image was already refused. Upload a different one."}}, status=400)
+            # Owner decision Q3: only a REPLACEMENT needs re-auth (a first upload has no live code to swap). A social-only account has no password.
+            if live is not None and request.user.password_hash:
+                if not request.user.check_password(d.get("current_password") or ""):
+                    return Response({"error": {"code": "reauth_required",
+                                               "message": "Enter your password to replace a live donation QR."}}, status=403)
+            # One pending row per provider: a newer upload withdraws the previous pending one.
+            for old in mine.filter(status=QrStatus.PENDING):
+                old.status = QrStatus.WITHDRAWN
+                old.save()
             qr = DonationQr.objects.create(
                 account=request.user, provider=d["provider"], account_name=d["account_name"],
-                qr_image_url=d["file_url"], verified=False)
-        return Response({"donation_qr_id": str(qr.pk), "verified": qr.verified}, status=201)
+                qr_image_url=d["file_url"], status=QrStatus.PENDING, replaces=live)
+        return Response({"donation_qr_id": str(qr.pk), "status": qr.status, "verified": qr.verified,
+                         "replaces": str(live.pk) if live else None}, status=201)
+
+
+class DonationQrOfflineView(APIView):
+    """DW2 · "Take my QR offline now". A shelter withdraws its OWN live QR at once (a closed or compromised wallet), or cancels its own pending
+    replacement. One tap, no password: taking a code down can only reduce what donors see."""
+    permission_classes = [IsShelter]
+
+    def post(self, request, donation_qr_id):
+        with transaction.atomic():
+            qr = (DonationQr.objects.select_for_update()
+                  .filter(donation_qr_id=donation_qr_id, account=request.user).first())
+            if qr is None:
+                return Response({"error": {"code": "not_found", "message": "No such QR"}}, status=404)
+            if qr.status not in (QrStatus.LIVE, QrStatus.PENDING):
+                return Response({"error": {"code": "not_active", "message": "That QR is not live or pending."}}, status=409)
+            qr.status = QrStatus.WITHDRAWN
+            qr.decided_at = timezone.now()
+            qr.save()
+        return Response(own_repr(qr))
 
 
 class ShelterDonationQrPublicView(APIView):
@@ -295,7 +331,7 @@ class ShelterDonationQrPublicView(APIView):
         if not approved:
             return Response({"error": {"code": "not_found", "message": "No such shelter"}},
                             status=404)
-        qrs = list(DonationQr.objects.filter(account_id=account_id, verified=True))
+        qrs = list(DonationQr.objects.filter(account_id=account_id, status=QrStatus.LIVE).order_by("provider"))
         if not qrs:
             return Response({"error": {"code": "not_found",
                                        "message": "No verified donation QR on file"}}, status=404)

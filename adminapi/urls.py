@@ -21,6 +21,7 @@ from adminapi.moderation_views import (
 from adminapi.shelters_views import (
     DonationQrQueueView,
     MakeEscalationPartnerView,
+    RefuseQrView,
     RemoveEscalationPartnerView,
     ShelterDetailView,
     ShelterQueueView,
@@ -104,6 +105,7 @@ urlpatterns = [
     path("donation-qrs", DonationQrQueueView.as_view()),
     path("donation-qrs/<uuid:donation_qr_id>/verify", VerifyQrView.as_view()),
     path("donation-qrs/<uuid:donation_qr_id>/unverify", UnverifyQrView.as_view()),
+    path("donation-qrs/<uuid:donation_qr_id>/refuse", RefuseQrView.as_view()),
 
     # US-T1 · team and roles. Superadmin only. Replaces the auth.User / auth.Group /
     # TOTP-device model admins — three of the five registrations US-X1 checks.
