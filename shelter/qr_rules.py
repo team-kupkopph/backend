@@ -1,7 +1,10 @@
 """DW2 · small shared rules for the donation-QR lifecycle (the shelter's endpoints and the reviewer's both use them)."""
 from datetime import timedelta
 
+from django.db import transaction
 from django.utils import timezone
+
+from common.storage import PUBLIC, delete_object
 
 OVERDUE_BUSINESS_DAYS = 2   # owner decision, DW2 plan Q2: past this a pending QR is flagged Overdue (never auto-approved)
 
@@ -76,3 +79,25 @@ def donation_qr_url_error(url, account):
         if segments[i] == "donation_qr" and segments[i + 1] == str(account.pk) and len(segments) == i + 3:
             return None
     return "That image was not uploaded for this account."
+
+
+def discard_image(qr):
+    """AT21 · a withdrawn or superseded QR's image must not stay reachable at its old public URL (the bucket is world-readable). Deletes the stored
+    object once the surrounding transaction commits, and ONLY when the URL is this account's own `donation_qr` key (never a legacy foreign URL).
+    A refused image is deliberately kept: the reviewer's record and the refused-image rule refer to it. No bucket (dev) makes this a no-op."""
+    if donation_qr_url_error(qr.qr_image_url, qr.account) is not None:
+        return
+    url = qr.qr_image_url
+    transaction.on_commit(lambda: delete_object(url, PUBLIC))
+
+
+def swap_in(pending):
+    """Make `pending` the live QR and withdraw (and discard the image of) whatever was live for that provider, in the caller's transaction."""
+    from shelter.models import DonationQr, QrStatus
+    for old in DonationQr.objects.select_for_update().filter(
+            account=pending.account, provider=pending.provider, status=QrStatus.LIVE).exclude(pk=pending.pk):
+        old.status = QrStatus.WITHDRAWN
+        old.decided_at = timezone.now()
+        old.save()
+        discard_image(old)
+    pending.status = QrStatus.LIVE

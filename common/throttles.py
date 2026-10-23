@@ -122,6 +122,12 @@ class MediaPresignThrottle(AccountScopedThrottle):
     scope = "media_presign"
 
 
+class DonationQrUploadThrottle(AccountScopedThrottle):
+    """AT18 · every upload or replacement re-queues a payment QR for review (and a replacement needs the password): a looping client resets its own review and
+    writes rows at will. Sized so a shelter fixing a mistake or two stays well clear."""
+    scope = "donation_qr_upload"
+
+
 class StoryCreateThrottle(AccountScopedThrottle):
     """The newest public UGC surface. Unthrottled UGC is a spam feed."""
     scope = "story_create"

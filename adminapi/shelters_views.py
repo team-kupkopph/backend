@@ -10,7 +10,7 @@ from adminapi.verifications_views import StaffView
 from listings.models import AdoptionListing
 from sagip.geo import centroid_for
 from shelter.models import DonationQr, QrStatus, ShelterProfile, ShelterTier
-from shelter.qr_rules import is_overdue, notify_decision
+from shelter.qr_rules import discard_image, is_overdue, notify_decision, swap_in
 from verifications.models import VerificationRequest
 
 
@@ -250,16 +250,11 @@ class DonationQrDecisionView(StaffView):
                 return Response({"error": {"code": "already_decided", "verified": qr.verified,
                                            "status": qr.status}}, status=409)
             if self.action == "verify":
-                # Withdraw whatever is live for this provider (the row it replaces) in the SAME transaction: there is never a moment with two
-                # live rows (the constraint forbids it) or none.
-                for old in DonationQr.objects.select_for_update().filter(
-                        account=qr.account, provider=qr.provider, status=QrStatus.LIVE).exclude(pk=qr.pk):
-                    old.status = QrStatus.WITHDRAWN
-                    old.decided_at = timezone.now()
-                    old.save()
-                qr.status = QrStatus.LIVE
+                # One transaction: there is never a moment with two live rows (the constraint forbids it) or none; the old image is discarded (AT21).
+                swap_in(qr)
             elif self.action == "unverify":
                 qr.status = QrStatus.WITHDRAWN
+                discard_image(qr)
             else:
                 qr.status = QrStatus.REFUSED
             qr.decision_note = notes
