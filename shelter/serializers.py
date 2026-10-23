@@ -67,6 +67,14 @@ class DonationQrUploadSerializer(serializers.Serializer):
     # this codebase (e.g. ReportCreateSerializer.photos) already calls it file_url.
     provider = serializers.ChoiceField(choices=QrProvider.values)
     account_name = serializers.CharField(max_length=120)
-    file_url = serializers.CharField()
+    file_url = serializers.CharField(max_length=500)
     # DW2 / owner decision Q3: replacing a LIVE QR needs the account password (a stolen session swapping the image is the fraud case).
     current_password = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
+    def validate_file_url(self, value):
+        # AT10 · only this account's own donation_qr upload (see shelter/qr_rules.py).
+        from shelter.qr_rules import donation_qr_url_error
+        error = donation_qr_url_error(value, self.context["request"].user)
+        if error:
+            raise serializers.ValidationError(error)
+        return value
