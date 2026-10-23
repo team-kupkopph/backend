@@ -11,6 +11,7 @@ status is only ever checked on the row re-read under both locks — never on an 
 before the lock (that was the double-count: AW1).
 """
 from django.db import transaction
+from django.utils import timezone
 
 from accounts.models import Account, AccountStatus
 from verifications.models import VerificationRequest
@@ -21,16 +22,27 @@ MAX_QTY = 100_000          # per need target, per pledge, and per received-confi
 MAX_TOTAL = 2_000_000_000  # running `quantity_received` ceiling (int4 max is 2_147_483_647)
 
 
+class CancelReason:
+    """Who ended a pledge: `donor` withdrew it; `need_closed` is the shelter's Mark complete."""
+    DONOR = "donor"
+    NEED_CLOSED = "need_closed"
+
+
+EDITABLE_FIELDS = ("title", "description", "quantity_needed", "category", "unit")
+
+
 class NeedError(ValueError):
     """A wishlist transition that can't be applied. `code` is the machine string the view
-    maps to a status (`not_found`, `need_not_open`, `pledge_decided`, `total_overflow`,
-    `own_need`);
-    `message` optionally overrides the view's default wording for that code."""
+    maps to a status (`not_found`, `forbidden`, `need_not_open`, `pledge_decided`,
+    `total_overflow`, `own_need`, `below_received`);
+    `message` optionally overrides the view's default wording for that code, and `details`
+    is the machine-readable extra the envelope carries (e.g. `below_received`)."""
 
-    def __init__(self, code, message=""):
+    def __init__(self, code, message="", details=None):
         super().__init__(code)
         self.code = code
         self.message = message
+        self.details = details
 
 
 def live_shelter_ids():
@@ -57,8 +69,21 @@ def _lock_need(need_id):
     return need
 
 
+def owned_need_id(need_id, owner, forbidden_message):
+    """Ownership gate for the shelter-side writers, run BEFORE any lock is taken: a stranger
+    probing someone else's need must not queue on its row lock. The owner never changes, so
+    reading it unlocked is safe. Unknown need: `not_found`; someone else's: `forbidden`."""
+    owner_id = (ShelterNeed.objects.filter(pk=need_id)
+                .values_list("shelter_account_id", flat=True).first())
+    if owner_id is None:
+        raise NeedError("not_found", "No such need.")
+    if owner_id != owner.pk:
+        raise NeedError("forbidden", forbidden_message)
+    return need_id
+
+
 @transaction.atomic
-def create_pledge(need_id, pledger, quantity):
+def create_pledge(need_id, pledger, quantity, note=""):
     """Record a `pledged` pledge by `pledger` against the need — only while it is `open`.
 
     The need row is locked and its status re-read, so a pledge can't slip in after a close
@@ -75,7 +100,8 @@ def create_pledge(need_id, pledger, quantity):
         raise NeedError("not_found", "No such need.")
     if need.status != NeedStatus.OPEN:
         raise NeedError("need_not_open")
-    return NeedPledge.objects.create(need=need, pledger_account=pledger, quantity=quantity)
+    return NeedPledge.objects.create(need=need, pledger_account=pledger, quantity=quantity,
+                                     note=note)
 
 
 @transaction.atomic
@@ -95,7 +121,9 @@ def cancel_pledge(pledge_id, pledger):
     if pledge.status != PledgeStatus.PLEDGED:
         raise NeedError("pledge_decided")
     pledge.status = PledgeStatus.CANCELLED
-    pledge.save(update_fields=["status"])
+    pledge.cancel_reason = CancelReason.DONOR
+    pledge.decided_at = timezone.now()
+    pledge.save(update_fields=["status", "cancel_reason", "decided_at"])
     return pledge
 
 
@@ -125,13 +153,89 @@ def apply_received(need_id, pledge_id, quantity_received):
     if need.quantity_received + quantity_received > MAX_TOTAL:
         raise NeedError("total_overflow")
 
+    now = timezone.now()
     pledge.status = PledgeStatus.DELIVERED
-    pledge.save(update_fields=["status"])
+    pledge.quantity_received = quantity_received
+    pledge.decided_at = now
+    pledge.save(update_fields=["status", "quantity_received", "decided_at"])
 
     need.quantity_received += quantity_received
     if need.quantity_received >= need.quantity_needed and need.status == NeedStatus.OPEN:
         need.status = NeedStatus.FULFILLED
-        need.save(update_fields=["quantity_received", "status"])
+        need.fulfilled_at = now
+        need.save(update_fields=["quantity_received", "status", "fulfilled_at"])
     else:
         need.save(update_fields=["quantity_received"])
     return need
+
+
+@transaction.atomic
+def edit_need(need_id, owner, fields):
+    """The owning shelter edits an `open` need. Takes the need lock like every other writer, so
+    a confirm that committed first is never overwritten by a stale full-row save (the lost
+    update), and writes only the columns that changed (`update_fields`).
+
+    `fields` is a dict drawn from `EDITABLE_FIELDS`. Raises `NeedError`: `not_found`,
+    `forbidden`, `need_not_open` (only an open need is editable), or `below_received` (the new
+    target is under what has already arrived; `details` carries the received count). Lowering
+    the target to exactly what has arrived flips the need to `fulfilled` (stamping
+    `fulfilled_at`), inside the same lock."""
+    owned_need_id(need_id, owner, "Only the owning shelter can edit this need.")
+    need = _lock_need(need_id)
+    if need.status != NeedStatus.OPEN:
+        raise NeedError("need_not_open", "Only an open need can be edited.")
+    target = fields.get("quantity_needed")
+    if target is not None and target < need.quantity_received:
+        raise NeedError(
+            "below_received",
+            f"{need.quantity_received} already received — the target can't go lower.",
+            {"quantity_received": need.quantity_received})
+    changed = [f for f in EDITABLE_FIELDS if f in fields]
+    for f in changed:
+        setattr(need, f, fields[f])
+    if need.quantity_received >= need.quantity_needed:
+        # Same rule as `apply_received`'s flip: an open need at 100% is fulfilled.
+        need.status = NeedStatus.FULFILLED
+        need.fulfilled_at = timezone.now()
+        changed += ["status", "fulfilled_at"]
+    if changed:
+        need.save(update_fields=changed)
+    return need
+
+
+@transaction.atomic
+def complete_need(need_id):
+    """Mark complete: resolve an `open` need to `fulfilled` (received >= needed, stamping
+    `fulfilled_at`) or `closed`, and cancel every still-`pledged` pledge on it
+    (`cancel_reason="need_closed"`). Delivered and already-cancelled pledges are facts and stay.
+
+    Returns `(need, cancelled_pledges)` so the view can tell each donor AFTER this transaction
+    commits. On a need that is not `open` (already closed or fulfilled) it changes nothing and
+    returns `(need, [])` — which is also what makes a repeat call, or a double tap, silent.
+    The need lock is taken first, so a donor's cancel or a shelter's confirm racing this one
+    serialize: each pledge ends exactly one way."""
+    need = _lock_need(need_id)
+    if need.status != NeedStatus.OPEN:
+        return need, []
+    now = timezone.now()
+    # `of=("self",)`: without it Postgres also row-locks the joined `account` rows, a third
+    # table no other writer locks, in pledge order — two completes sharing donors in opposite
+    # order could deadlock, and the donors' own writes would block.
+    cancelled = list(NeedPledge.objects.select_for_update(of=("self",))
+                     .filter(need=need, status=PledgeStatus.PLEDGED)
+                     .select_related("pledger_account").order_by("created_at"))
+    if cancelled:
+        NeedPledge.objects.filter(pk__in=[p.pk for p in cancelled]).update(
+            status=PledgeStatus.CANCELLED, cancel_reason=CancelReason.NEED_CLOSED, decided_at=now)
+        for p in cancelled:
+            p.status = PledgeStatus.CANCELLED
+            p.cancel_reason = CancelReason.NEED_CLOSED
+            p.decided_at = now
+    if need.quantity_received >= need.quantity_needed:
+        need.status = NeedStatus.FULFILLED
+        need.fulfilled_at = now
+        need.save(update_fields=["status", "fulfilled_at"])
+    else:
+        need.status = NeedStatus.CLOSED
+        need.save(update_fields=["status"])
+    return need, cancelled

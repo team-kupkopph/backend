@@ -142,6 +142,21 @@ def test_export_carries_my_pledges_stories_and_badges(client):
 
 
 @pytest.mark.django_db
+def test_export_includes_the_pledge_note(client):
+    """R10 · the note is the caller's own words, so it is part of their data."""
+    from community.models import NeedPledge, ShelterNeed
+    account = AccountFactory()
+    need = ShelterNeed.objects.create(shelter_account=AccountFactory(), title="Dog food",
+                                      category="food", quantity_needed=10)
+    NeedPledge.objects.create(need=need, pledger_account=account, quantity=2,
+                              note="Dropping off Saturday")
+
+    body = _export(client, account).json()
+
+    assert body["pledges"][0]["note"] == "Dropping off Saturday"
+
+
+@pytest.mark.django_db
 def test_notifications_export_with_their_read_state(client):
     # Regression: this section was only ever exercised EMPTY, so it referenced a field the
     # model does not have (`read_at`; the column is a boolean `read`) and would have raised

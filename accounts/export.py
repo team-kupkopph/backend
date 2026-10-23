@@ -153,7 +153,7 @@ def build_export(account):
         # SHARED ROW · what the caller promised. The shelter's own records are theirs.
         "pledges": [
             {"pledge_id": str(p.pledge_id), "need_title": p.need.title,
-             "quantity": p.quantity, "status": p.status,
+             "quantity": p.quantity, "status": p.status, "note": p.note or None,
              "created_at": _dt(p.created_at)}
             for p in NeedPledge.objects.filter(pledger_account=account).select_related("need")
         ],

@@ -1,15 +1,16 @@
 """US-W1 · Abot-tulong wishlist endpoints (needs & pledges).
 
-The `quantity_received` math and the `open -> fulfilled` flip are never done here — they go
-through `community/needs.py` (create_pledge / cancel_pledge / apply_received) under the need's
-row lock (D-S6-7).
+Every change to a need or a pledge — status, `quantity_received`, `decided_at`,
+`cancel_reason`, `fulfilled_at`, the editable fields — goes through `community/needs.py`
+(create_pledge / cancel_pledge / apply_received / edit_need / complete_need) under the need's
+row lock (D-S6-7). The views validate, call one writer, and notify AFTER it has committed.
 """
 from django.db.models import Count
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import AccountStatus
+from accounts.models import Account, AccountStatus
 from common.analytics import emit
 from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCreateThrottle
 from notifications.service import notify
@@ -27,7 +28,24 @@ from .models import (
     StoryStatus,
     StoryType,
 )
-from .needs import NeedError, apply_received, cancel_pledge, create_pledge, live_needs
+from .needs import (
+    NeedError,
+    apply_received,
+    cancel_pledge,
+    complete_need,
+    create_pledge,
+    edit_need,
+    owned_need_id,
+)
+from .reads import (
+    donation_instructions,
+    my_pledge_rows,
+    need_rows,
+    page_window,
+    pledge_rows,
+    trim_page,
+    visible_needs,
+)
 from .serializers import (
     NeedCreateSerializer,
     NeedPatchSerializer,
@@ -36,7 +54,7 @@ from .serializers import (
     StoryCreateSerializer,
 )
 
-PAGE_SIZE = 20
+PAGE_SIZE = 20     # stories only; the wishlist lists page through `community/reads.py`
 
 
 def _err(code, message, status):
@@ -50,6 +68,8 @@ _NEED_ERRORS = {
     "need_not_open": (409, "This need is no longer open for pledges."),
     "pledge_decided": (409, ""),
     "total_overflow": (422, "That would take this need's received total past the maximum."),
+    "forbidden": (403, "Only the owning shelter can do that."),
+    "below_received": (422, "The target can't go below what has already been received."),
 }
 _PLEDGE_DECIDED_MESSAGE = "This pledge has already been decided."
 
@@ -59,13 +79,15 @@ def _need_error(e, *, decided_message=_PLEDGE_DECIDED_MESSAGE):
     status, default = _NEED_ERRORS[e.code]
     if e.code == "pledge_decided":
         default = decided_message
-    return _err(e.code, e.message or default, status)
+    body = {"code": e.code, "message": e.message or default}
+    if e.details is not None:
+        body["details"] = e.details
+    return Response({"error": body}, status=status)
 
 
-def _need_repr(need):
-    return {"need_id": str(need.pk), "title": need.title, "category": need.category,
-            "description": need.description, "quantity_needed": need.quantity_needed,
-            "quantity_received": need.quantity_received, "status": need.status}
+def _need_repr(need, viewer):
+    """One need as a row (the PATCH response). Same shape as a list row."""
+    return need_rows(ShelterNeed.objects.filter(pk=need.pk), viewer)[0]
 
 
 class ShelterNeedsView(APIView):
@@ -81,16 +103,16 @@ class ShelterNeedsView(APIView):
         return [NeedCreateThrottle()] if self.request.method == "POST" else []
 
     def get(self, request, account_id):
-        # AW2/AW31 · everyone but the owning shelter sees only a live shelter's needs.
-        user = request.user
-        owner = user.is_authenticated and str(user.pk) == str(account_id)
-        qs = ShelterNeed.objects.all() if owner else live_needs()
-        qs = qs.filter(shelter_account_id=account_id)
+        # AW2/AW31 · everyone but the owning shelter sees only a live shelter's needs (R3).
+        qs = visible_needs(request.user).filter(shelter_account_id=account_id)
         status = request.query_params.get("status")
         if status:
             qs = qs.filter(status=status)
-        qs = qs.order_by("-created_at")[:PAGE_SIZE]
-        return Response({"results": [_need_repr(n) for n in qs]})
+        page, window = page_window(request)
+        rows = need_rows(qs.order_by("-created_at", "need_id"), request.user, window)
+        rows, nxt = trim_page(rows, page)
+        return Response({"results": rows, "next": nxt,
+                         "donation_instructions": donation_instructions(account_id, request.user)})
 
     def post(self, request, account_id):
         if str(request.user.pk) != str(account_id):
@@ -101,30 +123,68 @@ class ShelterNeedsView(APIView):
         return Response({"need_id": str(need.pk)}, status=201)
 
 
+def _notify_need_closed(need, shelter, cancelled):
+    """One `need_closed` per pledge Mark complete just cancelled; nothing when none were."""
+    for p in cancelled:
+        notify(p.pledger_account, "need_closed", title="Need closed",
+               body=(f"{shelter.display_name} closed “{need.title}” — your pledge was "
+                     "cancelled. Salamat for offering."),
+               data={"need_id": str(need.pk), "pledge_id": str(p.pk)})
+
+
 class NeedDetailView(APIView):
-    """US-W3 · the owning shelter edits a need (while open) or closes it."""
-    permission_classes = [IsShelter]
+    """US-W3 · GET one need (public); the owning shelter edits a need (while open) or closes
+    it. Both go through the need-locked writers in `community/needs.py`; `status: "closed"` is
+    what shipped app builds still send, and now means Mark complete (the cascade included)."""
+
+    def get_permissions(self):
+        return [IsShelter()] if self.request.method == "PATCH" else [AllowAny()]
+
+    def get(self, request, need_id):
+        """One need, with its aggregates, the shelter's name and drop-off instructions. Outside
+        `live_needs()` it is a 404 for everyone but the owning shelter (R3)."""
+        qs = visible_needs(request.user).filter(pk=need_id)
+        account_id = qs.values_list("shelter_account_id", flat=True).first()
+        if account_id is None:
+            return _err("not_found", "No such need.", 404)
+        row = need_rows(qs, request.user)[0]
+        row.update({"shelter_name": Account.objects.get(pk=account_id).display_name,
+                    "shelter_account_id": str(account_id),
+                    "donation_instructions": donation_instructions(account_id, request.user)})
+        return Response(row)
 
     def patch(self, request, need_id):
-        need = ShelterNeed.objects.filter(pk=need_id).first()
-        if need is None:
-            return _err("not_found", "No such need.", 404)
-        if need.shelter_account_id != request.user.pk:
-            return _err("forbidden", "Only the owning shelter can edit this need.", 403)
+        try:
+            owned_need_id(need_id, request.user, "Only the owning shelter can edit this need.")
+        except NeedError as e:
+            return _need_error(e)
         s = NeedPatchSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         d = s.validated_data
-        if d.get("status") == NeedStatus.CLOSED:
-            need.status = NeedStatus.CLOSED
-            need.save(update_fields=["status"])
-            return Response(_need_repr(need))
-        if need.status != NeedStatus.OPEN:
-            return _err("need_not_open", "Only an open need can be edited.", 409)
-        for f in ("title", "description", "quantity_needed"):
-            if f in d:
-                setattr(need, f, d[f])
-        need.save()
-        return Response(_need_repr(need))
+        try:
+            if d.get("status") == NeedStatus.CLOSED:
+                need, cancelled = complete_need(need_id)
+                _notify_need_closed(need, request.user, cancelled)
+            else:
+                need = edit_need(need_id, request.user, d)
+        except NeedError as e:
+            return _need_error(e)
+        return Response(_need_repr(need, request.user))
+
+
+class NeedCompleteView(APIView):
+    """POST Mark complete: `fulfilled` if the target was met, else `closed`, cancelling the
+    still-open pledges (each donor is told). Idempotent: a need that is not open is left as is."""
+    permission_classes = [IsShelter]
+
+    def post(self, request, need_id):
+        try:
+            owned_need_id(need_id, request.user, "Only the owning shelter can close this need.")
+            need, cancelled = complete_need(need_id)
+        except NeedError as e:
+            return _need_error(e)
+        _notify_need_closed(need, request.user, cancelled)
+        return Response({"need_status": need.status, "cancelled_pledges": len(cancelled)})
 
 
 class NeedPledgesView(APIView):
@@ -142,17 +202,15 @@ class NeedPledgesView(APIView):
             return _err("not_found", "No such need.", 404)
         if need.shelter_account_id != request.user.pk:
             return _err("forbidden", "Only the owning shelter can see these pledges.", 403)
-        pledges = (need.pledges.select_related("pledger_account").order_by("-created_at"))
-        return Response({"results": [
-            {"pledge_id": str(p.pk), "quantity": p.quantity, "status": p.status,
-             "pledger_name": p.pledger_account.display_name,
-             "created_at": p.created_at.isoformat()} for p in pledges]})
+        pledges = need.pledges.select_related("pledger_account").order_by("-created_at")
+        return Response({"results": pledge_rows(pledges)})
 
     def post(self, request, need_id):
         s = PledgeCreateSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         try:
-            pledge = create_pledge(need_id, request.user, s.validated_data["quantity"])
+            pledge = create_pledge(need_id, request.user, s.validated_data["quantity"],
+                                   s.validated_data["note"])
         except NeedError as e:
             return _need_error(e)
         need = pledge.need
@@ -172,6 +230,10 @@ class PledgeCancelView(APIView):
             pledge = cancel_pledge(pledge_id, request.user)
         except NeedError as e:
             return _need_error(e, decided_message="This pledge can no longer be cancelled.")
+        need = pledge.need
+        notify(need.shelter_account, "pledge_cancelled", title="Pledge cancelled",
+               body=f"{request.user.display_name} cancelled their pledge to “{need.title}”.",
+               data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
         return Response({"status": pledge.status})
 
 
@@ -180,15 +242,12 @@ class MyPledgesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        page, window = page_window(request)
         qs = (NeedPledge.objects.filter(pledger_account=request.user)
-              .select_related("need", "need__shelter_account").order_by("-created_at")[:PAGE_SIZE])
-        return Response({"results": [
-            {"pledge_id": str(p.pk), "quantity": p.quantity, "status": p.status,
-             "created_at": p.created_at.isoformat(),
-             "need": {"need_id": str(p.need_id), "title": p.need.title,
-                      "category": p.need.category,
-                      "shelter_name": p.need.shelter_account.display_name}}
-            for p in qs]})
+              .select_related("need", "need__shelter_account")
+              .order_by("-created_at", "pledge_id")[window])
+        rows, nxt = trim_page(list(qs), page)
+        return Response({"results": my_pledge_rows(rows), "next": nxt})
 
 
 class NeedReceivedView(APIView):
@@ -211,7 +270,8 @@ class NeedReceivedView(APIView):
         # `pledger_account` never changes, so reading it after the writer committed is safe.
         pledge = NeedPledge.objects.select_related("pledger_account").get(pk=pledge_id)
         notify(pledge.pledger_account, "pledge_confirmed",
-               title="Pledge received", body=f"“{need.title}” confirmed your pledge. Salamat!",
+               title="Pledge received",
+               body=f"{request.user.display_name} received your pledge to “{need.title}”. Salamat!",
                data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
         emit("pledge_delivered", category=need.category)
         return Response({"need_status": need.status})

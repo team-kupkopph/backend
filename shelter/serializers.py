@@ -41,6 +41,8 @@ class ShelterProfilePatchSerializer(serializers.Serializer):
     website_url = serializers.CharField(required=False, allow_blank=True)
     vet_name = serializers.CharField(max_length=120, required=False, allow_blank=True)
     vet_prc_number = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    # US-W3 · the drop-off how-to shown on the wishlist; blank clears it.
+    donation_instructions = serializers.CharField(max_length=500, required=False, allow_blank=True)
 
     def validate_official_phone(self, value):
         # F12 · same E.164 canonical form as /me/phone. Not unique — it may equal the

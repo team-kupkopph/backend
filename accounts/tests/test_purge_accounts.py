@@ -242,3 +242,25 @@ def test_the_management_command_runs_the_sweep():
     account.refresh_from_db()
     assert account.anonymized_at is not None
     assert "1" in out.getvalue()
+
+
+@pytest.mark.django_db
+def test_a_pledge_note_is_scrubbed_but_the_pledge_survives():
+    """R10 · the free-text note may carry a phone number or a name: PII with no welfare value.
+    The pledge itself (quantity, status, the need it belongs to) is the shelter's record."""
+    from community.models import NeedPledge, ShelterNeed
+    account = _deleted_days_ago(31)
+    need = ShelterNeed.objects.create(shelter_account=AccountFactory(), title="Rice",
+                                      category="food", quantity_needed=5)
+    pledge = NeedPledge.objects.create(need=need, pledger_account=account, quantity=2,
+                                       note="Call Ana on 0917 123 4567")
+    other = NeedPledge.objects.create(need=need, pledger_account=AccountFactory(), quantity=1,
+                                      note="someone else's note")
+
+    anonymize_expired_accounts()
+
+    pledge.refresh_from_db()
+    assert pledge.note == "" and pledge.quantity == 2 and pledge.need_id == need.pk
+    assert pledge.pledger_account_id == account.pk
+    other.refresh_from_db()
+    assert other.note == "someone else's note"

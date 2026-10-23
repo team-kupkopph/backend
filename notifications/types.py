@@ -47,6 +47,10 @@ _TYPES = [
                      "kupkop://shelter/shifts/{shift_id}"),
     NotificationType("pledge_received", "{need_id, pledge_id}", True, "kupkop://shelter/needs/{need_id}/pledges"),
     NotificationType("pledge_confirmed", "{need_id, pledge_id}", True, "kupkop://donations"),
+    # Abot-tulong wishlist refactor (WD1/WD6): the shelter hears a donor withdraw; each donor
+    # hears that Mark complete cancelled their still-open pledge.
+    NotificationType("pledge_cancelled", "{need_id, pledge_id}", True, "kupkop://shelter/needs/{need_id}/pledges"),
+    NotificationType("need_closed", "{need_id, pledge_id}", True, "kupkop://donations"),
     # D-S6-5: a badge is a celebration, in-app only — push:false, so it never buzzes a phone
     # (pushing badges would cheapen push for a match or a pledge).
     NotificationType("badge_earned", "{badge_code}", False, "kupkop://impact"),
