@@ -60,3 +60,14 @@ def test_non_api_404s_are_untouched(client):
     res = client.get("/definitely-not-a-page")
     assert res.status_code == 404
     assert not res["Content-Type"].startswith("application/json")
+
+
+@pytest.mark.django_db
+def test_a_malformed_shelter_id_on_the_public_donation_qr_route_is_json(client, settings):
+    """AT27 (Abot-tulong QR plan Run 1) saw an HTML 404 here, but only because the dev server ran with DEBUG=True (Django then shows its technical 404
+    page and never calls handler404). With DEBUG off, as in production and in tests, this route answers in the envelope."""
+    settings.DEBUG = False
+    res = client.get("/api/v1/shelters/not-a-uuid/donation-qr")
+    assert res.status_code == 404
+    assert res["Content-Type"].startswith("application/json")
+    assert res.json()["error"]["code"] == "not_found"
