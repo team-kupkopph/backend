@@ -22,7 +22,7 @@ def test_creates_a_new_unverified_qr(client):
     shelter = _shelter()
     res = client.post("/api/v1/shelter/donation-qr",
                       {"provider": "gcash", "account_name": "Marikina AWG",
-                       "file_url": "https://example.invalid/qr1.png"},
+                       "file_url": f"https://example.invalid/donation_qr/{shelter.pk}/qr1.png"},
                       **_hdr(shelter))
     assert res.status_code == 201
     body = res.json()
@@ -55,16 +55,16 @@ def test_reposting_the_same_provider_before_review_replaces_the_pending_row(clie
     shelter = _shelter()
     first = client.post("/api/v1/shelter/donation-qr",
                         {"provider": "gcash", "account_name": "Marikina AWG",
-                         "file_url": "https://example.invalid/qr1.png"}, **_hdr(shelter)).json()["donation_qr_id"]
+                         "file_url": f"https://example.invalid/donation_qr/{shelter.pk}/qr1.png"}, **_hdr(shelter)).json()["donation_qr_id"]
 
     res = client.post("/api/v1/shelter/donation-qr",
                       {"provider": "gcash", "account_name": "Marikina AWG (new)",
-                       "file_url": "https://example.invalid/qr2.png"}, **_hdr(shelter))
+                       "file_url": f"https://example.invalid/donation_qr/{shelter.pk}/qr2.png"}, **_hdr(shelter))
 
     assert DonationQr.objects.filter(account=shelter, provider="gcash", status="pending").count() == 1
     assert DonationQr.objects.get(pk=first).status == "withdrawn"
     qr = DonationQr.objects.get(pk=res.json()["donation_qr_id"])
-    assert qr.qr_image_url == "https://example.invalid/qr2.png"
+    assert qr.qr_image_url == f"https://example.invalid/donation_qr/{shelter.pk}/qr2.png"
     assert qr.account_name == "Marikina AWG (new)"
 
 
@@ -74,11 +74,11 @@ def test_editing_an_already_verified_qr_keeps_it_verified_until_the_replacement_
     shelter = _shelter()
     shelter.set_password("pw-123456-x"); shelter.save()
     qr = DonationQr.objects.create(account=shelter, provider="gcash", account_name="Marikina AWG",
-                                   qr_image_url="https://example.invalid/qr1.png", verified=True)
+                                   qr_image_url=f"https://example.invalid/donation_qr/{shelter.pk}/qr1.png", verified=True)
 
     res = client.post("/api/v1/shelter/donation-qr",
                       {"provider": "gcash", "account_name": "Marikina AWG",
-                       "file_url": "https://example.invalid/qr2-swapped.png", "current_password": "pw-123456-x"},
+                       "file_url": f"https://example.invalid/donation_qr/{shelter.pk}/qr2-swapped.png", "current_password": "pw-123456-x"},
                       **_hdr(shelter))
 
     qr.refresh_from_db()
@@ -91,9 +91,68 @@ def test_a_different_provider_is_a_separate_qr(client):
     shelter = _shelter()
     client.post("/api/v1/shelter/donation-qr",
                {"provider": "gcash", "account_name": "Marikina AWG",
-                "file_url": "https://example.invalid/gcash.png"}, **_hdr(shelter))
+                "file_url": f"https://example.invalid/donation_qr/{shelter.pk}/gcash.png"}, **_hdr(shelter))
     client.post("/api/v1/shelter/donation-qr",
                {"provider": "maya", "account_name": "Marikina AWG",
-                "file_url": "https://example.invalid/maya.png"}, **_hdr(shelter))
+                "file_url": f"https://example.invalid/donation_qr/{shelter.pk}/maya.png"}, **_hdr(shelter))
 
     assert DonationQr.objects.filter(account=shelter).count() == 2
+
+
+# ── AT10 (Abot-tulong QR plan, Run 1) · `file_url` was a free CharField: any URL (javascript:, data:, another host, another shelter's upload) was
+# stored and later rendered to donors and in the reviewer's browser. It must be THIS account's own `donation_qr` upload.
+_BAD = [
+    "javascript:alert(1)",
+    "data:image/png;base64,iVBORw0KGgo=",
+    "not a url at all",
+    "ftp://example.invalid/donation_qr/{me}/x.png",
+    "https://example.invalid/qr.png",                         # not a donation_qr key
+    "https://example.invalid/listing_photo/{me}/x.png",       # another purpose
+    "https://example.invalid/donation_qr/{other}/x.png",      # someone else's upload
+    "https://example.invalid/donation_qr/{me}/../{other}/x.png",
+    "https://example.invalid/donation_qr/{me}/x.png?next=//evil.invalid",
+    "https://user:pw@example.invalid/donation_qr/{me}/x.png",
+    "https://example.invalid/donation_qr/{me}/" + "a" * 600,  # absurd length
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("template", _BAD)
+def test_file_url_must_be_this_accounts_own_donation_qr_upload(client, template):
+    me, other = _shelter(), _shelter()
+    url = template.format(me=me.pk, other=other.pk)
+    res = client.post("/api/v1/shelter/donation-qr",
+                      {"provider": "gcash", "account_name": "X", "file_url": url}, **_hdr(me))
+    assert res.status_code == 400
+    assert res.json()["error"]["field"] == "file_url"
+    assert DonationQr.objects.filter(account=me).count() == 0
+
+
+@pytest.mark.django_db
+def test_another_shelters_upload_cannot_be_claimed_even_when_it_is_a_real_key(client):
+    mine, theirs = _shelter(), _shelter()
+    res = client.post("/api/v1/shelter/donation-qr",
+                      {"provider": "gcash", "account_name": "X",
+                       "file_url": f"https://example.invalid/donation_qr/{theirs.pk}/stolen.png"}, **_hdr(mine))
+    assert res.status_code == 400
+
+
+@pytest.mark.django_db
+def test_with_a_bucket_configured_the_host_must_be_that_bucket(client, settings):
+    settings.MEDIA_S3_BUCKET_PUBLIC = "media.kupkop.example"
+    me = _shelter()
+    good = f"https://media.kupkop.example/donation_qr/{me.pk}/ok.png"
+    evil = f"https://evil.invalid/donation_qr/{me.pk}/ok.png"
+    body = {"provider": "gcash", "account_name": "X"}
+    assert client.post("/api/v1/shelter/donation-qr", {**body, "file_url": evil}, **_hdr(me)).status_code == 400
+    assert client.post("/api/v1/shelter/donation-qr", {**body, "file_url": good}, **_hdr(me)).status_code == 201
+
+
+@pytest.mark.django_db
+def test_plain_http_is_refused_outside_debug(client, settings):
+    settings.DEBUG = False
+    me = _shelter()
+    res = client.post("/api/v1/shelter/donation-qr",
+                      {"provider": "gcash", "account_name": "X",
+                       "file_url": f"http://example.invalid/donation_qr/{me.pk}/x.png"}, **_hdr(me))
+    assert res.status_code == 400

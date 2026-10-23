@@ -268,7 +268,7 @@ class DonationQrView(APIView):
         return Response({"donation_qrs": [own_repr(r) for r in out]})
 
     def post(self, request):
-        s = DonationQrUploadSerializer(data=request.data)
+        s = DonationQrUploadSerializer(data=request.data, context={"request": request})
         s.is_valid(raise_exception=True)
         d = s.validated_data
         with transaction.atomic():

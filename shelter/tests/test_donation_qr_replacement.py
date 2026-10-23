@@ -36,6 +36,9 @@ def _live(shelter, url="https://example.invalid/live.png", provider="gcash"):
 
 
 def _post(client, shelter, url, **extra):
+    # AT10: the server only accepts this account's own donation_qr upload, so tests post that shape (bare names are wrapped).
+    if "/donation_qr/" not in url:
+        url = f"https://example.invalid/donation_qr/{shelter.pk}/{url.rsplit('/', 1)[-1]}"
     body = {"provider": "gcash", "account_name": "Marikina AWG", "file_url": url, **extra}
     return client.post(UP, body, **_hdr(shelter))
 
@@ -95,7 +98,7 @@ def test_one_pending_per_provider_a_second_upload_withdraws_the_first(client):
 def test_a_refused_image_cannot_be_resubmitted_but_a_different_one_can(client):
     s = _shelter(); _live(s)
     bad = DonationQr.objects.create(account=s, provider="gcash", account_name="X",
-                                    qr_image_url="https://example.invalid/bad.png", status=QrStatus.REFUSED)
+                                    qr_image_url=f"https://example.invalid/donation_qr/{s.pk}/bad.png", status=QrStatus.REFUSED)
     res = _post(client, s, "https://example.invalid/bad.png", current_password=PW)
     assert res.status_code == 400 and res.json()["error"]["code"] == "refused_image"
     assert _post(client, s, "https://example.invalid/other.png", current_password=PW).status_code == 201
