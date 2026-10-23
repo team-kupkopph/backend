@@ -31,6 +31,7 @@ def build_export(account):
     from listings.models import AdoptionInquiry, AdoptionListing, ListingPreference, Pet
     from notifications.models import Notification
     from sagip.models import ReportOffer, RescueCase, StrayReport
+    from shelter.models import DonationQr
     from volunteer.models import VolunteerSignup
 
     settings_row = account.settings
@@ -156,6 +157,13 @@ def build_export(account):
              "quantity": p.quantity, "status": p.status, "note": p.note or None,
              "created_at": _dt(p.created_at)}
             for p in NeedPledge.objects.filter(pledger_account=account).select_related("need")
+        ],
+        # AT29 · a shelter's OWN donation QRs (live, pending, refused with the reviewer's reason, withdrawn): its payment targets are its data.
+        "donation_qrs": [
+            {"donation_qr_id": str(q.donation_qr_id), "provider": q.provider, "account_name": q.account_name,
+             "qr_image_url": q.qr_image_url, "status": q.status, "decision_note": q.decision_note or None,
+             "created_at": _dt(q.created_at), "decided_at": _dt(q.decided_at)}
+            for q in DonationQr.objects.filter(account=account).order_by("created_at")
         ],
         "badges": [
             {"badge_code": b.badge_id, "earned_at": _dt(b.earned_at)}
