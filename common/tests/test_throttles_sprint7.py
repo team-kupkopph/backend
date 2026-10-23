@@ -90,8 +90,11 @@ def test_pledging_is_throttled():
     from django.test import Client
 
     from community.models import ShelterNeed
+    from verifications.models import VerificationRequest
     account = AccountFactory()
-    need = ShelterNeed.objects.create(shelter_account=AccountFactory(), title="Dog food",
+    shelter = AccountFactory(account_type="shelter")        # live, so the pledge itself would pass
+    VerificationRequest.objects.create(account=shelter, type="shelter_org", status="approved")
+    need = ShelterNeed.objects.create(shelter_account=shelter, title="Dog food",
                                       category="food", quantity_needed=1000)
     auth = _auth(account)
     client = Client()

@@ -13,14 +13,20 @@ from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
 from community.models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
 from notifications.models import Notification
+from verifications.models import VerificationRequest
 
 
 def _hdr(acc):
     return {"HTTP_AUTHORIZATION": f"Bearer {tokens_for(acc)['access']}"}
 
 
-def _shelter():
-    return AccountFactory(account_type="shelter")
+def _shelter(*, approved=True, **fields):
+    """An active shelter with an approved `shelter_org` verification — the only kind whose
+    wishlist is live (AW2/AW31). `approved=False` / `status="suspended"` build the other kinds."""
+    sh = AccountFactory(account_type="shelter", **fields)
+    if approved:
+        VerificationRequest.objects.create(account=sh, type="shelter_org", status="approved")
+    return sh
 
 
 def _need(shelter=None, needed=5, received=0, status=NeedStatus.OPEN):

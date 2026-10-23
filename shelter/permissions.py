@@ -24,3 +24,10 @@ class IsVerifiedShelter(IsShelter):
             return True
         self.message = self.unverified_message
         return False
+
+
+class IsVerifiedShelterForNeeds(IsVerifiedShelter):
+    """AW2 · posting to the Abot-tulong wishlist needs an approved organisation too — an
+    unverified shelter's needs would otherwise be public and pledgeable."""
+
+    unverified_message = "Your organization must be verified before posting wishlist needs."
