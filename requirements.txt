@@ -4,14 +4,14 @@ asgiref==3.12.1
 boto3==1.43.78
 botocore==1.43.78
 cffi==2.1.0
-certifi==2026.7.22
+certifi==2026.10.23         # PYSEC-2026-4320 (fixed in 2026.10.19)
 charset_normalizer==3.5.2
 cryptography==50.0.1
 # US-K3 · security upgrades, 2026-09-04. Django 5.1.15 carried SEVEN advisories
 # (PYSEC-2026-3717, CVE-2026-48587/6873/8404/48588/53877/53878); 5.2 is the current LTS line.
 Django==5.2.17
 django-otp==1.7.3
-djangorestframework==3.17.2   # CVE-2026-73228, CVE-2026-73229
+djangorestframework==3.18.3   # was 3.17.2: CVE-2026-73228/73229, GHSA-33wh-fxxf-88vv, GHSA-3547-9m27-7rxg, GHSA-xw6w-gcfp-cf8m (fixed in 3.18.2)
 # PYSEC-2026-1305. ⚠️ 5.5's TokenRefreshSerializer added a get_user_model() lookup keyed on
 # SIMPLE_JWT["USER_ID_FIELD"] — see the comment in config/settings.py for why that setting had
 # to go with this bump.
@@ -29,7 +29,7 @@ jmespath==1.1.0
 # tests only (no live bucket needed for this slice) — not imported by any runtime code path.
 moto==5.2.3
 packaging==26.3
-Pillow==12.3.0
+Pillow==13.0.0              # was 12.3.0: 38 advisories, all fixed in 13.0.0 (EXIF strip / image handling on the upload path)
 pluggy==1.6.0
 psycopg==3.2.13
 psycopg-binary==3.2.13
