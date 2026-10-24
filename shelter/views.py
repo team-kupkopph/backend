@@ -5,10 +5,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import AccountStatus, Address
+from common.throttles import DonationQrUploadThrottle
 from listings.models import AdoptionInquiry, InquiryKind, ListingStatus
 from shelter.models import DonationQr, QrStatus, ShelterProfile
 from shelter.permissions import IsShelter
-from shelter.qr_rules import own_repr
+from shelter.qr_rules import discard_image, own_repr
 from shelter.serializers import (
     DonationQrUploadSerializer,
     ShelterProfileCreateSerializer,
@@ -254,6 +255,10 @@ class DonationQrView(APIView):
     pattern); the public gate (US-Q2) is the separate, always-both-keys check. Replacing a LIVE QR needs the account password (DW2 Q3)."""
     permission_classes = [IsShelter]
 
+    def get_throttles(self):
+        # AT18 · only the write is throttled; reading your own QRs is free.
+        return [DonationQrUploadThrottle()] if self.request.method == "POST" else []
+
     def get(self, request):
         """AT3 · what the shelter itself can see: per provider the live row, the pending replacement, and the latest refusal (with its reason)."""
         rows = list(DonationQr.objects.filter(account=request.user).order_by("created_at"))
@@ -287,6 +292,7 @@ class DonationQrView(APIView):
             for old in mine.filter(status=QrStatus.PENDING):
                 old.status = QrStatus.WITHDRAWN
                 old.save()
+                discard_image(old)
             qr = DonationQr.objects.create(
                 account=request.user, provider=d["provider"], account_name=d["account_name"],
                 qr_image_url=d["file_url"], status=QrStatus.PENDING, replaces=live)
@@ -310,6 +316,7 @@ class DonationQrOfflineView(APIView):
             qr.status = QrStatus.WITHDRAWN
             qr.decided_at = timezone.now()
             qr.save()
+            discard_image(qr)
         return Response(own_repr(qr))
 
 

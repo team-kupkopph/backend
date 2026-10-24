@@ -192,7 +192,7 @@ REST_FRAMEWORK = {
         # US-K2 · ceilings for the Sprint 4-6 write paths. Sized so no plausible
         # human hits them: a shelter posting a dozen needs or a donor pledging to
         # several at once stays well clear, while a script does not.
-        "media_presign": "60/hour", "story_create": "10/hour",
+        "media_presign": "60/hour", "donation_qr_upload": "10/hour", "story_create": "10/hour",
         "need_create": "30/day", "pledge_create": "30/day",
         # P6 · US-K18 · requesting a shift and posting one, per account.
         "signup_create": "30/day", "shift_create": "30/day",
