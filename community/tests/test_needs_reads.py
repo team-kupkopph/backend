@@ -206,6 +206,29 @@ def test_awaiting_confirm_only_for_the_owner(client):
 
 
 @pytest.mark.django_db
+def test_awaiting_confirm_is_zero_on_a_closed_need_but_counts_a_fulfilled_one(client):
+    """B1 · a pre-refactor `closed` need can still hold a `pledged` pledge (the old close never
+    cascaded). Receipt on a closed need is refused (409), so it must not read as "to confirm"
+    — the dashboard already excludes it. A `fulfilled` need's leftover pledges ARE confirmable
+    (Ruling R1), so they still count."""
+    sh = _shelter()
+    closed = _need(sh, status=NeedStatus.CLOSED)
+    fulfilled = _need(sh, needed=5, received=5, status=NeedStatus.FULFILLED)
+    open_ = _need(sh, needed=50)
+    for n in (closed, fulfilled, open_):
+        _pledge(n, quantity=2)
+    rows = {r["need_id"]: r for r in _list(client, sh, who=sh).json()["results"]}
+    assert len(rows) == 3, "the scan must find all three needs"
+    assert rows[str(closed.pk)]["awaiting_confirm"] == 0
+    assert rows[str(fulfilled.pk)]["awaiting_confirm"] == 1
+    assert rows[str(open_.pk)]["awaiting_confirm"] == 1
+    # the public aggregates still describe the data as it is
+    assert rows[str(closed.pk)]["pledge_count"] == 1
+    # and the single-need read agrees with the list
+    assert client.get(f"/api/v1/needs/{closed.pk}", **_hdr(sh)).json()["awaiting_confirm"] == 0
+
+
+@pytest.mark.django_db
 def test_my_pledged_is_the_viewers_own_and_absent_for_guests(client):
     sh = _shelter()
     need = _need(sh, needed=50)
