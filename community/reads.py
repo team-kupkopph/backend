@@ -13,7 +13,7 @@ from django.db.models.functions import Coalesce
 
 from shelter.models import ShelterProfile
 
-from .models import PledgeStatus, ShelterNeed
+from .models import NeedStatus, PledgeStatus, ShelterNeed
 from .needs import live_needs, live_shelter_ids
 
 PAGE_SIZE = 20
@@ -88,7 +88,11 @@ def need_rows(qs, viewer, window=None):
                "created_at": n.created_at.isoformat(),
                "fulfilled_at": n.fulfilled_at.isoformat() if n.fulfilled_at else None}
         if signed_in and viewer.pk == n.shelter_account_id:
-            row["awaiting_confirm"] = n._pledge_count
+            # B1 · "to confirm" counts what the shelter can actually confirm: receipt on a CLOSED
+            # need is refused (409 need_not_open), so a pre-refactor orphan pledge there is not an
+            # action. A `fulfilled` need's leftovers are still confirmable (R1). The dashboard
+            # (`shelter/views.py`) applies the same rule, so the row tags and its count agree.
+            row["awaiting_confirm"] = 0 if n.status == NeedStatus.CLOSED else n._pledge_count
         if signed_in:
             row["my_pledged"] = n._my_pledged
         rows.append(row)
