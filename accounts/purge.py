@@ -27,6 +27,9 @@ everything else stays attached to the same row, now anonymous.
     trail. The identity IMAGES are a separate concern on their own 90-day clock
     (`verifications/purge.py`, US-SEC4); this sweep must not race or duplicate it.
   * Rescue cases, adoptions, completed shifts, stories, pledges, badges — the welfare record.
+  * A shelter profile's ORGANISATION fields (name, type, tier, registration, description,
+    logo, website). They describe the organisation, not a person, and donors' records name
+    the shelter by them; its personal fields are scrubbed (PR-6, below).
 
 Mirrors `verifications/purge.py`'s shape: a plain, idempotent, unit-testable function that a
 management command invokes on a schedule (US-F0's cron-over-Celery decision).
@@ -39,6 +42,10 @@ from django.utils import timezone
 
 from accounts.models import Account, AccountStatus, Address
 from common.storage import PUBLIC, delete_object
+
+#: The `ShelterProfile` fields that are about people rather than the organisation (PR-6).
+SHELTER_PERSONAL_FIELDS = ("contact_person_name", "contact_person_role", "official_email",
+                           "official_phone", "vet_name", "vet_prc_number", "donation_instructions")
 
 
 def anonymized_email(account):
@@ -83,6 +90,12 @@ def anonymize_account(account, now=None):
     # donor typed may hold a phone number or a name, so that goes (R10).
     from community.models import NeedPledge
     NeedPledge.objects.filter(pledger_account=account).update(note="")
+    # PR-6 (owner, 2026-10-27) · a shelter's profile names and reaches people — a contact
+    # person, a vet, whoever the drop-off note says to ask for. Those go. The organisation's
+    # own identity (name, type, tier, registration) stays: donors' records name who they gave
+    # to by it (`community.reads.my_pledge_rows`).
+    from shelter.models import ShelterProfile
+    ShelterProfile.objects.filter(account=account).update(**{f: "" for f in SHELTER_PERSONAL_FIELDS})
 
     return account
 

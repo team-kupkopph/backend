@@ -492,3 +492,67 @@ def test_a_raw_insert_omitting_the_new_columns_succeeds():
     # the profile table has other required columns the old release always supplied; the new
     # one must not add to that list.
     assert "donation_instructions" not in required
+
+
+# --- a deleted shelter in its donors' records (PR-6) -------------------------------------------
+
+def _anonymised(account):
+    from accounts.purge import anonymize_account
+    return anonymize_account(account)
+
+
+@pytest.mark.django_db
+def test_my_pledges_name_a_deleted_shelter_by_its_organisation(client):
+    """PR-6 · the purge renames the account "Deleted user", which is what My donations showed.
+    The organisation's name survives the purge, so a donor still sees who they gave to."""
+    sh = _shelter(display_name="Gone Rescue")
+    ShelterProfile.objects.create(account=sh, org_name="Gone Rescue Inc.", org_type="shelter")
+    giver = AccountFactory()
+    _pledge(_need(sh), pledger=giver, quantity=2)
+    _anonymised(sh)
+
+    row = client.get("/api/v1/me/pledges", **_hdr(giver)).json()["results"][0]
+    assert row["need"]["shelter_name"] == "Gone Rescue Inc."
+
+
+@pytest.mark.django_db
+def test_my_pledges_keep_a_live_shelters_display_name(client):
+    sh = _shelter(display_name="Paws Manila")
+    ShelterProfile.objects.create(account=sh, org_name="PAWS Manila Inc.", org_type="shelter")
+    giver = AccountFactory()
+    _pledge(_need(sh), pledger=giver, quantity=2)
+
+    row = client.get("/api/v1/me/pledges", **_hdr(giver)).json()["results"][0]
+    assert row["need"]["shelter_name"] == "Paws Manila"
+
+
+@pytest.mark.django_db
+def test_a_deleted_shelter_without_a_profile_reads_deleted_user(client):
+    sh = _shelter(display_name="No Profile Rescue")
+    giver = AccountFactory()
+    _pledge(_need(sh), pledger=giver, quantity=1)
+    _anonymised(sh)
+
+    row = client.get("/api/v1/me/pledges", **_hdr(giver)).json()["results"][0]
+    assert row["need"]["shelter_name"] == "Deleted user"
+
+
+@pytest.mark.django_db
+def test_naming_deleted_shelters_costs_no_query_per_row(client):
+    giver = AccountFactory()
+
+    def pledge_to_a_deleted_shelter():
+        sh = _shelter()
+        ShelterProfile.objects.create(account=sh, org_name="Gone", org_type="shelter")
+        _pledge(_need(sh), pledger=giver)
+        _anonymised(sh)
+
+    pledge_to_a_deleted_shelter()
+    with CaptureQueriesContext(connection) as one:
+        client.get("/api/v1/me/pledges", **_hdr(giver))
+    for _ in range(4):
+        pledge_to_a_deleted_shelter()
+    with CaptureQueriesContext(connection) as five:
+        res = client.get("/api/v1/me/pledges", **_hdr(giver))
+    assert [r["need"]["shelter_name"] for r in res.json()["results"]] == ["Gone"] * 5
+    assert len(five) == len(one)

@@ -136,8 +136,22 @@ def my_pledge_rows(qs):
                       "category": p.need.category, "status": p.need.status,
                       "unit": p.need.unit,
                       "shelter_account_id": str(p.need.shelter_account_id),
-                      "shelter_name": p.need.shelter_account.display_name}}
+                      "shelter_name": donor_facing_shelter_name(p.need.shelter_account)}}
             for p in qs]
+
+
+def donor_facing_shelter_name(shelter):
+    """The account's name — except once a deleted shelter has been purged, when that name is
+    "Deleted user" and the organisation's (which the purge keeps, PR-6) says who the donor gave to.
+    A live shelter reads exactly as before."""
+    if shelter.anonymized_at is not None:
+        try:
+            org_name = shelter.shelter_profile.org_name
+        except ShelterProfile.DoesNotExist:
+            org_name = ""
+        if org_name:
+            return org_name
+    return shelter.display_name
 
 
 def ways_to_help_rows(viewer_city, window):
