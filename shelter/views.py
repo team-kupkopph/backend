@@ -50,14 +50,37 @@ class ShelterProfileView(APIView):
                           "city": addr["city"], "province": addr.get("province", ""), "geom": None})
         return Response({"shelter_profile_id": str(profile.shelter_profile_id)}, status=201)
 
+    def get(self, request):
+        """T8 · the shelter's own full profile. Before this the Donation instructions screen read
+        its own text back through the PUBLIC needs route, and nothing could show the rest."""
+        profile = ShelterProfile.objects.filter(account=request.user).first()
+        if profile is None:
+            return Response({"error": {"code": "no_profile",
+                                       "message": "Create the shelter profile first"}}, status=404)
+        return Response(_profile_repr(profile))
+
     def patch(self, request):
         profile = ShelterProfile.objects.filter(account=request.user).first()
         if profile is None:
             return Response({"error": {"code": "no_profile",
                                        "message": "Create the shelter profile first"}}, status=409)
-        s = ShelterProfilePatchSerializer(data=request.data, partial=True)
+        s = ShelterProfilePatchSerializer(data=request.data, partial=True,
+                                          context={"request": request})
         s.is_valid(raise_exception=True)
-        for key, value in s.validated_data.items():
+        data = dict(s.validated_data)
+        # AS7 · the org name is what the reviewers verified. Once ANY shelter_org verification is
+        # approved it can no longer change here — otherwise a verified shelter could become a
+        # different organisation under the same badge. Re-sending the current name is not a rename
+        # (the edit screen submits the whole form).
+        if "org_name" in data and data["org_name"] != profile.org_name:
+            if request.user.verifications.filter(type="shelter_org", status="approved").exists():
+                return Response({"error": {
+                    "code": "org_name_locked", "field": "org_name",
+                    "message": "Your organization's name is what we verified. "
+                               "Contact us to change it."}}, status=409)
+        if "logo_file_url" in data:
+            profile.logo_url = data.pop("logo_file_url")
+        for key, value in data.items():
             setattr(profile, key, value)
         profile.save()
         return Response(_profile_repr(profile))
@@ -207,11 +230,29 @@ class ShelterDashboardView(APIView):
                        "live_listings": request.user.listings.filter(
                            status=ListingStatus.AVAILABLE, hidden_at__isnull=True).count(),
                        "adopted": request.user.listings.filter(status=ListingStatus.ADOPTED).count(),
-                       "donations": 0},
+                       # T8 · both were hard-coded 0 on the shelter's own profile (X13). Derived,
+                       # like everything here (§3.5): people who took part, and pledges that arrived.
+                       "volunteers": _volunteers_count(request.user),
+                       "donations": _donations_count(request.user)},
             "gates": {"can_publish": approved, "donations_enabled": donations_enabled},
             "volunteer": volunteer,
             "wishlist": _wishlist_summary(request.user),
         })
+
+
+def _volunteers_count(shelter):
+    """Distinct people who took part in this shelter's shifts (approved or completed) — a person
+    who came to five shifts is one volunteer. Requested, declined, cancelled and no-show don't count."""
+    return (VolunteerSignup.objects.filter(shift__shelter_account=shelter,
+                                           status__in=["approved", "completed"])
+            .values("volunteer_account_id").distinct().count())
+
+
+def _donations_count(shelter):
+    """Pledges that actually ARRIVED (the shelter confirmed receipt), not pledges still waiting."""
+    from community.models import NeedPledge, PledgeStatus
+    return NeedPledge.objects.filter(need__shelter_account=shelter,
+                                     status=PledgeStatus.DELIVERED).count()
 
 
 def _wishlist_summary(shelter):
@@ -350,6 +391,11 @@ class ShelterDonationQrPublicView(APIView):
 def _profile_repr(p):
     return {"shelter_profile_id": str(p.shelter_profile_id), "org_name": p.org_name,
             "org_type": p.org_type, "tier": p.tier,
+            "description": p.description or None, "logo_url": p.logo_url or None,
+            "registration_type": p.registration_type,
+            "registration_number": p.registration_number or None,
+            "official_email": p.official_email or None,
+            "operating_hours": p.operating_hours or None,
             "contact_person_name": p.contact_person_name or None,
             "contact_person_role": p.contact_person_role or None,
             "official_phone": p.official_phone or None, "website_url": p.website_url or None,

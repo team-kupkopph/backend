@@ -22,6 +22,8 @@ PURPOSES = {
     "stray_photo": (PUBLIC, IMAGE_CONTENT_TYPES, MAX_IMAGE_BYTES),
     "rescue_outcome_photo": (PUBLIC, IMAGE_CONTENT_TYPES, MAX_IMAGE_BYTES),
     "donation_qr": (PUBLIC, IMAGE_CONTENT_TYPES, MAX_IMAGE_BYTES),
+    # T8 · a shelter's logo, shown to donors on its public wishlist, so public like every photo in a feed.
+    "shelter_logo": (PUBLIC, IMAGE_CONTENT_TYPES, MAX_IMAGE_BYTES),
     # US-E5 · added Sprint 7. StoryComposeScreen has presigned with this purpose since
     # Sprint 6 and got 422 purpose_unknown every time — and a story requires at least one
     # photo, so posting a story could not succeed at all. Public, like every other photo

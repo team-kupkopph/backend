@@ -59,6 +59,8 @@ class ShelterProfile(models.Model):
     website_url = models.TextField(blank=True)
     vet_name = models.CharField(max_length=120, blank=True)         # tier 2 only
     vet_prc_number = models.CharField(max_length=30, blank=True)    # tier 2; format-checked here, register-checked by a reviewer
+    # T8 · "Mon-Sat 9am-5pm": shown to donors with the shelter's name, description and logo. Free text, not a schedule.
+    operating_hours = models.CharField(max_length=120, blank=True, default="")
     is_escalation_partner = models.BooleanField(default=False)
     donation_instructions = models.CharField(max_length=500, blank=True, default="",
                                             db_default="")  # drop-off how-to shown on the wishlist

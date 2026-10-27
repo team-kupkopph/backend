@@ -43,7 +43,8 @@ def test_list_shape_is_a_superset(client):
     res = _list(client, sh)
     assert res.status_code == 200
     body = res.json()
-    assert set(body) == {"results", "next", "donation_instructions"}
+    # T8 added `shelter` (who the shelter is: name, description, logo, hours). Additive: every old key stays.
+    assert set(body) == {"results", "next", "donation_instructions", "shelter"}
     assert body["next"] is None and body["donation_instructions"] == ""
     row = body["results"][0]
     assert OLD_KEYS | NEW_KEYS <= set(row)
