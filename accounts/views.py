@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import IntegrityError, transaction
@@ -9,13 +11,14 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from accounts.models import Account, AccountStatus
+from accounts.models import Account, AccountSettings, AccountStatus
 from accounts.serializers import (
     AccountTokenRefreshSerializer,
     EmailSerializer,
     EmailVerifySerializer,
     MeSettingsSerializer,
     MeUpdateSerializer,
+    PasswordChangeSerializer,
     SignupSerializer,
     account_repr,
     me_repr,
@@ -31,6 +34,7 @@ from common.throttles import (
     OtpResendHourThrottle,
     OtpResendIdentifierThrottle,
     OtpResendMinuteThrottle,
+    PasswordChangeThrottle,
     PasswordCodeCheckIdentifierThrottle,
     PasswordCodeCheckIpThrottle,
     PasswordForgotIdentifierThrottle,
@@ -375,8 +379,8 @@ class MeView(APIView):
 
 class MeSettingsView(APIView):
     permission_classes = [IsAuthenticated]
-    FIELDS = ["marketing_emails", "approximate_location", "masked_contact", "push_enabled",
-              "analytics_consent"]
+    # AS8 · approximate_location and masked_contact are not served: they change nothing.
+    FIELDS = ["marketing_emails", "push_enabled", "analytics_consent"]
 
     def _repr(self, s):
         body = {f: getattr(s, f) for f in self.FIELDS}
@@ -387,10 +391,10 @@ class MeSettingsView(APIView):
         return body
 
     def get(self, request):
-        return Response(self._repr(request.user.settings))
+        return Response(self._repr(AccountSettings.for_account(request.user)))
 
     def patch(self, request):
-        s = request.user.settings
+        s = AccountSettings.for_account(request.user)      # X12 · tolerate a missing row
         serializer = MeSettingsSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -403,6 +407,45 @@ class MeSettingsView(APIView):
             setattr(s, key, value)
         s.save()
         return Response(self._repr(s))
+
+
+class MePasswordView(APIView):
+    """T7 (AS6) · POST /me/password {current_password, new_password} — change the password while
+    signed in. See `accounts/tests/test_me_password.py` for why each rule is here.
+
+    Every OTHER session is revoked (a password change is what you do when you fear someone else
+    has the account) but the response carries fresh tokens for THIS device, so the caller is not
+    signed out of the phone they just did it on."""
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [PasswordChangeThrottle]
+
+    def post(self, request):
+        acc = request.user
+        s = PasswordChangeSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        if not acc.password_hash:
+            # Signed up with Google/Apple: there is no password to "change", and "incorrect"
+            # would send them in circles. Forgot password sets one.
+            return Response({"error": {"code": "no_password",
+                                       "message": "This account signs in with Google or Apple. "
+                                                  "Use Forgot password to set a password."}},
+                            status=409)
+        if not acc.check_password(s.validated_data["current_password"]):
+            return Response({"error": {"code": "invalid_password",
+                                       "message": "That isn't your current password.",
+                                       "field": "current_password"}}, status=400)
+        if acc.check_password(s.validated_data["new_password"]):
+            return Response({"error": {"code": "password_unchanged",
+                                       "message": "Choose a password you haven't used here"}},
+                            status=400)
+        acc.set_password(s.validated_data["new_password"])
+        # Revoke every session issued BEFORE now. The check is second-granular and rejects
+        # `iat <= revoked`, so stamping `now` itself would reject the tokens minted a moment later
+        # for this device; one second earlier keeps them valid. The cost is that a session another
+        # device started in this very second survives — immaterial next to signing the caller out.
+        acc.sessions_revoked_at = timezone.now() - timedelta(seconds=1)
+        acc.save(update_fields=["password_hash", "sessions_revoked_at", "updated_at"])
+        return Response(issue_session(acc))
 
 
 class MeExportView(APIView):

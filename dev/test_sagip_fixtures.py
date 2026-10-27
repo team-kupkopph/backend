@@ -109,7 +109,9 @@ def test_a_rerun_resets_standing_without_duplicating_rows(settings):
     rep.status = "suspended"
     rep.save(update_fields=["status"])
     ShelterProfile.objects.filter(account=_acct("SHL-PT")).update(is_escalation_partner=True)
-    Address.objects.create(account=rep, city="Cebu City", is_primary=True)
+    # Drift the primary city. (This used to add a SECOND primary address, a state the database now
+    # refuses: uq_address_one_primary, T7 / X15.)
+    Address.objects.filter(account=rep, is_primary=True).update(city="Cebu City")
     from verifications.models import VerificationRequest
     VerificationRequest.objects.create(account=_acct("SHL-U"), type="shelter_org",
                                        status="approved")

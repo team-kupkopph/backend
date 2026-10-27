@@ -1,11 +1,13 @@
 import re
+from datetime import timedelta
 
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken as SimpleRefreshToken
 
-from accounts.models import Account
+from accounts.models import Account, AccountSettings
 from accounts.sessions import can_hold_session
 
 # Canonical signup/reset password rule (dev/onboarding-validation.md §signup): min 8 chars,
@@ -55,7 +57,7 @@ def account_repr(account):
 def me_repr(account):
     rel = getattr(account, "capabilities", None)
     caps = [{"capability": c.capability, "status": c.status} for c in rel.all()] if rel else []
-    s = account.settings
+    s = AccountSettings.for_account(account)        # X12 · never a 500 for a missing row
     # Local import: shelter depends on accounts, so importing it at module load would
     # risk an app-registry cycle. `shelter` is null for a personal account (the client
     # picks the owner shell); a shelter account carries its tier + derived status.
@@ -73,9 +75,23 @@ def me_repr(account):
     from listings.visibility import account_is_verified_rescuer
     return {**account_repr(account), "capabilities": caps, "shelter": shelter,
             "is_verified_rescuer": account_is_verified_rescuer(account),
-            "settings": {"marketing_emails": s.marketing_emails,
-                         "approximate_location": s.approximate_location,
-                         "masked_contact": s.masked_contact, "push_enabled": s.push_enabled}}
+            # AS8 · only the switches that DO something. approximate_location (location is
+            # city-only server-side regardless) and masked_contact (Phase 2) are columns still,
+            # but a writable boolean that changes nothing is a contract that lies to the client.
+            "settings": {"marketing_emails": s.marketing_emails, "push_enabled": s.push_enabled,
+                         "analytics_consent": s.analytics_consent},
+            # X11 · the city had no read path, so a new phone or a reinstall showed "Set your
+            # city" while the server had it. City + barangay only (§12.5): never a street
+            # address or coordinates, even when a shelter's address carries them.
+            "location": _location_repr(account)}
+
+
+def _location_repr(account):
+    from accounts.models import Address
+    address = Address.objects.filter(account=account, is_primary=True).first()
+    if address is None:
+        return None
+    return {"city": address.city, "barangay": address.barangay or None}
 
 
 class MeUpdateSerializer(serializers.Serializer):
@@ -84,14 +100,20 @@ class MeUpdateSerializer(serializers.Serializer):
 
 
 class MeSettingsSerializer(serializers.Serializer):
+    # AS8 · `approximate_location` and `masked_contact` are no longer declared: an older app build
+    # that still sends them gets a 200 and they are simply not applied (DRF drops unknown keys).
     marketing_emails = serializers.BooleanField(required=False)
-    approximate_location = serializers.BooleanField(required=False)
-    masked_contact = serializers.BooleanField(required=False)
     push_enabled = serializers.BooleanField(required=False)
     # D-S7-3 · analytics_consent_at is NOT accepted from the client: the timestamp is the
     # controller's record of when consent was given, so the server stamps it. A client that
     # could set it could backdate its own consent.
     analytics_consent = serializers.BooleanField(required=False)
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    """`new_password` obeys the same one rule as signup and reset (validate_password_strength)."""
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, validators=[validate_password_strength])
 
 
 class EmailVerifySerializer(serializers.Serializer):
@@ -128,4 +150,18 @@ class AccountTokenRefreshSerializer(TokenRefreshSerializer):
         if (account.sessions_revoked_at
                 and int(token["iat"]) <= int(account.sessions_revoked_at.timestamp())):
             raise InvalidToken("session_revoked")
+        _stamp_last_active(account)
         return super().validate(attrs)
+
+
+#: How often `last_active_at` may be written. §12.6's inactive-account policy needs "when did this
+#: person last use the app" to the day, not the second; a write per refresh would be a write per
+#: 15 minutes of use for no extra information.
+ACTIVITY_STAMP_EVERY = timedelta(hours=24)
+
+
+def _stamp_last_active(account):
+    now = timezone.now()
+    if account.last_active_at is None or now - account.last_active_at >= ACTIVITY_STAMP_EVERY:
+        # `.update`, not `.save`: no `updated_at` bump, no signals, no lost-update on other fields.
+        Account.objects.filter(pk=account.pk).update(last_active_at=now)

@@ -190,6 +190,7 @@ REST_FRAMEWORK = {
         "report_create": "20/day", "offer_create": "20/hour",
         "moderation_flag_create": "20/day",
         "export_request": "3/day",
+        "password_change": "10/hour",
         # US-K2 · ceilings for the Sprint 4-6 write paths. Sized so no plausible
         # human hits them: a shelter posting a dozen needs or a donor pledging to
         # several at once stays well clear, while a script does not.
