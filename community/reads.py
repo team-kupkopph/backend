@@ -8,7 +8,20 @@ and page the lists. Views stay thin: they pick the queryset and call one of thes
 `quantity_pledged` / `pledge_count` count only `pledged` pledges (a promise still open):
 delivered ones are already in `quantity_received`, cancelled ones are nothing.
 """
-from django.db.models import BooleanField, Case, Count, Exists, F, OuterRef, Q, Subquery, Sum, Value, When, Window
+from django.db.models import (
+    BooleanField,
+    Case,
+    Count,
+    Exists,
+    F,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+    When,
+    Window,
+)
 from django.db.models.functions import Coalesce, RowNumber
 
 from accounts.models import Account, Address
