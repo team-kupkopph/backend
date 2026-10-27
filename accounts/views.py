@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -458,21 +458,23 @@ class MePhoneView(APIView):
             return Response({"error": {"code": "invalid", "message": INVALID_PH_MOBILE_MESSAGE,
                                        "field": "phone"}}, status=400)
         acc = request.user
-        # Store the candidate now (phone is nullable with a separate phone_verified_at);
-        # verification only sets phone_verified_at. A number already verified/held by
-        # another account collides on the UNIQUE column -> generic phone_taken.
-        if Account.objects.filter(phone=phone).exclude(pk=acc.pk).exists():
+        # T6 · the candidate is NOT written to the account. It goes with the code, and only a
+        # successful verify writes it. Until then the account keeps its current (verified)
+        # number: abandoning a change loses nothing, and an unverified number never sits in the
+        # UNIQUE column where it could block the person who actually owns it.
+        #
+        # Only a number somebody has VERIFIED is "taken". A legacy unverified one is a squatter,
+        # evicted when the real owner proves the number (`MePhoneVerifyView`).
+        if _phone_is_verified_elsewhere(phone, acc):
             return Response({"error": {"code": "phone_taken",
                                        "message": "That number can't be used"}}, status=409)
-        acc.phone = phone
-        acc.phone_verified_at = None
-        try:
-            acc.save(update_fields=["phone", "phone_verified_at"])
-        except IntegrityError:
-            return Response({"error": {"code": "phone_taken",
-                                       "message": "That number can't be used"}}, status=409)
-        issue_code(acc, channel="sms", purpose="phone")
+        issue_code(acc, channel="sms", purpose="phone", target=phone)
         return Response({}, status=202)
+
+
+def _phone_is_verified_elsewhere(phone, account):
+    return (Account.objects.filter(phone=phone, phone_verified_at__isnull=False)
+            .exclude(pk=account.pk).exists())
 
 
 class MePhoneVerifyView(APIView):
@@ -481,11 +483,28 @@ class MePhoneVerifyView(APIView):
     def post(self, request):
         acc = request.user
         try:
-            verify_code(acc, purpose="phone", code=request.data.get("code", ""))
+            row = verify_code(acc, purpose="phone", code=request.data.get("code", ""))
         except (CodeInvalid, CodeExpired, CodeLocked) as exc:
             return _otp_error_response(exc)
-        acc.phone_verified_at = timezone.now()
-        acc.save(update_fields=["phone_verified_at"])
+        # A code issued before `target` existed carries none: the number was already on the
+        # account then, so it verifies that one instead of stranding the person mid-flow.
+        phone = row.target or acc.phone
+        taken = Response({"error": {"code": "phone_taken",
+                                    "message": "That number can't be used"}}, status=409)
+        # The code is spent either way: a lost race must start over, not retry the same number.
+        if not phone or _phone_is_verified_elsewhere(phone, acc):
+            return taken
+        try:
+            with transaction.atomic():
+                # Never proven by anyone, so evicting loses nothing: they would have to verify
+                # it themselves before it could mean anything.
+                (Account.objects.filter(phone=phone, phone_verified_at__isnull=True)
+                 .exclude(pk=acc.pk).update(phone=None))
+                acc.phone = phone
+                acc.phone_verified_at = timezone.now()
+                acc.save(update_fields=["phone", "phone_verified_at"])
+        except IntegrityError:
+            return taken
         return Response({"phone_verified_at": acc.phone_verified_at})
 
 

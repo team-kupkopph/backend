@@ -26,17 +26,20 @@ def _hash(code):
     return hashlib.sha256(code.encode()).hexdigest()
 
 
-def issue_code(account, *, channel, purpose):
+def issue_code(account, *, channel, purpose, target=""):
+    """Issue a code and send it. `target` is the value being proven when it is not yet the
+    account's own (a candidate phone number): the code is SENT there and stored with it, so the
+    account itself is untouched until `verify_code` succeeds."""
     code = f"{secrets.randbelow(1_000_000):06d}"
     ttl = timezone.timedelta(minutes=settings.OTP_TTL_MINUTES)
     VerificationCode.objects.filter(account=account, purpose=purpose,
                                     consumed_at__isnull=True).delete()
     VerificationCode.objects.create(
-        account=account, channel=channel, purpose=purpose, code_hash=_hash(code),
+        account=account, channel=channel, purpose=purpose, code_hash=_hash(code), target=target,
         max_attempts=settings.OTP_MAX_ATTEMPTS, expires_at=timezone.now() + ttl,
     )
-    get_sender().send(channel=channel, to=account.email if channel == "email" else account.phone, purpose=purpose,
-                      code=code)
+    to = target or (account.email if channel == "email" else account.phone)
+    get_sender().send(channel=channel, to=to, purpose=purpose, code=code)
     return code
 
 
@@ -83,3 +86,4 @@ def verify_code(account, *, purpose, code):
     row = _validate(account, purpose=purpose, code=code)
     row.consumed_at = timezone.now()
     row.save(update_fields=["consumed_at"])
+    return row          # T6 · the caller reads `row.target` to learn what was just proven
