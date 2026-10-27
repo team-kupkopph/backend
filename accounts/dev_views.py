@@ -19,7 +19,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from accounts.models import Account
 from accounts.serializers import account_repr
-from accounts.tokens import tokens_for
+from accounts.sessions import SessionRefused, issue_session
 
 
 @csrf_exempt
@@ -43,4 +43,10 @@ def dev_seed_tokens(request):
     if account is None:
         return JsonResponse({"detail": "account not found"}, status=404)
 
-    return JsonResponse({**tokens_for(account), "account": account_repr(account)})
+    # X1 · even the DEBUG-only seed route goes through the gate, so a walk fixture that was
+    # suspended or deleted behaves on the simulator the way it would in production.
+    try:
+        tokens = issue_session(account)
+    except SessionRefused:
+        return JsonResponse({"detail": "account cannot sign in"}, status=409)
+    return JsonResponse({**tokens, "account": account_repr(account)})

@@ -78,3 +78,16 @@ def test_debug_on_invalid_json_returns_400_with_detail(client, settings):
 
     assert res.status_code == 400
     assert res.json() == {"detail": "email required"}
+
+
+@pytest.mark.django_db
+def test_debug_on_suspended_account_gets_no_tokens(client, settings):
+    """X1 · the seed route goes through the session gate like every other route."""
+    from accounts.models import AccountStatus
+    settings.DEBUG = True
+    AccountFactory(email="locked@example.com", status=AccountStatus.SUSPENDED)
+
+    res = client.post(URL, {"email": "locked@example.com"}, content_type="application/json")
+
+    assert res.status_code == 409
+    assert "access" not in res.json()

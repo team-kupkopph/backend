@@ -20,7 +20,7 @@ from accounts.serializers import (
     account_repr,
     me_repr,
 )
-from accounts.tokens import tokens_for
+from accounts.sessions import SessionRefused, can_hold_session, issue_session
 from common import otp
 from common.otp import CodeExpired, CodeInvalid, CodeLocked, check_code, issue_code, verify_code
 from common.phone import INVALID_PH_MOBILE_MESSAGE, normalize_ph_mobile
@@ -93,6 +93,15 @@ def _otp_error_response(exc):
                                "details": {"attempts_left": exc.attempts_left}}}, status=400)
 
 
+def _session_refused_response():
+    """X1 · a suspended or deleted account that has PROVEN who it is (a valid code, a verified
+    provider token) and still may not sign in. Only ever sent after that proof, so it tells the
+    caller nothing about an account they don't control. Login does not use it: a password is
+    not proof until it matches, so login keeps its one wrong-password body (§12.1)."""
+    return Response({"error": {"code": "account_unavailable",
+                               "message": "This account can't sign in."}}, status=401)
+
+
 class EmailVerifyView(APIView):
     permission_classes = [AllowAny]
 
@@ -110,10 +119,16 @@ class EmailVerifyView(APIView):
             verify_code(account, purpose="signup", code=s.validated_data["code"])
         except (CodeInvalid, CodeExpired, CodeLocked) as exc:
             return _otp_error_response(exc)
+        # X1 · checked AFTER the code: before it, the refusal would tell a code-less caller
+        # that the address belongs to a suspended account.
+        try:
+            tokens = issue_session(account)
+        except SessionRefused:
+            return _session_refused_response()
         if account.email_verified_at is None:
             account.email_verified_at = timezone.now()
             account.save(update_fields=["email_verified_at"])
-        return Response({**tokens_for(account), "account": account_repr(account)})
+        return Response({**tokens, "account": account_repr(account)})
 
 
 class EmailResendView(APIView):
@@ -157,17 +172,18 @@ class LoginView(APIView):
         # US-N1 · a deleted or suspended account is refused here, in the SAME branch and
         # with the SAME body as a wrong password. A distinct code or message would turn
         # deletion/suspension into an enumeration oracle — §12.1's whole point is that
-        # login reveals nothing.
+        # login reveals nothing. The password is checked FIRST so a refused account pays the
+        # same argon2 cost as a wrong password (F11) — checking status first answered faster.
         if (account is None
-                or account.status in (AccountStatus.DELETED, AccountStatus.SUSPENDED)
-                or not account.check_password(password)):
+                or not account.check_password(password)
+                or not can_hold_session(account)):
             return Response({"error": {"code": "invalid_credentials",
                                        "message": "Email or password is incorrect"}}, status=401)
         if account.email_verified_at is None:
             issue_code(account, channel="email", purpose="signup")
             return Response({"error": {"code": "email_unverified",
                                        "message": "Verify your email"}}, status=403)
-        return Response({**tokens_for(account), "account": account_repr(account)})
+        return Response({**issue_session(account), "account": account_repr(account)})
 
 
 class LogoutView(APIView):
@@ -469,6 +485,11 @@ class SocialAuthView(APIView):
             account = identity.account
         else:
             account = Account.objects.filter(email=email).first()
+        # X1 · refused BEFORE any link is made: a refused sign-in must not attach a provider to
+        # a locked account. The provider has already proven the caller owns this identity.
+        if account is not None and not can_hold_session(account):
+            return _session_refused_response()
+        if not identity:
             if account is None:
                 at = request.data.get("account_type", "personal")
                 if at not in ("personal", "shelter"):
@@ -485,5 +506,5 @@ class SocialAuthView(APIView):
                 is_new = True
             AccountIdentity.objects.create(account=account, provider=provider,
                                            provider_user_id=sub, email=email)
-        return Response({**tokens_for(account), "is_new": is_new,
+        return Response({**issue_session(account), "is_new": is_new,
                          "account": account_repr(account)})
