@@ -174,7 +174,9 @@ class NeedDetailView(APIView):
 
 class NeedCompleteView(APIView):
     """POST Mark complete: `fulfilled` if the target was met, else `closed`, cancelling the
-    still-open pledges (each donor is told). Idempotent: a need that is not open is left as is."""
+    still-open pledges (each donor is told). On a fulfilled need it only settles the pledges still
+    waiting, and the need stays fulfilled. Idempotent: a repeat call, or a closed need, changes
+    nothing."""
     permission_classes = [IsShelter]
 
     def post(self, request, need_id):

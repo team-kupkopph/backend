@@ -210,12 +210,14 @@ def complete_need(need_id):
     (`cancel_reason="need_closed"`). Delivered and already-cancelled pledges are facts and stay.
 
     Returns `(need, cancelled_pledges)` so the view can tell each donor AFTER this transaction
-    commits. On a need that is not `open` (already closed or fulfilled) it changes nothing and
-    returns `(need, [])` — which is also what makes a repeat call, or a double tap, silent.
-    The need lock is taken first, so a donor's cancel or a shelter's confirm racing this one
-    serialize: each pledge ends exactly one way."""
+    commits. On a `fulfilled` need it settles the pledges still waiting (a fulfilled need takes
+    late deliveries, R1, so they could otherwise wait "to confirm" for ever) and leaves the need
+    fulfilled, `fulfilled_at` as it was. On a `closed` need it changes nothing and returns
+    `(need, [])`. A repeat call finds nothing left `pledged`, which is what makes it, or a double
+    tap, silent. The need lock is taken first, so a donor's cancel or a shelter's confirm racing
+    this one serialize: each pledge ends exactly one way."""
     need = _lock_need(need_id)
-    if need.status != NeedStatus.OPEN:
+    if need.status == NeedStatus.CLOSED:
         return need, []
     now = timezone.now()
     # `of=("self",)`: without it Postgres also row-locks the joined `account` rows, a third
@@ -231,6 +233,8 @@ def complete_need(need_id):
             p.status = PledgeStatus.CANCELLED
             p.cancel_reason = CancelReason.NEED_CLOSED
             p.decided_at = now
+    if need.status == NeedStatus.FULFILLED:
+        return need, cancelled
     if need.quantity_received >= need.quantity_needed:
         need.status = NeedStatus.FULFILLED
         need.fulfilled_at = now
@@ -239,3 +243,14 @@ def complete_need(need_id):
         need.status = NeedStatus.CLOSED
         need.save(update_fields=["status"])
     return need, cancelled
+
+
+def settle_stranded_pledges(pledge_model, now):
+    """Backlog · before the refactor closing a need did not cascade, so a `closed` need could keep
+    `pledged` pledges: the donor's card still read "Pledged" with a live Cancel, and the shelter
+    could never receive them. Settle them the way a close settles a pledge today (`cancelled`,
+    `cancel_reason="need_closed"`), without a notification — those needs closed long ago. Pledges
+    on open or fulfilled needs are left alone (a fulfilled need still takes late deliveries, R1).
+    Takes the model so the data migration can pass its historical one; returns how many changed."""
+    return (pledge_model.objects.filter(status="pledged", need__status="closed")
+            .update(status="cancelled", cancel_reason="need_closed", decided_at=now))
