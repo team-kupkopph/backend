@@ -84,7 +84,8 @@ class NeedPledge(models.Model):
                               default=PledgeStatus.PLEDGED)
     decided_at = models.DateTimeField(null=True, blank=True)
     cancel_reason = models.CharField(max_length=12, null=True, blank=True,
-                                     choices=[("donor", "donor"), ("need_closed", "need_closed")])
+                                     choices=[("donor", "donor"), ("need_closed", "need_closed"),
+                                              ("donor_left", "donor_left")])
     note = models.CharField(max_length=280, blank=True, default="", db_default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -103,7 +104,7 @@ class NeedPledge(models.Model):
                 name="need_pledge_received_min1"),
             models.CheckConstraint(
                 condition=models.Q(cancel_reason__isnull=True)
-                | models.Q(cancel_reason__in=["donor", "need_closed"]),
+                | models.Q(cancel_reason__in=["donor", "need_closed", "donor_left"]),
                 name="need_pledge_cancel_reason_values"),
         ]
 

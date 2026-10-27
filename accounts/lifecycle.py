@@ -141,7 +141,40 @@ def soft_delete_account(account):
     from devices.models import DeviceToken
     DeviceToken.objects.filter(account=account).delete()
 
+    # T4 · leaving must not strand the people on the other side of a pledge. Same transaction:
+    # if settling fails the account is NOT deleted, rather than deleted with donors left waiting.
+    _settle_commitments(account)
+
     return account
+
+
+def _settle_commitments(account):
+    """T4 · the other half of closing a need, from the other end. A leaving shelter's needs close
+    and its donors are told (AS3); a leaving donor's waiting pledges are cancelled and their
+    shelters told (AS4). Restoring (AS1) deliberately does NOT undo any of it: the people it
+    reached were told it had ended."""
+    from community import needs
+    from notifications.service import notify
+    from shelter.qr_rules import withdraw_for_departure
+
+    for need, cancelled in needs.settle_departing_shelter(account):
+        for pledge in cancelled:
+            if pledge.pledger_account_id == account.pk:
+                continue
+            notify(pledge.pledger_account, "need_closed", title="Need closed",
+                   body=(f"{account.display_name} left Kupkop — your pledge to “{need.title}” "
+                         "was cancelled. Salamat for offering."),
+                   data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
+    if account.account_type == "shelter":
+        withdraw_for_departure(account)
+
+    for pledge in needs.cancel_departing_donor_pledges(account):
+        need = pledge.need
+        # No name: this notification outlives the donor's erasure, and a body that says who
+        # they were would be the one place it survives. The shelter knows WHICH need.
+        notify(need.shelter_account, "pledge_cancelled", title="Pledge cancelled",
+               body=f"A donor left Kupkop — their pledge to “{need.title}” was cancelled.",
+               data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
 
 
 # ---------------------------------------------------------------- AS1 · restore
