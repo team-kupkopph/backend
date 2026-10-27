@@ -94,7 +94,9 @@ def test_get_settings_returns_defaults(client):
     assert res.status_code == 200
     body = res.json()
     assert body["marketing_emails"] is False
-    assert body["approximate_location"] is True
+    assert body["push_enabled"] is True
+    # AS8 · the two do-nothing booleans are no longer served (test_me_read_model.py).
+    assert "approximate_location" not in body
 
 
 @pytest.mark.django_db
@@ -110,8 +112,9 @@ def test_patch_settings_parses_booleans(client):
 
     # Stringly-typed client sending "false" must not be mis-parsed as truthy
     # (bool("false") is True; a real boolean parser must produce False here).
-    res = client.patch("/api/v1/me/settings", {"approximate_location": "false"},
+    # (This used to use `approximate_location`; AS8 removed it, the property is unchanged.)
+    res = client.patch("/api/v1/me/settings", {"marketing_emails": "false"},
                        content_type="application/json", **_auth(client, acc))
     assert res.status_code == 200
     res = client.get("/api/v1/me/settings", **_auth(client, acc))
-    assert res.json()["approximate_location"] is False
+    assert res.json()["marketing_emails"] is False

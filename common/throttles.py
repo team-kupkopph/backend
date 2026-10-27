@@ -119,6 +119,12 @@ class ExportRequestThrottle(AccountScopedThrottle):
     scope = "export_request"
 
 
+class PasswordChangeThrottle(AccountScopedThrottle):
+    """T7 · POST /me/password takes the CURRENT password, so without a limit it is a login oracle
+    for anyone holding a stolen access token. Per account, counting every attempt."""
+    scope = "password_change"
+
+
 # --- US-K2 · the write paths Sprints 4-6 added without a scope (§12.4) ----------------
 class MediaPresignThrottle(AccountScopedThrottle):
     """Presign hands out upload credentials. Unthrottled it is free storage for anyone with

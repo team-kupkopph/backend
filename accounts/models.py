@@ -165,6 +165,17 @@ class AccountSettings(models.Model):
     class Meta:
         db_table = "account_settings"
 
+    @classmethod
+    def for_account(cls, account):
+        """The account's settings row, created with the defaults if it is missing.
+
+        `create_account` makes the row, but 29 of 44 dev accounts were seeded by scripts that
+        bypassed it, and `GET /me` 500ed for every one (X12). A read must not be where a missing
+        row becomes a server error — and creating the defaults is exactly what the row would have
+        held had it been made at signup."""
+        row, _ = cls.objects.get_or_create(account=account)
+        return row
+
 
 class AuthProvider(models.TextChoices):
     GOOGLE = "google"
@@ -203,3 +214,10 @@ class Address(models.Model):
 
     class Meta:
         db_table = "address"
+        constraints = [
+            # X15 · at most ONE primary address per account. Without it two racing
+            # `PUT /me/location` each created a primary row and every later call raised
+            # MultipleObjectsReturned. With it the loser's create fails and `get_or_create` re-reads.
+            models.UniqueConstraint(fields=["account"], condition=models.Q(is_primary=True),
+                                    name="uq_address_one_primary"),
+        ]
