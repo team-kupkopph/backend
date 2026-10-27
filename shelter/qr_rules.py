@@ -91,6 +91,20 @@ def discard_image(qr):
     transaction.on_commit(lambda: delete_object(url, PUBLIC))
 
 
+def withdraw_for_departure(account):
+    """T4 · a shelter is leaving Kupkop: its live and pending QRs go dark in the delete's own
+    transaction. A refused or already-withdrawn row is the reviewer's audit record and stays as
+    it is. The image is discarded like any withdrawn QR's (AT21); the purge blanks the row's
+    payee name and image reference after the grace window."""
+    from shelter.models import DonationQr, QrStatus
+    for qr in DonationQr.objects.select_for_update().filter(
+            account=account, status__in=[QrStatus.LIVE, QrStatus.PENDING]):
+        qr.status = QrStatus.WITHDRAWN
+        qr.decided_at = timezone.now()
+        qr.save()                       # save() keeps the stored `verified` mirror in step
+        discard_image(qr)
+
+
 def swap_in(pending):
     """Make `pending` the live QR and withdraw (and discard the image of) whatever was live for that provider, in the caller's transaction."""
     from shelter.models import DonationQr, QrStatus
