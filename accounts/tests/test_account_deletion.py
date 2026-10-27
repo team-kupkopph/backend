@@ -11,8 +11,10 @@ Two properties matter more than the happy path:
   * **Commitments are other people's plans.** An open rescue claim means an animal is waiting
     on this person; an approved shift means a shelter has rostered them. Deletion must refuse
     and say what to close, the same posture as the binding claim everywhere else in Sagip.
-  * **Deletion must not become an enumeration oracle.** Login on a deleted account returns
-    the same generic 401 as a wrong password (§12.1), never "this account was deleted".
+  * **Deletion must not become an enumeration oracle.** Login on a deleted account with a
+    WRONG password returns the same generic 401 as any other wrong password (§12.1). Only a
+    correct password — proof of ownership — is told the account is deleted, and then to offer
+    the 30-day restore (AS1, `test_restore.py`).
 """
 import pytest
 from django.contrib.gis.geos import Point
@@ -126,8 +128,9 @@ def test_login_on_a_deleted_account_is_generically_refused(client):
     account.save()
     _delete(client, account)
 
+    # AS1 · a WRONG password. (The correct one now gets the restore offer: test_restore.py.)
     res = client.post("/api/v1/auth/login", {"email": "gone@kupkop.ph",
-                                             "password": "correct-horse"},
+                                             "password": "wrong-horse"},
                       content_type="application/json")
 
     assert res.status_code == 401
@@ -146,9 +149,9 @@ def test_signing_up_again_with_a_deleted_address_is_refused_cleanly_not_with_a_5
     address exists (which §12.1 already permits signup to reveal) but that it was deleted,
     for no benefit a returning user can act on during the grace window.
 
-    ⚠️ OPEN PRODUCT EDGE (flagged in the plan, not decided here): after anonymisation the
-    scrubbed address is freed, so the same person CAN sign up again then. Whether they
-    should be able to *restore* during the 30 days is a product decision nobody has made.
+    Decided (AS1, 2026-10-27): during the 30 days the person restores by SIGNING IN, which
+    proves ownership; signup stays `email_taken`. After anonymisation the scrubbed address is
+    freed, so the same person can sign up fresh then.
     """
     account = AccountFactory(email="returning@kupkop.ph")
     _delete(client, account)

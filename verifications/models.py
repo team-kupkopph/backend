@@ -14,6 +14,7 @@ class OtpPurpose(models.TextChoices):
     SIGNUP = "signup"
     PHONE = "phone"
     RESET = "reset"
+    RESTORE = "restore"     # AS1 · a bearer token, not a typed code; see accounts/lifecycle.py
 
 
 class VerificationCode(models.Model):

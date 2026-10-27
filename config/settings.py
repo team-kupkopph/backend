@@ -174,6 +174,7 @@ REST_FRAMEWORK = {
         "otp_resend_min": "1/min", "otp_resend_hour": "5/hour",
         "otp_resend_identifier": "5/hour",
         "login_ip": "20/hour", "login_identifier": "10/hour",
+        "restore_ip": "20/hour",
         # US-B1 · the console's own login pair. Tighter than the app's: the staff surface
         # has a handful of legitimate users, so a generous rate buys an attacker more than
         # it buys the team.
@@ -225,6 +226,10 @@ SIMPLE_JWT = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 STATIC_URL = "static/"
 OTP_TTL_MINUTES = 5
+# AS1 · how long the 'restore your account' offer stays redeemable after the sign-in that
+# earned it. Longer than a code (the person is deciding, not typing), short enough that a
+# token lying in a stale screen or a log is worthless soon after.
+RESTORE_TOKEN_MINUTES = 10
 
 # US-D1 · transactional email provider seam. Real code path, credential-guarded, silent
 # dev fallback — same posture as `SENTRY_DSN` below, `MEDIA_S3_BUCKET_*` above, and the

@@ -48,6 +48,10 @@ class LoginIdentifierThrottle(IdentifierThrottle):
     scope = "login_identifier"
 
 
+class RestoreIpThrottle(IpThrottle):
+    scope = "restore_ip"
+
+
 class SignupIpThrottle(IpThrottle):
     scope = "signup_ip"
 
