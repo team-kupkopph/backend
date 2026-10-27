@@ -40,12 +40,9 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from accounts.models import Account, AccountStatus, Address
+from accounts.data_map import DATA_MAP, SHELTER_PERSONAL_FIELDS, Delete, Keep  # noqa: F401
+from accounts.models import Account, AccountStatus
 from common.storage import PUBLIC, delete_object
-
-#: The `ShelterProfile` fields that are about people rather than the organisation (PR-6).
-SHELTER_PERSONAL_FIELDS = ("contact_person_name", "contact_person_role", "official_email",
-                           "official_phone", "vet_name", "vet_prc_number", "donation_instructions")
 
 
 def anonymized_email(account):
@@ -79,25 +76,61 @@ def anonymize_account(account, now=None):
     account.save(update_fields=["email", "phone", "display_name", "photo_url",
                                 "password_hash", "anonymized_at", "updated_at"])
 
-    # A postal address is PII with no welfare value once the person is gone — unlike a
-    # rescue outcome, nothing downstream is made incomplete by removing it.
-    Address.objects.filter(account=account).delete()
-    # Same reasoning for the Adopt deck's saved / hidden listings: a preference is about the
-    # person, and no animal's record depends on it.
-    from listings.models import ListingPreference
-    ListingPreference.objects.filter(account=account).delete()
-    # A pledge is the shelter's record (quantity, outcome) and stays; the free-text note the
-    # donor typed may hold a phone number or a name, so that goes (R10).
-    from community.models import NeedPledge
-    NeedPledge.objects.filter(pledger_account=account).update(note="")
-    # PR-6 (owner, 2026-10-27) · a shelter's profile names and reaches people — a contact
-    # person, a vet, whoever the drop-off note says to ask for. Those go. The organisation's
-    # own identity (name, type, tier, registration) stays: donors' records name who they gave
-    # to by it (`community.reads.my_pledge_rows`).
-    from shelter.models import ShelterProfile
-    ShelterProfile.objects.filter(account=account).update(**{f: "" for f in SHELTER_PERSONAL_FIELDS})
+    # Everything else that points at this account is decided in one place — accounts/data_map.py,
+    # which a guard test forces to cover every foreign key. The comments on each decision live
+    # there: what is deleted (a preference, a secret, a privately owned pet), what is scrubbed
+    # inside a record that stays (a pledge note, a shelter's contact person, a payee name), and
+    # what is kept and why.
+    _erase_related(account)
 
     return account
+
+
+def _pet_photo_files(account):
+    from listings.models import PetPhoto
+    return list(PetPhoto.objects.filter(pet__owner_account=account).values_list("url", flat=True))
+
+
+def _qr_image_files(account):
+    from shelter.models import DonationQr
+    from shelter.qr_rules import donation_qr_url_error
+    urls = DonationQr.objects.filter(account=account).values_list("qr_image_url", flat=True)
+    # ONLY this account's own `donation_qr` keys, never a legacy foreign URL (the AT21 rule).
+    return [u for u in urls if u and donation_qr_url_error(u, account) is None]
+
+
+#: Stored objects behind rows the map erases. Collected BEFORE the rows go (afterwards nothing
+#: can find them), deleted AFTER, and only if nothing else still points at the same file.
+_FILE_SOURCES = {"listings.Pet": _pet_photo_files, "shelter.DonationQr": _qr_image_files}
+
+
+def _file_is_still_used(url):
+    """A pet's photo is COPIED from the adoption listing's photo (listings/views.py), so the two
+    rows can name one stored file. Deleting it because the adopter left would break a poster's
+    still-public listing."""
+    from listings.models import AdoptionListingPhoto, PetPhoto
+    return (AdoptionListingPhoto.objects.filter(url=url).exists()
+            or PetPhoto.objects.filter(url=url).exists())
+
+
+def _erase_related(account):
+    from django.apps import apps
+
+    files = []
+    for (label, field), entry in DATA_MAP.items():
+        rule = entry.erasure
+        if isinstance(rule, Keep):
+            continue
+        if label in _FILE_SOURCES:
+            files += _FILE_SOURCES[label](account)
+        rows = apps.get_model(label).objects.filter(**{field: account})
+        if isinstance(rule, Delete):
+            rows.delete()
+        else:
+            rows.update(**rule.values)
+    for url in dict.fromkeys(files):          # de-duplicated, order kept
+        if not _file_is_still_used(url):
+            delete_object(url, visibility=PUBLIC)
 
 
 def anonymize_expired_accounts(now=None):
