@@ -261,7 +261,7 @@ class MyPledgesView(APIView):
     def get(self, request):
         page, window = page_window(request)
         qs = (NeedPledge.objects.filter(pledger_account=request.user)
-              .select_related("need", "need__shelter_account")
+              .select_related("need", "need__shelter_account", "need__shelter_account__shelter_profile")
               .order_by("-created_at", "pledge_id")[window])
         rows, nxt = trim_page(list(qs), page)
         return Response({"results": my_pledge_rows(rows), "next": nxt})

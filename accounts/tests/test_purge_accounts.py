@@ -264,3 +264,52 @@ def test_a_pledge_note_is_scrubbed_but_the_pledge_survives():
     assert pledge.pledger_account_id == account.pk
     other.refresh_from_db()
     assert other.note == "someone else's note"
+
+
+# ---------------------------------------------------------------- a shelter's profile (PR-6)
+
+_SHELTER_PERSONAL = {"contact_person_name": "Liza Santos", "contact_person_role": "Director",
+                     "official_email": "liza@paws.example", "official_phone": "09171234567",
+                     "vet_name": "Dr. Juan Cruz", "vet_prc_number": "0123456",
+                     "donation_instructions": "Gate B, weekdays. Ask for Ate Liza."}
+_SHELTER_ORG = {"org_name": "Gone Rescue", "org_type": "shelter", "tier": "registered_ngo",
+                "registration_number": "CN2024-123", "description": "Rescue in Marikina.",
+                "website_url": "https://gone.example"}
+
+
+@pytest.mark.django_db
+def test_a_deleted_shelters_profile_loses_its_personal_fields_and_keeps_the_organisation():
+    """PR-6 (owner, 2026-10-27) · the profile names people — a contact person, a vet, whoever the
+    drop-off note says to ask for — and reaches them by phone and email. Those go. The
+    organisation's own identity stays: donors' records name who they gave to by it."""
+    from shelter.models import ShelterProfile
+    account = _deleted_days_ago(31)
+    ShelterProfile.objects.create(account=account, **_SHELTER_PERSONAL, **_SHELTER_ORG)
+
+    anonymize_expired_accounts()
+
+    profile = ShelterProfile.objects.get(account=account)
+    assert {f: getattr(profile, f) for f in _SHELTER_PERSONAL} == {f: "" for f in _SHELTER_PERSONAL}
+    assert {f: getattr(profile, f) for f in _SHELTER_ORG} == _SHELTER_ORG
+
+
+@pytest.mark.django_db
+def test_another_shelters_profile_is_left_alone():
+    from shelter.models import ShelterProfile
+    _deleted_days_ago(31)
+    live = AccountFactory()
+    ShelterProfile.objects.create(account=live, **_SHELTER_PERSONAL, **_SHELTER_ORG)
+
+    anonymize_expired_accounts()
+
+    assert ShelterProfile.objects.get(account=live).contact_person_name == "Liza Santos"
+
+
+@pytest.mark.django_db
+def test_purging_an_account_without_a_shelter_profile_still_works():
+    account = _deleted_days_ago(31)
+
+    anonymize_expired_accounts()
+
+    account.refresh_from_db()
+    assert account.anonymized_at is not None
