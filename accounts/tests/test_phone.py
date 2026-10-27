@@ -13,15 +13,16 @@ def _hdr(acc):
 
 
 @pytest.mark.django_db
-def test_request_phone_stores_unverified_number_and_issues_sms_code(client):
+def test_request_phone_issues_an_sms_code_for_the_candidate_and_leaves_the_account_alone(client):
     acc = AccountFactory(email_verified_at=timezone.now())
     res = client.post("/api/v1/me/phone", {"phone": "+639171234567"},
                       content_type="application/json", **_hdr(acc))
     assert res.status_code == 202
     acc.refresh_from_db()
-    assert acc.phone == "+639171234567" and acc.phone_verified_at is None
+    # T6 · the candidate rides on the code, not the account (test_phone_two_phase.py).
+    assert acc.phone is None and acc.phone_verified_at is None
     row = VerificationCode.objects.get(account=acc, purpose="phone")
-    assert row.channel == "sms"
+    assert row.channel == "sms" and row.target == "+639171234567"
 
 
 @pytest.mark.django_db
@@ -49,7 +50,8 @@ def test_request_phone_taken_by_another_account_is_generic_409(client):
                                    display_name="A", password="s3cretpass")
     other = Account.objects.get(email="a@example.com")
     other.phone = "+639170000000"
-    other.save(update_fields=["phone"])
+    other.phone_verified_at = timezone.now()     # only a VERIFIED number is "taken" (T6)
+    other.save(update_fields=["phone", "phone_verified_at"])
     acc = AccountFactory(email_verified_at=timezone.now())
     res = client.post("/api/v1/me/phone", {"phone": "+639170000000"},
                       content_type="application/json", **_hdr(acc))
@@ -79,14 +81,16 @@ def test_request_phone_stores_local_spelling_as_e164(client):
                       content_type="application/json", **_hdr(acc))
     assert res.status_code == 202
     acc.refresh_from_db()
-    assert acc.phone == "+639171234567"
+    assert acc.phone is None        # T6 · not on the account until verified
+    assert VerificationCode.objects.get(account=acc, purpose="phone").target == "+639171234567"
 
 
 @pytest.mark.django_db
 def test_request_phone_collision_is_checked_on_the_normalised_number(client):
     other = AccountFactory()
     other.phone = "+639170000000"
-    other.save(update_fields=["phone"])
+    other.phone_verified_at = timezone.now()     # only a VERIFIED number is "taken" (T6)
+    other.save(update_fields=["phone", "phone_verified_at"])
     acc = AccountFactory(email_verified_at=timezone.now())
     res = client.post("/api/v1/me/phone", {"phone": "0917 000 0000"},
                       content_type="application/json", **_hdr(acc))

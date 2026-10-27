@@ -23,6 +23,11 @@ class VerificationCode(models.Model):
     channel = models.CharField(max_length=10, choices=OtpChannel.choices)
     purpose = models.CharField(max_length=10, choices=OtpPurpose.choices)
     code_hash = models.TextField()
+    # T6 · WHAT the code is for, when it is for a value the person has not proven yet: the
+    # candidate phone number. It lives here, not on the account, until the code is verified —
+    # otherwise starting a change loses the verified number and squats the UNIQUE column.
+    # Empty for every other purpose, and for a phone code issued before this column existed.
+    target = models.CharField(max_length=254, blank=True, default="")
     attempts = models.IntegerField(default=0)
     max_attempts = models.IntegerField(default=5)
     expires_at = models.DateTimeField()
