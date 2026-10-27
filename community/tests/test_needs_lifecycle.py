@@ -7,9 +7,11 @@ import pytest
 from django.db import IntegrityError, connection, transaction
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 
 from accounts.factories import AccountFactory
 from community.models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
+from community.needs import settle_stranded_pledges
 from community.tests.test_needs import _hdr, _need, _pledge, _shelter
 from community.tests.test_needs_integrity import _race, _race_pair
 from notifications.models import Notification
@@ -128,13 +130,52 @@ def test_complete_with_no_pledges_sends_nothing():
 
 
 @pytest.mark.django_db
-def test_complete_on_a_fulfilled_need_changes_nothing():
+def test_complete_on_a_fulfilled_need_cancels_the_leftover_pledges():
+    """Backlog · a fulfilled need still takes late deliveries (R1), so a pledge left over after the
+    flip used to sit "to confirm" for ever. Mark complete now settles it: the need stays
+    fulfilled (it did get everything), the leftover is cancelled and its donor told."""
     need = _need(needed=3, received=3, status=NeedStatus.FULFILLED)
-    p = _pledge(need)   # a late pledge left over after the flip stays receivable
+    ShelterNeed.objects.filter(pk=need.pk).update(fulfilled_at=timezone.now())
+    need.refresh_from_db()
+    stamped = need.fulfilled_at
+    leftover = _pledge(need)
+    delivered = _pledge(need, status=PledgeStatus.DELIVERED)
     res = _complete(need)
-    assert res.json() == {"need_status": "fulfilled", "cancelled_pledges": 0}
-    p.refresh_from_db()
-    assert p.status == PledgeStatus.PLEDGED and p.cancel_reason is None
+    assert res.status_code == 200
+    assert res.json() == {"need_status": "fulfilled", "cancelled_pledges": 1}
+    leftover.refresh_from_db()
+    delivered.refresh_from_db()
+    need.refresh_from_db()
+    assert (leftover.status, leftover.cancel_reason) == ("cancelled", "need_closed")
+    assert leftover.decided_at is not None
+    assert delivered.status == "delivered" and delivered.cancel_reason is None
+    assert need.status == NeedStatus.FULFILLED and need.fulfilled_at == stamped
+    note = Notification.objects.get(account=leftover.pledger_account, type="need_closed")
+    assert note.data == {"need_id": str(need.pk), "pledge_id": str(leftover.pk)}
+    assert not Notification.objects.filter(account=delivered.pledger_account).exists()
+
+
+@pytest.mark.django_db
+def test_complete_on_a_fulfilled_need_twice_is_silent():
+    need = _need(needed=3, received=3, status=NeedStatus.FULFILLED)
+    _pledge(need)
+    assert _complete(need).json() == {"need_status": "fulfilled", "cancelled_pledges": 1}
+    before = Notification.objects.count()
+    assert _complete(need).json() == {"need_status": "fulfilled", "cancelled_pledges": 0}
+    assert Notification.objects.count() == before
+
+
+@pytest.mark.django_db
+def test_complete_on_a_closed_need_changes_nothing():
+    """`closed` is terminal: Mark complete leaves it, and anything still on it, alone. A pledge
+    stranded on a need closed before the refactor is settled once, by the data migration."""
+    need = _need(needed=10, received=4, status=NeedStatus.CLOSED)
+    orphan = _pledge(need)
+    res = _complete(need)
+    assert res.json() == {"need_status": "closed", "cancelled_pledges": 0}
+    orphan.refresh_from_db()
+    assert orphan.status == PledgeStatus.PLEDGED
+    assert Notification.objects.count() == 0
 
 
 @pytest.mark.django_db
@@ -178,6 +219,19 @@ def test_patch_close_on_a_fulfilled_need_keeps_fulfilled():
     assert res.status_code == 200 and res.json()["status"] == "fulfilled"
     need.refresh_from_db()
     assert need.status == NeedStatus.FULFILLED
+
+
+@pytest.mark.django_db
+def test_patch_close_on_a_fulfilled_need_settles_its_leftover_pledges_too():
+    """Old app builds still send PATCH {status: "closed"}; it is Mark complete, so it settles a
+    fulfilled need's leftovers the same way."""
+    need = _need(needed=3, received=3, status=NeedStatus.FULFILLED)
+    p = _pledge(need)
+    res = _patch(need.shelter_account, need, {"status": "closed"})
+    assert res.status_code == 200 and res.json()["status"] == "fulfilled"
+    p.refresh_from_db()
+    assert (p.status, p.cancel_reason) == ("cancelled", "need_closed")
+    assert Notification.objects.filter(account=p.pledger_account, type="need_closed").count() == 1
 
 
 @pytest.mark.django_db
@@ -495,3 +549,40 @@ def test_an_edit_that_does_not_meet_the_target_leaves_the_need_open():
     # a non-target edit of an already-at-target-by-received-zero need never flips either
     empty = _need(needed=5, received=0)
     assert _patch(empty.shelter_account, empty, {"title": "Y"}).json()["status"] == "open"
+
+
+# --- Backlog · pledges stranded on needs closed before the refactor ----------------------------
+
+@pytest.mark.django_db
+def test_settle_stranded_pledges_cancels_only_pledged_pledges_on_closed_needs():
+    """Before the refactor a close did not cascade, so a closed need could keep `pledged`
+    pledges: the donor's card stayed "Pledged" with a live Cancel. The one-time data migration
+    settles them the way a close settles them now, without a notification (those needs closed
+    long ago)."""
+    closed = _need(needed=10, received=4, status=NeedStatus.CLOSED)
+    stranded = _pledge(closed)
+    kept_delivered = _pledge(closed, status=PledgeStatus.DELIVERED)
+    kept_cancelled = NeedPledge.objects.create(need=closed, pledger_account=AccountFactory(), quantity=1,
+                                               status=PledgeStatus.CANCELLED, cancel_reason="donor")
+    on_open = _pledge(_need(needed=10))
+    on_fulfilled = _pledge(_need(needed=3, received=3, status=NeedStatus.FULFILLED))
+
+    assert settle_stranded_pledges(NeedPledge, timezone.now()) == 1
+    stranded.refresh_from_db()
+    assert (stranded.status, stranded.cancel_reason) == ("cancelled", "need_closed")
+    assert stranded.decided_at is not None
+    for p, status, reason in [(kept_delivered, "delivered", None), (kept_cancelled, "cancelled", "donor"),
+                              (on_open, "pledged", None), (on_fulfilled, "pledged", None)]:
+        p.refresh_from_db()
+        assert (p.status, p.cancel_reason) == (status, reason)
+    assert Notification.objects.count() == 0
+    assert settle_stranded_pledges(NeedPledge, timezone.now()) == 0      # idempotent
+
+
+def test_the_migration_settles_stranded_pledges_with_the_historical_model():
+    """The migration must hand the helper its historical model, and undoing it must not fail."""
+    from importlib import import_module
+    mig = import_module("community.migrations.0007_settle_stranded_pledges")
+    ops = [op for op in mig.Migration.operations if op.__class__.__name__ == "RunPython"]
+    assert len(ops) == 1 and ops[0].reverse_code is not None
+    assert ("community", "0006_wishlist_refactor") in mig.Migration.dependencies
