@@ -8,10 +8,12 @@ and page the lists. Views stay thin: they pick the queryset and call one of thes
 `quantity_pledged` / `pledge_count` count only `pledged` pledges (a promise still open):
 delivered ones are already in `quantity_received`, cancelled ones are nothing.
 """
-from django.db.models import Count, Q, Sum
-from django.db.models.functions import Coalesce
+from django.db.models import BooleanField, Case, Count, Exists, F, OuterRef, Q, Subquery, Sum, Value, When, Window
+from django.db.models.functions import Coalesce, RowNumber
 
-from shelter.models import ShelterProfile
+from accounts.models import Account, Address
+from common.cities import city_variants
+from shelter.models import DonationQr, QrStatus, ShelterProfile
 
 from .models import NeedStatus, PledgeStatus, ShelterNeed
 from .needs import live_needs, live_shelter_ids
@@ -123,3 +125,46 @@ def my_pledge_rows(qs):
                       "shelter_account_id": str(p.need.shelter_account_id),
                       "shelter_name": p.need.shelter_account.display_name}}
             for p in qs]
+
+
+def ways_to_help_rows(viewer_city, window):
+    """US-W4 · a page of the shelters someone can help: live (AW2/AW31) and with an open need or a live donation QR.
+
+    Near the viewer first — the shelter's primary-address city against `city_variants(viewer_city)`, the Adopt feed's
+    matching; a shelter with no address is never near but is still listed (that is the EN-5 shelter this exists for).
+    Then the most recent open need, QR-only shelters last, then name and id so pages are stable. Every column is a
+    correlated subquery (no GROUP BY), and the two newest titles per shelter come from one windowed query: two queries
+    a page, however many shelters.
+    """
+    open_needs = ShelterNeed.objects.filter(shelter_account=OuterRef("pk"), status=NeedStatus.OPEN)
+    variants = city_variants(viewer_city)
+    near = Q()
+    for variant in variants:
+        near |= Q(home_city__iexact=variant)
+    qs = (Account.objects.filter(pk__in=live_shelter_ids())
+          .annotate(
+              open_count=Coalesce(Subquery(open_needs.order_by().values("shelter_account")
+                                           .annotate(n=Count("pk")).values("n")[:1]), 0),
+              latest_need=Subquery(open_needs.order_by("-created_at").values("created_at")[:1]),
+              takes_qr=Exists(DonationQr.objects.filter(account=OuterRef("pk"), status=QrStatus.LIVE)),
+              # A shelter should have one primary address; if it has several, the first by id, so the answer is stable.
+              home_city=Coalesce(Subquery(Address.objects.filter(account=OuterRef("pk"), is_primary=True)
+                                          .order_by("address_id").values("city")[:1]), Value("")),
+              org=Coalesce(Subquery(ShelterProfile.objects.filter(account=OuterRef("pk")).values("org_name")[:1]),
+                           F("display_name")))
+          .annotate(near=Case(When(near, then=Value(True)), default=Value(False), output_field=BooleanField())
+                    if variants else Value(False, output_field=BooleanField()))
+          .filter(Q(open_count__gt=0) | Q(takes_qr=True))
+          .order_by("-near", F("latest_need").desc(nulls_last=True), "org", "pk"))
+    shelters = list(qs[window])
+    titles = {}
+    for account_id, title in (ShelterNeed.objects
+                              .filter(shelter_account_id__in=[s.pk for s in shelters], status=NeedStatus.OPEN)
+                              .annotate(rank=Window(RowNumber(), partition_by=F("shelter_account_id"),
+                                                    order_by=[F("created_at").desc(), F("need_id")]))
+                              .filter(rank__lte=2).order_by("shelter_account_id", "rank")
+                              .values_list("shelter_account_id", "title")):
+        titles.setdefault(account_id, []).append(title)
+    return [{"account_id": str(s.pk), "org_name": s.org, "city": s.home_city, "near": s.near,
+             "open_needs": s.open_count, "need_titles": titles.get(s.pk, []), "takes_qr": s.takes_qr}
+            for s in shelters]
