@@ -34,7 +34,14 @@ class ShelterProfileCreateSerializer(serializers.Serializer):
 
 
 class ShelterProfilePatchSerializer(serializers.Serializer):
-    # US-B3 (contact) and US-C1 (vet) both PATCH this profile; accept either subset.
+    # US-B3 (contact) and US-C1 (vet) both PATCH this profile; accept either subset. T8 adds the
+    # rest of what a shelter shows the world. `tier` and `org_type` are deliberately NOT here: a
+    # tier change is an upgrade and re-runs verification (§3.5). The view needs `context["request"]`.
+    org_name = serializers.CharField(max_length=150, required=False)      # locked once verified (view)
+    description = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    logo_file_url = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    official_email = serializers.EmailField(max_length=254, required=False, allow_blank=True)
+    operating_hours = serializers.CharField(max_length=120, required=False, allow_blank=True)
     contact_person_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
     contact_person_role = serializers.CharField(max_length=60, required=False, allow_blank=True)
     official_phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
@@ -43,6 +50,16 @@ class ShelterProfilePatchSerializer(serializers.Serializer):
     vet_prc_number = serializers.CharField(max_length=30, required=False, allow_blank=True)
     # US-W3 · the drop-off how-to shown on the wishlist; blank clears it.
     donation_instructions = serializers.CharField(max_length=500, required=False, allow_blank=True)
+
+    def validate_logo_file_url(self, value):
+        # Rendered to donors, so only THIS account's own `shelter_logo` upload (common/uploads.py).
+        if not value:
+            return value        # blank clears it
+        from common.uploads import own_upload_url_error
+        error = own_upload_url_error(value, self.context["request"].user, "shelter_logo", noun="logo")
+        if error:
+            raise serializers.ValidationError(error)
+        return value
 
     def validate_official_phone(self, value):
         # F12 · same E.164 canonical form as /me/phone. Not unique — it may equal the

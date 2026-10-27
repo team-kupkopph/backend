@@ -43,6 +43,7 @@ from .reads import (
     need_rows,
     page_window,
     pledge_rows,
+    shelter_card,
     trim_page,
     visible_needs,
     ways_to_help_rows,
@@ -113,7 +114,8 @@ class ShelterNeedsView(APIView):
         rows = need_rows(qs.order_by("-created_at", "need_id"), request.user, window)
         rows, nxt = trim_page(rows, page)
         return Response({"results": rows, "next": nxt,
-                         "donation_instructions": donation_instructions(account_id, request.user)})
+                         "donation_instructions": donation_instructions(account_id, request.user),
+                         "shelter": shelter_card(account_id, request.user)})
 
     def post(self, request, account_id):
         if str(request.user.pk) != str(account_id):

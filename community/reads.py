@@ -74,6 +74,20 @@ def donation_instructions(account_id, viewer):
     return qs.values_list("donation_instructions", flat=True).first() or ""
 
 
+def shelter_card(account_id, viewer):
+    """T8 · who the shelter is, for a donor: its name, description, logo and hours. Same
+    visibility as its needs and drop-off note (a live shelter, or its owner), and NEVER the contact
+    person, official email or phone, or the vet — those are for the shelter's own eyes."""
+    qs = ShelterProfile.objects.filter(account_id=account_id)
+    if not (viewer is not None and viewer.is_authenticated and str(viewer.pk) == str(account_id)):
+        qs = qs.filter(account_id__in=live_shelter_ids())
+    p = qs.first()
+    if p is None:
+        return None
+    return {"org_name": p.org_name, "description": p.description or None,
+            "logo_url": p.logo_url or None, "operating_hours": p.operating_hours or None}
+
+
 def need_rows(qs, viewer, window=None):
     """Serialise `qs` (an ordered ShelterNeed queryset, not yet sliced) with its pledge
     aggregates in ONE query. `window` is an optional `slice` applied after the annotation.
