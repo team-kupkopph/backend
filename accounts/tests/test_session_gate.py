@@ -30,8 +30,10 @@ def _suspended(**kw):
 
 
 def _deleted(**kw):
+    # Deleted AND anonymised: gone for good. A deleted account still inside its grace window is
+    # offered a restore instead of a refusal (AS1, accounts/tests/test_restore.py).
     return AccountFactory(status=AccountStatus.DELETED, deleted_at=timezone.now(),
-                          email_verified_at=timezone.now(), **kw)
+                          anonymized_at=timezone.now(), email_verified_at=timezone.now(), **kw)
 
 
 def _social(client):

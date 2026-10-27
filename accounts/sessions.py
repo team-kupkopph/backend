@@ -22,6 +22,12 @@ def can_hold_session(account):
     return account.status == AccountStatus.ACTIVE
 
 
+def can_restore(account):
+    """AS1 · deleted but not yet anonymised: still inside the grace window, still one person's
+    account. Once the purge has scrubbed it there is nothing left to give back."""
+    return account.status == AccountStatus.DELETED and account.anonymized_at is None
+
+
 def issue_session(account):
     """Access + refresh tokens for `account`, or `SessionRefused`."""
     if not can_hold_session(account):

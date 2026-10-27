@@ -17,6 +17,7 @@ from accounts.views import (
                             PasswordCodeCheckView,
     PasswordForgotView,
                             PasswordResetView,
+                            RestoreView,
                             SignupView,
                             SocialAuthView,
 )
@@ -27,6 +28,7 @@ urlpatterns = [
     path("auth/email/resend", EmailResendView.as_view()),
     path("auth/login", LoginView.as_view()),
     path("auth/refresh", AccountTokenRefreshView.as_view()),
+    path("auth/restore", RestoreView.as_view()),
     path("auth/logout", LogoutView.as_view()),
     path("auth/logout-all", LogoutAllView.as_view()),
     path("auth/password/forgot", PasswordForgotView.as_view()),

@@ -20,7 +20,7 @@ from accounts.serializers import (
     account_repr,
     me_repr,
 )
-from accounts.sessions import SessionRefused, can_hold_session, issue_session
+from accounts.sessions import SessionRefused, can_hold_session, can_restore, issue_session
 from common import otp
 from common.otp import CodeExpired, CodeInvalid, CodeLocked, check_code, issue_code, verify_code
 from common.phone import INVALID_PH_MOBILE_MESSAGE, normalize_ph_mobile
@@ -35,6 +35,7 @@ from common.throttles import (
     PasswordCodeCheckIpThrottle,
     PasswordForgotIdentifierThrottle,
     PasswordForgotIpThrottle,
+    RestoreIpThrottle,
     SignupIpThrottle,
 )
 
@@ -93,11 +94,22 @@ def _otp_error_response(exc):
                                "details": {"attempts_left": exc.attempts_left}}}, status=400)
 
 
-def _session_refused_response():
+def _session_refused_response(account=None):
     """X1 · a suspended or deleted account that has PROVEN who it is (a valid code, a verified
-    provider token) and still may not sign in. Only ever sent after that proof, so it tells the
-    caller nothing about an account they don't control. Login does not use it: a password is
-    not proof until it matches, so login keeps its one wrong-password body (§12.1)."""
+    provider token, the right password) and still may not sign in. Only ever sent after that
+    proof, so it tells the caller nothing about an account they don't control.
+
+    AS1 · a deleted account still inside its grace window is not refused but OFFERED a restore.
+    Pass the account to allow that; the email-code route does not, because a code only proves
+    the address, and restoring is for someone who has just signed in."""
+    if account is not None and can_restore(account):
+        from accounts.lifecycle import issue_restore_token, purge_on
+        return Response({"error": {
+            "code": "account_deleted",
+            "message": "This account is scheduled for deletion. Restore it to keep it.",
+            "details": {"restore_token": issue_restore_token(account),
+                        "purge_on": purge_on(account).isoformat()},
+        }}, status=409)
     return Response({"error": {"code": "account_unavailable",
                                "message": "This account can't sign in."}}, status=401)
 
@@ -174,15 +186,40 @@ class LoginView(APIView):
         # deletion/suspension into an enumeration oracle — §12.1's whole point is that
         # login reveals nothing. The password is checked FIRST so a refused account pays the
         # same argon2 cost as a wrong password (F11) — checking status first answered faster.
-        if (account is None
-                or not account.check_password(password)
-                or not can_hold_session(account)):
+        if account is None or not account.check_password(password):
+            return Response({"error": {"code": "invalid_credentials",
+                                       "message": "Email or password is incorrect"}}, status=401)
+        if not can_hold_session(account):
+            # AS1 · the password matched, so this caller owns the account: a deleted one inside
+            # its grace window is offered a restore. Suspended (or purged) stays the same
+            # generic body as a wrong password.
+            if can_restore(account):
+                return _session_refused_response(account)
             return Response({"error": {"code": "invalid_credentials",
                                        "message": "Email or password is incorrect"}}, status=401)
         if account.email_verified_at is None:
             issue_code(account, channel="email", purpose="signup")
             return Response({"error": {"code": "email_unverified",
                                        "message": "Verify your email"}}, status=403)
+        return Response({**issue_session(account), "account": account_repr(account)})
+
+
+class RestoreView(APIView):
+    """AS1 · POST /auth/restore {restore_token} — bring a deleted account back during the grace
+    window and sign in. The token came from a sign-in that proved ownership (login's 409 or
+    social's 409); this route never accepts a password or a provider token itself."""
+    permission_classes = [AllowAny]
+    throttle_classes = [RestoreIpThrottle]
+
+    def post(self, request):
+        from accounts.lifecycle import RestoreTokenInvalid, redeem_restore_token
+        raw = request.data.get("restore_token") if isinstance(request.data, dict) else None
+        try:
+            account = redeem_restore_token(raw)
+        except RestoreTokenInvalid:
+            return Response({"error": {"code": "restore_token_invalid",
+                                       "message": "That restore link has expired. Sign in again."}},
+                            status=400)
         return Response({**issue_session(account), "account": account_repr(account)})
 
 
@@ -488,7 +525,7 @@ class SocialAuthView(APIView):
         # X1 · refused BEFORE any link is made: a refused sign-in must not attach a provider to
         # a locked account. The provider has already proven the caller owns this identity.
         if account is not None and not can_hold_session(account):
-            return _session_refused_response()
+            return _session_refused_response(account)
         if not identity:
             if account is None:
                 at = request.data.get("account_type", "personal")

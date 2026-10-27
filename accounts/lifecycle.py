@@ -10,15 +10,22 @@ rescues resolved, adoptions completed, shifts worked — has to survive the pers
 So deletion is two steps with a window between them:
 
     DELETE /me   →  status='deleted' + deleted_at + sessions revoked   (this module)
+    sign in      →  inside the window, the person may RESTORE (AS1, below)
     +30 days     →  PII scrubbed in place + anonymized_at              (accounts/purge.py, US-N2)
 
 `deleted_at` and `status` move together or not at all — the M5 CHECK constraint on `account`
 enforces that pair in Postgres, so nothing here can half-delete an account.
 """
+import hashlib
+import secrets
+from datetime import timedelta
+
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import AccountStatus
+from accounts.sessions import can_restore
 
 
 def _when(dt):
@@ -135,3 +142,78 @@ def soft_delete_account(account):
     DeviceToken.objects.filter(account=account).delete()
 
     return account
+
+
+# ---------------------------------------------------------------- AS1 · restore
+
+class RestoreTokenInvalid(Exception):
+    """Unknown, expired, already used, or for an account that can no longer be restored. One
+    exception for all four on purpose: telling them apart would tell a caller that a token
+    they hold was once real."""
+
+
+def _hash_token(raw):
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def purge_on(account):
+    """The date the grace window closes and the PII is scrubbed, in Manila time."""
+    when = account.deleted_at + timedelta(days=settings.ACCOUNT_PURGE_GRACE_DAYS)
+    return timezone.localtime(when).date()
+
+
+def issue_restore_token(account):
+    """A single-use bearer token that lets a deleted account be restored.
+
+    Issued only after the caller PROVED they own the account (the right password, or a
+    verified Google/Apple identity), so it carries no secret an attacker could ask for. It rides
+    on `verification_code` like the OTP codes do — hashed at rest, expiring, consumed once —
+    but it is a long random string rather than six digits, so there is nothing to guess and no
+    attempt counter to keep. A newer token replaces the older one.
+    """
+    from verifications.models import OtpChannel, OtpPurpose, VerificationCode
+
+    raw = secrets.token_urlsafe(32)
+    with transaction.atomic():
+        VerificationCode.objects.filter(account=account, purpose=OtpPurpose.RESTORE,
+                                        consumed_at__isnull=True).delete()
+        VerificationCode.objects.create(
+            account=account, channel=OtpChannel.EMAIL, purpose=OtpPurpose.RESTORE,
+            code_hash=_hash_token(raw), max_attempts=1,
+            expires_at=timezone.now() + timedelta(minutes=settings.RESTORE_TOKEN_MINUTES))
+    return raw
+
+
+@transaction.atomic
+def restore_account(account):
+    """Undo `soft_delete_account` for an account still inside its grace window.
+
+    `sessions_revoked_at` is deliberately LEFT as it is: clearing it would re-validate every
+    token issued before the deletion. The caller mints a fresh session instead.
+    """
+    if not can_restore(account):
+        raise RestoreTokenInvalid("not restorable")
+    account.status = AccountStatus.ACTIVE
+    account.deleted_at = None            # the M5 CHECK requires this pair to move together
+    account.save(update_fields=["status", "deleted_at", "updated_at"])
+    return account
+
+
+@transaction.atomic
+def redeem_restore_token(raw):
+    """Spend a restore token and restore its account, or raise `RestoreTokenInvalid`."""
+    from verifications.models import OtpPurpose, VerificationCode
+
+    if not isinstance(raw, str) or not raw:
+        raise RestoreTokenInvalid("malformed")
+    now = timezone.now()
+    row = (VerificationCode.objects.select_for_update()
+           .select_related("account")
+           .filter(purpose=OtpPurpose.RESTORE, code_hash=_hash_token(raw),
+                   consumed_at__isnull=True, expires_at__gt=now)
+           .first())
+    if row is None:
+        raise RestoreTokenInvalid("unknown or expired")
+    row.consumed_at = now
+    row.save(update_fields=["consumed_at"])
+    return restore_account(row.account)
