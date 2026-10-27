@@ -12,11 +12,13 @@ from community.views import (
                              StoriesView,
                              StoryDetailView,
                              StoryReactionView,
+                             WaysToHelpView,
 )
 
 urlpatterns = [
     path("me/impact", MeImpactView.as_view()),
     path("me/pledges", MyPledgesView.as_view()),
+    path("shelters/ways-to-help", WaysToHelpView.as_view()),
     path("shelters/<uuid:account_id>/needs", ShelterNeedsView.as_view()),
     path("needs/<uuid:need_id>", NeedDetailView.as_view()),
     path("needs/<uuid:need_id>/complete", NeedCompleteView.as_view()),

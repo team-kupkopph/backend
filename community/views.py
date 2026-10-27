@@ -45,6 +45,7 @@ from .reads import (
     pledge_rows,
     trim_page,
     visible_needs,
+    ways_to_help_rows,
 )
 from .serializers import (
     NeedCreateSerializer,
@@ -130,6 +131,20 @@ def _notify_need_closed(need, shelter, cancelled):
                body=(f"{shelter.display_name} closed “{need.title}” — your pledge was "
                      "cancelled. Salamat for offering."),
                data={"need_id": str(need.pk), "pledge_id": str(p.pk)})
+
+
+class WaysToHelpView(APIView):
+    """US-W4 · GET the verified shelters someone can help, near `?city=` first (public; 20 a page). Tapping one in the
+    app opens its Donate screen."""
+    permission_classes = [AllowAny]
+
+    def get_throttles(self):
+        return []   # a public read, like a shelter's wishlist (US-K2 rations writes only)
+
+    def get(self, request):
+        page, window = page_window(request)
+        rows, nxt = trim_page(ways_to_help_rows(request.query_params.get("city"), window), page)
+        return Response({"results": rows, "next": nxt})
 
 
 class NeedDetailView(APIView):
