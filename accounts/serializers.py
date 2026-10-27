@@ -6,6 +6,7 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken as SimpleRefreshToken
 
 from accounts.models import Account
+from accounts.sessions import can_hold_session
 
 # Canonical signup/reset password rule (dev/onboarding-validation.md §signup): min 8 chars,
 # at least one number. This is the ONLY enforcement — the AUTH_PASSWORD_VALIDATORS in settings
@@ -120,6 +121,10 @@ class AccountTokenRefreshSerializer(TokenRefreshSerializer):
         account = Account.objects.filter(account_id=token.get("account_id")).first()
         if account is None:
             raise InvalidToken("account_not_found")
+        # X1 · a suspended or deleted account gets no new access token, whenever its refresh
+        # token was issued — the status is the lock, `sessions_revoked_at` only the backstop.
+        if not can_hold_session(account):
+            raise InvalidToken("account_inactive")
         if (account.sessions_revoked_at
                 and int(token["iat"]) <= int(account.sessions_revoked_at.timestamp())):
             raise InvalidToken("session_revoked")

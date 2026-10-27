@@ -2,6 +2,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken
 
 from accounts.models import Account
+from accounts.sessions import can_hold_session
 
 
 class AccountJWTAuthentication(JWTAuthentication):
@@ -17,6 +18,10 @@ class AccountJWTAuthentication(JWTAuthentication):
         account = Account.objects.filter(account_id=account_id).first()
         if account is None:
             raise InvalidToken("account_not_found")
+        # X1 · status is checked on every request, not only at sign-in. Revocation alone could
+        # not stop a token minted AFTER `sessions_revoked_at` (the social sign-in hole).
+        if not can_hold_session(account):
+            raise InvalidToken("account_inactive")
         revoked = account.sessions_revoked_at
         iat = validated_token.get("iat")
         if revoked is not None and iat is not None and int(iat) <= int(revoked.timestamp()):
