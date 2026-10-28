@@ -60,7 +60,7 @@ from listings.visibility import (
 )
 from notifications.service import notify
 from sagip import notices
-from sagip.models import RescueCase, StrayReport, StrayStatus
+from sagip.models import ReportType, RescueCase, StrayReport, StrayStatus
 from sagip.status import resolve_report
 from shelter.models import ShelterProfile
 
@@ -732,7 +732,8 @@ def _fill_from_pet(fields, pet):
 class MyPetsView(APIView):
     """GET /me/pets — US-H3. The owner's own pets, newest first, each with its primary
     photo (or earliest-uploaded if none is primary) for the mobile My-pets tab.
-    `rehomed` (PQ2) is the read-only trace of pets this account rehomed through Kupkop: the name
+    Each row carries `open_listing` and `lost_report_id` (PP14) so the card can say what the pet is
+    in the middle of. `rehomed` (PQ2) is the read-only trace of pets this account rehomed through Kupkop: the name
     and photo as they were at the transfer, never the new owner's later edits.
     POST /me/pets — AQ8 · an owner adds a pet they already have (before: the only Pet writer was
     a placement Accept), so they can keep its details and rehome it later. PQ3 · not a shelter:
@@ -740,10 +741,11 @@ class MyPetsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        pets = request.user.pets.current().order_by("-created_at").prefetch_related("photos")
+        pets = list(request.user.pets.current().order_by("-created_at").prefetch_related("photos"))
+        states = _pet_states(pets)
         rehomed = (PetOwnershipHistory.objects.filter(from_account=request.user)
                    .exclude(to_account=request.user).order_by("-transferred_at"))
-        return Response({"results": [pet_summary(p) for p in pets],
+        return Response({"results": [{**pet_summary(p), **states[p.pk]} for p in pets],
                          "rehomed": [rehomed_row(h) for h in rehomed]})
 
     def post(self, request):
@@ -778,6 +780,22 @@ def _open_rehome_listing(pet):
             .only("pk", "status").first())
 
 
+def _pet_states(pets):
+    """PP14 · what each pet is in the middle of, for its card and its screen: its open rehoming
+    listing (with whether moderation removed it) and its open lost report. Two queries for any
+    number of pets. A lost report is open until it is resolved."""
+    ids = [p.pk for p in pets]
+    listings = {row["rehome_pet_id"]: {"listing_id": str(row["pk"]), "status": row["status"],
+                                       "removed": row["hidden_at"] is not None}
+                for row in AdoptionListing.objects.filter(rehome_pet_id__in=ids, status__in=OPEN_REHOME_STATUSES)
+                .values("rehome_pet_id", "pk", "status", "hidden_at")}
+    lost = {}
+    for row in (StrayReport.objects.filter(pet_id__in=ids, report_type=ReportType.LOST)
+                .exclude(status=StrayStatus.RESOLVED).order_by("created_at").values("pet_id", "pk")):
+        lost.setdefault(row["pet_id"], str(row["pk"]))
+    return {pk: {"open_listing": listings.get(pk), "lost_report_id": lost.get(pk)} for pk in ids}
+
+
 #: PATCH body key → Pet column, for the fields an owner edits as typed.
 _PET_EDITABLE = {"name": "name", "species": "species", "breed": "breed", "sex": "sex",
                  "birthdate": "date_of_birth", "color_markings": "color_markings",
@@ -788,7 +806,7 @@ _PET_EDITABLE = {"name": "name", "species": "species", "breed": "breed", "sex": 
 
 class MyPetDetailView(APIView):
     """GET /me/pets/{id} — AQ8 · everything the owner entered, for the pet screen and for
-    prefilling a rehoming listing, plus its open rehoming listing if any. Private: another
+    prefilling a rehoming listing, plus its open rehoming listing and open lost report, if any. Private: another
     account's pet, or an archived one, is a 404.
     PATCH — PP12 · any subset; `photos` present replaces the set. The species can't change while
     an open listing describes the animal (PP3).
@@ -801,10 +819,7 @@ class MyPetDetailView(APIView):
         pet = request.user.pets.current().prefetch_related("photos").filter(pk=pet_id).first()
         if pet is None:
             return _no_such_pet()
-        listing = _open_rehome_listing(pet)
-        return Response({**pet_fields(pet),
-                         "open_listing": ({"listing_id": str(listing.pk), "status": listing.status}
-                                          if listing else None)})
+        return Response({**pet_fields(pet), **_pet_states([pet])[pet.pk]})
 
     def patch(self, request, pet_id):
         with transaction.atomic():

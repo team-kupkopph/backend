@@ -153,7 +153,7 @@ def test_a_listed_pet_cannot_be_removed():
     res = _delete(owner, pid)
     assert res.status_code == 409 and res.json()["error"]["details"]["listing_id"] == lid
     detail = c(owner).get(f"/api/v1/me/pets/{pid}").json()
-    assert detail["open_listing"] == {"listing_id": lid, "status": "draft"}
+    assert detail["open_listing"] == {"listing_id": lid, "status": "draft", "removed": False}
 
 
 @pytest.mark.django_db(transaction=True)
