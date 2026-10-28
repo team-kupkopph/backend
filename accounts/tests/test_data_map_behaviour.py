@@ -77,7 +77,10 @@ def test_the_purge_deletes_pets_and_their_photos_but_not_a_file_a_listing_still_
     pet = Pet.objects.create(owner_account=account, name="Mochi", species="dog",
                              vet_contact="Dr Cruz 0917", emergency_contact="Ana 0918")
     PetPhoto.objects.create(pet=pet, url="https://bkt/listing/shared.jpg")   # copied from the listing
-    PetPhoto.objects.create(pet=pet, url="https://bkt/pets/own.jpg")
+    own = f"https://bkt/listing_photo/{account.pk}/own.jpg"
+    PetPhoto.objects.create(pet=pet, url=own)
+    # PP5 · a URL that is not this account's own upload is never deleted, whatever it names.
+    PetPhoto.objects.create(pet=pet, url="https://bkt/report_photo/someone-else/x.jpg")
 
     with mock.patch("accounts.purge.delete_object") as delete_object:
         anonymize_expired_accounts()
@@ -85,7 +88,8 @@ def test_the_purge_deletes_pets_and_their_photos_but_not_a_file_a_listing_still_
     assert not Pet.objects.filter(owner_account=account).exists()
     assert not PetPhoto.objects.filter(pet_id=pet.pk).exists()
     deleted = {call.args[0] for call in delete_object.call_args_list}
-    assert "https://bkt/pets/own.jpg" in deleted
+    assert own in deleted
+    assert "https://bkt/report_photo/someone-else/x.jpg" not in deleted
     # The poster is an active account and their listing is public: the file stays.
     assert "https://bkt/listing/shared.jpg" not in deleted
     assert AdoptionListing.objects.filter(pk=listing.pk).exists()

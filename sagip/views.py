@@ -152,7 +152,7 @@ class ReportsCreateView(APIView):
         pet = None
         if pet_id is not None:
             from listings.models import Pet
-            pet = Pet.objects.filter(pk=pet_id, owner_account=request.user).first()
+            pet = Pet.objects.current().filter(pk=pet_id, owner_account=request.user).first()
             if pet is not None:
                 for field in ("breed", "color_markings", "size_category", "sex"):
                     if not describables[field]:
