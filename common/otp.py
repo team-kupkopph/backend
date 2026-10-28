@@ -26,10 +26,14 @@ def _hash(code):
     return hashlib.sha256(code.encode()).hexdigest()
 
 
-def issue_code(account, *, channel, purpose, target=""):
+def issue_code(account, *, channel, purpose, target="", deliver=True):
     """Issue a code and send it. `target` is the value being proven when it is not yet the
     account's own (a candidate phone number): the code is SENT there and stored with it, so the
-    account itself is untouched until `verify_code` succeeds."""
+    account itself is untouched until `verify_code` succeeds.
+
+    `deliver=False` stores the code and sends nothing. The email change uses it for an address that
+    already belongs to someone: the row (and so the attempts budget) is identical to a real one, so
+    the caller's response cannot reveal whether the address is taken, and no mail reaches its owner."""
     code = f"{secrets.randbelow(1_000_000):06d}"
     ttl = timezone.timedelta(minutes=settings.OTP_TTL_MINUTES)
     VerificationCode.objects.filter(account=account, purpose=purpose,
@@ -38,6 +42,8 @@ def issue_code(account, *, channel, purpose, target=""):
         account=account, channel=channel, purpose=purpose, code_hash=_hash(code), target=target,
         max_attempts=settings.OTP_MAX_ATTEMPTS, expires_at=timezone.now() + ttl,
     )
+    if not deliver:
+        return code
     to = target or (account.email if channel == "email" else account.phone)
     get_sender().send(channel=channel, to=to, purpose=purpose, code=code)
     return code

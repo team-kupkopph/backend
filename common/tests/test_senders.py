@@ -265,3 +265,67 @@ def test_the_request_sets_a_timeout():
         post.return_value = Mock(status_code=200, ok=True)
         ResendSender().send(channel="email", to="a@b.ph", code="1", purpose="signup")
     assert post.call_args.kwargs.get("timeout"), "no timeout — a hung provider hangs the worker"
+
+
+# ── T13 · a notice carries no code: "your email was changed" ────────────────────────────
+def test_the_console_notice_never_touches_the_network(capsys, caplog):
+    with override_settings(DEBUG=True):
+        ConsoleSender().send_notice(to="old@example.ph", subject="S", body="B")
+
+    assert "[DEV NOTICE]" in capsys.readouterr().out
+
+
+@override_settings(EMAIL_FROM="noreply@kupkop.ph", AWS_SES_REGION="ap-southeast-1")
+def test_ses_sends_a_notice_with_the_subject_and_body_it_was_given(mock_ses):
+    SesEmailSender().send_notice(to="old@example.ph", subject="Your email was changed", body="Body text")
+
+    kw = mock_ses.send_email.call_args.kwargs
+    assert kw["Destination"] == {"ToAddresses": ["old@example.ph"]}
+    assert kw["Message"]["Subject"]["Data"] == "Your email was changed"
+    assert kw["Message"]["Body"]["Text"]["Data"] == "Body text"
+
+
+@override_settings(EMAIL_FROM="noreply@kupkop.ph", AWS_SES_REGION="ap-southeast-1")
+def test_an_ses_failure_on_a_notice_falls_back_and_never_raises(mock_ses, capsys):
+    mock_ses.send_email.side_effect = RuntimeError("sandbox")
+
+    with override_settings(DEBUG=True):
+        SesEmailSender().send_notice(to="old@example.ph", subject="S", body="B")
+
+    assert "[DEV NOTICE]" in capsys.readouterr().out
+
+
+@responses_lib.activate
+@override_settings(**RESEND_CFG)
+def test_resend_sends_a_plain_text_notice():
+    from common.senders import ResendSender
+    responses_lib.add(responses_lib.POST, RESEND_URL, json={"id": "abc"}, status=200)
+
+    ResendSender().send_notice(to="old@example.ph", subject="Subj", body="Body text")
+
+    body = json.loads(responses_lib.calls[0].request.body)
+    assert body["to"] == ["old@example.ph"] and body["subject"] == "Subj" and body["text"] == "Body text"
+    assert "html" not in body
+
+
+@responses_lib.activate
+@override_settings(**RESEND_CFG)
+def test_a_resend_outage_on_a_notice_falls_back_and_never_raises(caplog):
+    from common.senders import ResendSender
+    responses_lib.add(responses_lib.POST, RESEND_URL, json={"message": "boom"}, status=500)
+
+    ResendSender().send_notice(to="old@example.ph", subject="S", body="B")
+
+    assert "resend_notice_failed" in caplog.text
+    assert "re_test_key_do_not_use" not in caplog.text
+
+
+def test_the_changed_notice_masks_the_new_address_and_carries_no_code():
+    from common.messages import compose_email_changed_notice, compose_otp_email, mask_email
+
+    subject, body = compose_email_changed_notice("new.address@example.com")
+
+    assert "new.address@example.com" not in body and "n***@example.com" in body
+    assert "changed" in subject.lower()
+    assert mask_email("x") == "***"
+    assert compose_otp_email("email", "123456")[0] != compose_otp_email("signup", "123456")[0]

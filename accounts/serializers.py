@@ -116,6 +116,12 @@ class PasswordChangeSerializer(serializers.Serializer):
     new_password = serializers.CharField(write_only=True, validators=[validate_password_strength])
 
 
+class EmailChangeSerializer(serializers.Serializer):
+    """T13 · the candidate address and the CURRENT password (so a stolen token cannot start it)."""
+    new_email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+
+
 class EmailVerifySerializer(serializers.Serializer):
     email = serializers.EmailField()
     code = serializers.CharField()
