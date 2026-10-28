@@ -300,3 +300,41 @@ def settle_stranded_pledges(pledge_model, now):
     Takes the model so the data migration can pass its historical one; returns how many changed."""
     return (pledge_model.objects.filter(status="pledged", need__status="closed")
             .update(status="cancelled", cancel_reason="need_closed", decided_at=now))
+
+
+def settle_departed_accounts(account_model, need_model, pledge_model, now):
+    """Backlog · one-time: settle what accounts deleted BEFORE #110 left behind, the way the departure
+    settling would have (`settle_departing_shelter` / `cancel_departing_donor_pledges`), and nothing else.
+
+    A leaving shelter's `open` needs resolve like Mark complete (`fulfilled` if received >= needed, else
+    `closed`) and every `pledged` pledge on them ends `need_closed`; a `fulfilled` need still holding a waiting
+    late pledge keeps its status and has those pledges settled. A leaving donor's remaining `pledged` pledges
+    end `donor_left`. Shelters go FIRST, so a pledge whose donor and shelter are both gone ends once, as
+    `need_closed` (the structural fact), and is counted once.
+
+    SILENT (those events are long past) and it never touches `quantity_received`. It takes the models, like
+    `settle_stranded_pledges`, so the data migration can pass its historical ones, hence the status literals.
+    Idempotent: a repeat finds nothing. Returns the counts, for the migration to print."""
+    from django.db.models import Q
+
+    gone = account_model.objects.filter(status="deleted")
+    need_closed = donor_left = needs_settled = 0
+
+    need_ids = list(need_model.objects.filter(shelter_account__in=gone)
+                    .filter(Q(status="open") | Q(status="fulfilled", pledges__status="pledged"))
+                    .order_by("created_at").values_list("pk", flat=True).distinct())
+    for need in need_model.objects.filter(pk__in=need_ids):
+        need_closed += (pledge_model.objects.filter(need=need, status="pledged")
+                        .update(status="cancelled", cancel_reason="need_closed", decided_at=now))
+        if need.status == "open":
+            if need.quantity_received >= need.quantity_needed:
+                need.status, need.fulfilled_at = "fulfilled", now
+                need.save(update_fields=["status", "fulfilled_at"])
+            else:
+                need.status = "closed"
+                need.save(update_fields=["status"])
+        needs_settled += 1
+
+    donor_left = (pledge_model.objects.filter(status="pledged", pledger_account__in=gone)
+                  .update(status="cancelled", cancel_reason="donor_left", decided_at=now))
+    return {"donor_left": donor_left, "need_closed": need_closed, "needs_settled": needs_settled}
