@@ -135,7 +135,7 @@ def test_the_export_is_v2_and_lists_identities_without_the_provider_subject(clie
 
     body = _export(client, account)
 
-    assert body["export_format"] == "kupkop.export.v2"
+    assert body["export_format"] == "kupkop.export.v3"
     assert body["identities"][0]["provider"] == "google"
     assert "SECRET-SUB-123" not in json.dumps(body)      # the provider's id for you is not yours to dump
 

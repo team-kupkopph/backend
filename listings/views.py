@@ -31,7 +31,17 @@ from listings.models import (
     Sex,
     StageState,
 )
-from listings.representations import adopter_inquiry_row, adopter_inquiry_rows, poster_inquiry_rows
+from listings.representations import (
+    adopter_inquiry_row,
+    adopter_inquiry_rows,
+    pet_fields,
+    pet_photo_urls,
+    pet_summary,
+    poster_inquiry_rows,
+    primary_photo,
+    rehomed_row,
+    sex_out,
+)
 from listings.serializers import (
     InquiryCreateSerializer,
     ListingCreateSerializer,
@@ -138,19 +148,13 @@ def _set_photos(listing, photos):
                                             is_primary=(i == flagged))
 
 
-def _sex_out(sex):
-    """PP16 · one way to say "unknown" in a response: null. A pet stores it as `unknown` (the DDL's
-    default) and a listing as blank; the API never shows either."""
-    return None if sex in ("", Sex.UNKNOWN) else sex
-
-
 def _photo_urls(listing):
     return [p.url for p in sorted(listing.photos.all(), key=lambda p: not p.is_primary)]
 
 
 def _pet_fields(listing):
     return {"name": listing.name, "species": listing.species, "breed": listing.breed or None,
-            "sex": _sex_out(listing.sex),
+            "sex": sex_out(listing.sex),
             "birthdate": listing.date_of_birth.isoformat() if listing.date_of_birth else None,
             "size_category": listing.size_category or None,
             "spayed_neutered": listing.spayed_neutered,
@@ -292,7 +296,7 @@ class ListingsView(APIView):
                                     status=422)
                 pet = _fill_from_pet(pet, rehome)
                 if "photos" not in data:
-                    data["photos"] = [{"file_url": u} for u in _pet_photo_urls(rehome)]
+                    data["photos"] = [{"file_url": u} for u in pet_photo_urls(rehome)]
             listing = AdoptionListing.objects.create(
                 rehome_pet=rehome,
                 posted_by=request.user, name=pet["name"], species=pet["species"],
@@ -710,16 +714,6 @@ class InquiryDetailView(APIView):
         return Response({"error": {"code": "not_found", "message": "No such inquiry"}}, status=404)
 
 
-def _primary_photo(pet):
-    photos = sorted(pet.photos.all(), key=lambda ph: ph.uploaded_at)
-    return next((ph for ph in photos if ph.is_primary), None) or (photos[0] if photos else None)
-
-
-def _pet_photo_urls(pet):
-    """The pet's photos, primary first, then oldest first."""
-    return [ph.url for ph in sorted(pet.photos.all(), key=lambda ph: (not ph.is_primary, ph.uploaded_at))]
-
-
 def _fill_from_pet(fields, pet):
     """PP3 · a rehoming listing's `pet{}` with every blank taken from the owner's Pet. What the
     owner did type wins (the listing may word things differently); the species is checked by the
@@ -746,16 +740,11 @@ class MyPetsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        def _repr(p):
-            ph = _primary_photo(p)
-            return {"pet_id": str(p.pk), "name": p.name, "species": p.species,
-                    "photo_url": (ph.url if ph else None)}
         pets = request.user.pets.current().order_by("-created_at").prefetch_related("photos")
         rehomed = (PetOwnershipHistory.objects.filter(from_account=request.user)
                    .exclude(to_account=request.user).order_by("-transferred_at"))
-        return Response({"results": [_repr(p) for p in pets],
-                         "rehomed": [{"name": h.pet_name, "photo_url": h.photo_url or None,
-                                      "rehomed_at": h.transferred_at.isoformat()} for h in rehomed]})
+        return Response({"results": [pet_summary(p) for p in pets],
+                         "rehomed": [rehomed_row(h) for h in rehomed]})
 
     def post(self, request):
         if request.user.account_type == "shelter":
@@ -813,16 +802,9 @@ class MyPetDetailView(APIView):
         if pet is None:
             return _no_such_pet()
         listing = _open_rehome_listing(pet)
-        return Response({
-            "pet_id": str(pet.pk), "name": pet.name, "species": pet.species,
-            "breed": pet.breed or None, "sex": _sex_out(pet.sex),
-            "birthdate": pet.date_of_birth.isoformat() if pet.date_of_birth else None,
-            "color_markings": pet.color_markings or None, "size_category": pet.size_category or None,
-            "spayed_neutered": pet.spayed_neutered, "temperament": pet.temperament or None,
-            "medical_conditions": pet.medical_conditions or None,
-            "vet_contact": pet.vet_contact or None, "photos": _pet_photo_urls(pet),
-            "open_listing": ({"listing_id": str(listing.pk), "status": listing.status}
-                             if listing else None)})
+        return Response({**pet_fields(pet),
+                         "open_listing": ({"listing_id": str(listing.pk), "status": listing.status}
+                                          if listing else None)})
 
     def patch(self, request, pet_id):
         with transaction.atomic():
@@ -1023,7 +1005,7 @@ def _pet_from_listing(listing, owner):
     if listing.rehome_pet_id:
         pet = Pet.objects.select_for_update().filter(pk=listing.rehome_pet_id).first()
         if pet is not None:
-            ph = _primary_photo(pet)
+            ph = primary_photo(pet)
             PetOwnershipHistory.objects.create(pet=pet, from_account=pet.owner_account,
                                                to_account=owner, listing=listing, pet_name=pet.name,
                                                photo_url=ph.url if ph else "")
