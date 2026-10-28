@@ -114,3 +114,15 @@ class PetCreateSerializer(serializers.Serializer):
     medical_conditions = serializers.CharField(required=False, allow_blank=True)
     vet_contact = serializers.CharField(max_length=160, required=False, allow_blank=True)
     photos = PhotoSerializer(many=True, required=False, max_length=MAX_PHOTOS)
+
+    def validate_photos(self, photos):
+        """PP5 · a pet's photos are rendered to its next owner and deleted from the public bucket
+        when its owner's account is purged, so each must be THIS account's own upload
+        (common/uploads.py). The app uploads them under the `listing_photo` purpose."""
+        from common.uploads import own_upload_url_error
+        for photo in photos:
+            error = own_upload_url_error(photo["file_url"], self.context["request"].user,
+                                         "listing_photo", noun="photo")
+            if error:
+                raise serializers.ValidationError(error)
+        return photos

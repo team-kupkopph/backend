@@ -7,12 +7,19 @@ from listings.tests.adoption_helpers import c, inquire, listing, person, post
 
 BODY = {"name": "Mochi", "species": "cat", "breed": "Puspin", "sex": "female",
         "birthdate": "2022-03-01", "size_category": "small", "spayed_neutered": True,
-        "temperament": "Lap cat", "medical_conditions": "Mild asthma", "vet_contact": "Dr Reyes 0917",
-        "photos": [{"file_url": "https://x/m1"}, {"file_url": "https://x/m2", "is_primary": True}]}
+        "temperament": "Lap cat", "medical_conditions": "Mild asthma", "vet_contact": "Dr Reyes 0917"}
+
+
+def own_photo(owner, name):
+    """PP5 · a pet photo must be the owner's own `listing_photo` upload (common/uploads.py)."""
+    return f"https://bkt.example/listing_photo/{owner.pk}/{name}"
 
 
 def _add(owner, body=None):
-    return c(owner).post("/api/v1/me/pets", body or BODY, format="json")
+    if body is None:
+        body = {**BODY, "photos": [{"file_url": own_photo(owner, "m1")},
+                                   {"file_url": own_photo(owner, "m2"), "is_primary": True}]}
+    return c(owner).post("/api/v1/me/pets", body, format="json")
 
 
 @pytest.mark.django_db
@@ -22,13 +29,13 @@ def test_an_owner_can_add_a_pet_with_photos_and_read_it_back():
     assert res.status_code == 201, res.content
     pet = Pet.objects.get(pk=res.json()["pet_id"])
     assert pet.owner_account_id == owner.pk and pet.name == "Mochi" and pet.medical_conditions
-    assert dict(pet.photos.values_list("url", "is_primary")) == {"https://x/m1": False,
-                                                                 "https://x/m2": True}
+    assert dict(pet.photos.values_list("url", "is_primary")) == {own_photo(owner, "m1"): False,
+                                                                 own_photo(owner, "m2"): True}
     detail = c(owner).get(f"/api/v1/me/pets/{pet.pk}").json()
     assert detail["name"] == "Mochi" and detail["breed"] == "Puspin" and detail["sex"] == "female"
-    assert detail["birthdate"] == "2022-03-01" and detail["photos"][0] == "https://x/m2"
+    assert detail["birthdate"] == "2022-03-01" and detail["photos"][0] == own_photo(owner, "m2")
     [row] = c(owner).get("/api/v1/me/pets").json()["results"]
-    assert row["photo_url"] == "https://x/m2"
+    assert row["photo_url"] == own_photo(owner, "m2")
 
 
 @pytest.mark.django_db

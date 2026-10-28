@@ -84,6 +84,18 @@ class StageState(models.TextChoices):
 ADOPTION_STAGE_ORDER = list(AdoptionStageKey)
 
 
+class PetRemovedReason(models.TextChoices):
+    """PQ1 · why a pet left its owner's My Pets without changing hands on Kupkop. The row is
+    archived, never deleted, so lost reports, ownership history and badges keep a valid target."""
+    REHOMED_OUTSIDE = "rehomed_outside"   # its rehoming listing was marked adopted outside Kupkop
+
+
+class PetQuerySet(models.QuerySet):
+    def current(self):
+        """The pets still in their owner's My Pets (not archived)."""
+        return self.filter(removed_at__isnull=True)
+
+
 class Pet(models.Model):
     """A person's OWNED animal (matches kupkop_mvp_schema.sql `pet`). `owner_account_id`
     is NOT NULL in the DDL, so a Pet row can only exist once someone actually owns the
@@ -111,8 +123,13 @@ class Pet(models.Model):
     temperament = models.CharField(max_length=160, blank=True)
     vet_contact = models.CharField(max_length=160, blank=True)
     emergency_contact = models.CharField(max_length=160, blank=True)
+    # PQ1 · archived: gone from My Pets and from the lost-report pet picker, row kept.
+    removed_at = models.DateTimeField(null=True, blank=True)
+    removed_reason = models.CharField(max_length=20, choices=PetRemovedReason.choices, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = PetQuerySet.as_manager()
 
     class Meta:
         db_table = "pet"

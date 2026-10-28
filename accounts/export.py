@@ -101,6 +101,8 @@ def _pets(account):
          "temperament": p.temperament or None,
          "vet_contact": p.vet_contact or None,
          "emergency_contact": p.emergency_contact or None,
+         "removed_at": _dt(p.removed_at),
+         "removed_reason": p.removed_reason or None,
          "created_at": _dt(p.created_at)}
         for p in Pet.objects.filter(owner_account=account)
     ]

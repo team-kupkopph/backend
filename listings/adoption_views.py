@@ -22,6 +22,8 @@ from listings.models import (
     InquiryKind,
     InquiryStatus,
     ListingStatus,
+    Pet,
+    PetRemovedReason,
     StageState,
 )
 from listings.representations import poster_contact_phone, poster_inquiry_rows
@@ -316,7 +318,8 @@ class MarkAdoptedView(APIView):
     listing reads Adopted, with no adopter account and no Pet (there is no one to give one to);
     every open applicant is declined as "another adopter was chosen" and told; a rescue report is
     resolved. If an applicant holds the reservation the poster completes it with them instead,
-    so the adoption lands in that person's My Pets."""
+    so the adoption lands in that person's My Pets. A rehomed pet is archived out of the poster's
+    My Pets (PP2)."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, listing_id):
@@ -340,6 +343,13 @@ class MarkAdoptedView(APIView):
             now = timezone.now()
             listing.status = ListingStatus.ADOPTED
             listing.save(update_fields=["status", "updated_at"])
+            # PP2 / PQ1 · a pet rehomed outside Kupkop has left its owner: archive it out of My Pets
+            # (locked after the listing, the order _pet_from_listing uses). Kept, never deleted.
+            if listing.rehome_pet_id is not None:
+                Pet.objects.select_for_update().filter(
+                    pk=listing.rehome_pet_id, owner_account=listing.posted_by_id,
+                    removed_at__isnull=True,
+                ).update(removed_at=now, removed_reason=PetRemovedReason.REHOMED_OUTSIDE, updated_at=now)
             for other in active:
                 other.listing = listing
                 _end(other, InquiryStatus.DECLINED, request.user,

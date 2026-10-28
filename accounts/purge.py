@@ -87,8 +87,13 @@ def anonymize_account(account, now=None):
 
 
 def _pet_photo_files(account):
+    from common.uploads import own_upload_url_error
     from listings.models import PetPhoto
-    return list(PetPhoto.objects.filter(pet__owner_account=account).values_list("url", flat=True))
+    urls = PetPhoto.objects.filter(pet__owner_account=account).values_list("url", flat=True)
+    # PP5 · ONLY this account's own `listing_photo` keys. A pet's photo can be the previous
+    # owner's (a transfer keeps them) or, on rows written before the rule, any URL at all; the
+    # bucket key is derived from the URL, so a crafted one would delete a stranger's file.
+    return [u for u in urls if u and own_upload_url_error(u, account, "listing_photo") is None]
 
 
 def _qr_image_files(account):
