@@ -98,6 +98,16 @@ class MeUpdateSerializer(serializers.Serializer):
     display_name = serializers.CharField(max_length=100, required=False)
     photo_file_url = serializers.CharField(required=False, allow_blank=True)
 
+    def validate_photo_file_url(self, value):
+        # Rendered to other people, so only THIS account's own `profile_photo` upload (common/uploads.py).
+        if not value:
+            return value        # blank removes it
+        from common.uploads import own_upload_url_error
+        error = own_upload_url_error(value, self.context["request"].user, "profile_photo", noun="photo")
+        if error:
+            raise serializers.ValidationError(error)
+        return value
+
 
 class MeSettingsSerializer(serializers.Serializer):
     # AS8 · `approximate_location` and `masked_contact` are no longer declared: an older app build

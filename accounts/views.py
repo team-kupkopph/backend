@@ -27,6 +27,7 @@ from accounts.sessions import SessionRefused, can_hold_session, can_restore, iss
 from common import otp
 from common.otp import CodeExpired, CodeInvalid, CodeLocked, check_code, issue_code, verify_code
 from common.phone import INVALID_PH_MOBILE_MESSAGE, normalize_ph_mobile
+from common.storage import PUBLIC, delete_object
 from common.throttles import (
     ExportRequestThrottle,
     LoginIdentifierThrottle,
@@ -42,6 +43,7 @@ from common.throttles import (
     RestoreIpThrottle,
     SignupIpThrottle,
 )
+from common.uploads import own_upload_url_error
 
 
 class SignupView(APIView):
@@ -336,6 +338,15 @@ class PasswordResetView(APIView):
         return Response({})
 
 
+def _drop_replaced_photo(account, old_url):
+    """An avatar is personal data, so replacing or removing it deletes the old object rather than
+    orphaning it. Only OUR own `profile_photo` upload is deleted: a social sign-in stores the
+    provider's picture URL, and a key derived from someone else's URL is not ours to delete."""
+    if old_url and old_url != account.photo_url \
+            and own_upload_url_error(old_url, account, "profile_photo", noun="photo") is None:
+        delete_object(old_url, visibility=PUBLIC)
+
+
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -367,12 +378,13 @@ class MeView(APIView):
 
     def patch(self, request):
         acc = request.user
-        s = MeUpdateSerializer(data=request.data, partial=True)
+        s = MeUpdateSerializer(data=request.data, partial=True, context={"request": request})
         s.is_valid(raise_exception=True)
         if "display_name" in s.validated_data:
             acc.display_name = s.validated_data["display_name"]
         if "photo_file_url" in s.validated_data:
-            acc.photo_url = s.validated_data["photo_file_url"]
+            old, acc.photo_url = acc.photo_url, s.validated_data["photo_file_url"]
+            _drop_replaced_photo(acc, old)
         acc.save()
         return Response(me_repr(acc))
 
