@@ -88,6 +88,14 @@ class PetRemovedReason(models.TextChoices):
     """PQ1 · why a pet left its owner's My Pets without changing hands on Kupkop. The row is
     archived, never deleted, so lost reports, ownership history and badges keep a valid target."""
     REHOMED_OUTSIDE = "rehomed_outside"   # its rehoming listing was marked adopted outside Kupkop
+    # PP12 · the owner removed it themselves (DELETE /me/pets/{id}).
+    PASSED_AWAY = "passed_away"
+    GIVEN_AWAY = "given_away"
+    OTHER = "other"
+
+
+#: The reasons an owner can give when removing a pet themselves.
+OWNER_REMOVE_REASONS = (PetRemovedReason.PASSED_AWAY, PetRemovedReason.GIVEN_AWAY, PetRemovedReason.OTHER)
 
 
 class PetQuerySet(models.QuerySet):
@@ -158,6 +166,10 @@ class PetOwnershipHistory(models.Model):
                                    related_name="+")
     listing = models.ForeignKey("AdoptionListing", on_delete=models.SET_NULL, null=True, blank=True,
                                 related_name="+")
+    # PQ2 · what the previous owner's "Rehomed" trace shows, frozen at the transfer: reading the live
+    # Pet would hand them the new owner's later edits (a new name, new photos).
+    pet_name = models.CharField(max_length=80, blank=True)
+    photo_url = models.TextField(blank=True)
     transferred_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

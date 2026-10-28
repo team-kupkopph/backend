@@ -36,6 +36,8 @@ from listings.serializers import (
     ListingCreateSerializer,
     ListingPatchSerializer,
     PetCreateSerializer,
+    PetPatchSerializer,
+    PetRemoveSerializer,
     StageUpdateSerializer,
 )
 from listings.stages import INDIVIDUAL_SKIP_NOTE, INDIVIDUAL_SKIPPED_STAGES, set_stage_state
@@ -734,8 +736,11 @@ def _fill_from_pet(fields, pet):
 class MyPetsView(APIView):
     """GET /me/pets — US-H3. The owner's own pets, newest first, each with its primary
     photo (or earliest-uploaded if none is primary) for the mobile My-pets tab.
+    `rehomed` (PQ2) is the read-only trace of pets this account rehomed through Kupkop: the name
+    and photo as they were at the transfer, never the new owner's later edits.
     POST /me/pets — AQ8 · an owner adds a pet they already have (before: the only Pet writer was
-    a placement Accept), so they can keep its details and rehome it later."""
+    a placement Accept), so they can keep its details and rehome it later. PQ3 · not a shelter:
+    its animals are listings (D7)."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -744,9 +749,16 @@ class MyPetsView(APIView):
             return {"pet_id": str(p.pk), "name": p.name, "species": p.species,
                     "photo_url": (ph.url if ph else None)}
         pets = request.user.pets.current().order_by("-created_at").prefetch_related("photos")
-        return Response({"results": [_repr(p) for p in pets]})
+        rehomed = (PetOwnershipHistory.objects.filter(from_account=request.user)
+                   .exclude(to_account=request.user).order_by("-transferred_at"))
+        return Response({"results": [_repr(p) for p in pets],
+                         "rehomed": [{"name": h.pet_name, "photo_url": h.photo_url or None,
+                                      "rehomed_at": h.transferred_at.isoformat()} for h in rehomed]})
 
     def post(self, request):
+        if request.user.account_type == "shelter":
+            return Response({"error": {"code": "not_for_shelters",
+                                       "message": "A shelter's animals are its listings"}}, status=403)
         s = PetCreateSerializer(data=request.data, context={"request": request})
         s.is_valid(raise_exception=True)
         d = s.validated_data
@@ -766,15 +778,39 @@ class MyPetsView(APIView):
         return Response({"pet_id": str(pet.pk)}, status=201)
 
 
+def _no_such_pet():
+    return Response({"error": {"code": "not_found", "message": "No such pet"}}, status=404)
+
+
+def _open_rehome_listing(pet):
+    return (AdoptionListing.objects.filter(rehome_pet=pet, status__in=OPEN_REHOME_STATUSES)
+            .only("pk", "status").first())
+
+
+#: PATCH body key → Pet column, for the fields an owner edits as typed.
+_PET_EDITABLE = {"name": "name", "species": "species", "breed": "breed", "sex": "sex",
+                 "birthdate": "date_of_birth", "color_markings": "color_markings",
+                 "size_category": "size_category", "spayed_neutered": "spayed_neutered",
+                 "temperament": "temperament", "medical_conditions": "medical_conditions",
+                 "vet_contact": "vet_contact"}
+
+
 class MyPetDetailView(APIView):
     """GET /me/pets/{id} — AQ8 · everything the owner entered, for the pet screen and for
-    prefilling a rehoming listing. Private: another account's pet, or an archived one, is a 404."""
+    prefilling a rehoming listing, plus its open rehoming listing if any. Private: another
+    account's pet, or an archived one, is a 404.
+    PATCH — PP12 · any subset; `photos` present replaces the set. The species can't change while
+    an open listing describes the animal (PP3).
+    DELETE — PP12 / PQ1 · archive with a reason (passed_away, given_away, other); never while an
+    open rehoming listing exists. The pet row is locked FIRST and the listing read after, so a
+    listing created concurrently (which locks the pet too) is either seen here or waits."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pet_id):
         pet = request.user.pets.current().prefetch_related("photos").filter(pk=pet_id).first()
         if pet is None:
-            return Response({"error": {"code": "not_found", "message": "No such pet"}}, status=404)
+            return _no_such_pet()
+        listing = _open_rehome_listing(pet)
         return Response({
             "pet_id": str(pet.pk), "name": pet.name, "species": pet.species,
             "breed": pet.breed or None, "sex": pet.sex or None,
@@ -782,7 +818,53 @@ class MyPetDetailView(APIView):
             "color_markings": pet.color_markings or None, "size_category": pet.size_category or None,
             "spayed_neutered": pet.spayed_neutered, "temperament": pet.temperament or None,
             "medical_conditions": pet.medical_conditions or None,
-            "vet_contact": pet.vet_contact or None, "photos": _pet_photo_urls(pet)})
+            "vet_contact": pet.vet_contact or None, "photos": _pet_photo_urls(pet),
+            "open_listing": ({"listing_id": str(listing.pk), "status": listing.status}
+                             if listing else None)})
+
+    def patch(self, request, pet_id):
+        with transaction.atomic():
+            pet = (Pet.objects.current().select_for_update()
+                   .filter(pk=pet_id, owner_account=request.user).first())
+            if pet is None:
+                return _no_such_pet()
+            s = PetPatchSerializer(data=request.data, context={"request": request, "pet": pet})
+            s.is_valid(raise_exception=True)
+            d = s.validated_data
+            if "species" in d and d["species"] != pet.species and _open_rehome_listing(pet):
+                return Response({"error": {"code": "pet_listed",
+                                           "message": "Withdraw this pet's listing to change the animal"}},
+                                status=409)
+            changed = [column for key, column in _PET_EDITABLE.items() if key in d]
+            for key, column in _PET_EDITABLE.items():
+                if key in d:
+                    setattr(pet, column, d[key])
+            pet.save(update_fields=[*changed, "updated_at"])
+            if "photos" in d:
+                pet.photos.all().delete()
+                photos = d["photos"]
+                flagged = next((i for i, p in enumerate(photos) if p.get("is_primary")), 0)
+                for i, photo in enumerate(photos):
+                    PetPhoto.objects.create(pet=pet, url=photo["file_url"], is_primary=(i == flagged))
+        return Response({"pet_id": str(pet.pk)})
+
+    def delete(self, request, pet_id):
+        s = PetRemoveSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        with transaction.atomic():
+            pet = (Pet.objects.current().select_for_update()
+                   .filter(pk=pet_id, owner_account=request.user).first())
+            if pet is None:
+                return _no_such_pet()
+            listing = _open_rehome_listing(pet)
+            if listing is not None:
+                return Response({"error": {"code": "pet_listed",
+                                           "message": "Withdraw this pet's listing first",
+                                           "details": {"listing_id": str(listing.pk)}}}, status=409)
+            pet.removed_at = timezone.now()
+            pet.removed_reason = s.validated_data["reason"]
+            pet.save(update_fields=["removed_at", "removed_reason", "updated_at"])
+        return Response(status=204)
 
 
 def _stage_move_refusal(inquiry, stage_key, state):
@@ -939,8 +1021,10 @@ def _pet_from_listing(listing, owner):
     if listing.rehome_pet_id:
         pet = Pet.objects.select_for_update().filter(pk=listing.rehome_pet_id).first()
         if pet is not None:
+            ph = _primary_photo(pet)
             PetOwnershipHistory.objects.create(pet=pet, from_account=pet.owner_account,
-                                               to_account=owner, listing=listing)
+                                               to_account=owner, listing=listing, pet_name=pet.name,
+                                               photo_url=ph.url if ph else "")
             pet.owner_account = owner
             pet.save(update_fields=["owner_account", "updated_at"])
             return pet
