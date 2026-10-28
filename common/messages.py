@@ -32,6 +32,11 @@ def compose_otp_email(purpose: str, code: str) -> tuple[str, str]:
         opener = "Your Kupkop PH password reset code is:"
         closer = ("If you didn't ask for this, ignore this message — your password stays "
                   "unchanged.")
+    elif purpose == "stepup":
+        subject = "Confirm it's you on Kupkop PH"
+        opener = "Your Kupkop PH code to confirm a sensitive action is:"
+        closer = ("If you didn't ask for this, someone may be using your account: change your "
+                  "password and your email's password.")
     elif purpose == "email":
         subject = "Confirm your new Kupkop PH email"
         opener = "Your Kupkop PH code to confirm this email address is:"
@@ -57,6 +62,12 @@ def mask_email(address: str) -> str:
     """`n***@example.com`: enough for the owner to recognise it, not enough to mail it."""
     local, _, domain = (address or "").partition("@")
     return f"{local[:1]}***@{domain}" if domain else "***"
+
+
+def mask_phone(number: str) -> str:
+    """`+6391***0000`: enough for the owner to recognise it, not the number."""
+    number = number or ""
+    return f"{number[:5]}***{number[-4:]}" if len(number) >= 10 else "***"
 
 
 def compose_email_changed_notice(new_address: str) -> tuple[str, str]:

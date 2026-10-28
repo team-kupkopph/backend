@@ -23,6 +23,10 @@ from accounts.views import (
                             RestoreView,
                             SignupView,
                             SocialAuthView,
+                            StepUpVerifyView,
+                            StepUpView,
+                            TwoFactorDisableView,
+                            TwoFactorEnableView,
 )
 
 urlpatterns = [
@@ -42,6 +46,10 @@ urlpatterns = [
     path("me", MeView.as_view()),
     path("me/settings", MeSettingsView.as_view()),
     path("me/export", MeExportView.as_view()),
+    path("me/step-up", StepUpView.as_view()),
+    path("me/step-up/verify", StepUpVerifyView.as_view()),
+    path("me/2fa/enable", TwoFactorEnableView.as_view()),
+    path("me/2fa/disable", TwoFactorDisableView.as_view()),
     path("me/email", MeEmailView.as_view()),
     path("me/email/verify", MeEmailVerifyView.as_view()),
     path("me/password", MePasswordView.as_view()),

@@ -132,6 +132,12 @@ class EmailChangeThrottle(AccountScopedThrottle):
     scope = "email_change"
 
 
+class StepUpThrottle(AccountScopedThrottle):
+    """T14a · POST /me/step-up mails or texts a code on demand. Per account (the caller is signed in),
+    so it cannot be used to spam an inbox, and a few retries for a slow message still fit."""
+    scope = "step_up"
+
+
 # --- US-K2 · the write paths Sprints 4-6 added without a scope (§12.4) ----------------
 class MediaPresignThrottle(AccountScopedThrottle):
     """Presign hands out upload credentials. Unthrottled it is free storage for anyone with
