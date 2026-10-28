@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.utils import timezone
 from rest_framework import serializers
 
 from listings.models import OWNER_REMOVE_REASONS, PetRemovedReason, Sex, SizeCategory, StageState
@@ -19,10 +20,11 @@ class PhotoSerializer(serializers.Serializer):
 SIZES = [c.value for c in SizeCategory]
 
 
-class PetFieldsSerializer(serializers.Serializer):
-    """The `pet` object in US-A2's create body. These map onto AdoptionListing's own
-    denormalized descriptive fields — not a `Pet` row (see listings/models.py::Pet's
-    docstring: a Pet can't exist without an owner, and there is no owner yet)."""
+class AnimalFieldsSerializer(serializers.Serializer):
+    """PP7 · the fields that describe an animal, written once. A `Pet` (POST/PATCH /me/pets) and an
+    adoption listing (the `pet{}` of POST /listings, and PATCH /listings/{id}) both describe the
+    animal with these, so the two can't drift on a limit or a rule. A name of only spaces is
+    trimmed to blank and refused; a birthdate can't be in the future (a typo, not an unborn pet)."""
     name = serializers.CharField(max_length=80)
     species = serializers.ChoiceField(choices=[c.value for c in Species])
     breed = serializers.CharField(max_length=80, required=False, allow_blank=True)
@@ -31,9 +33,26 @@ class PetFieldsSerializer(serializers.Serializer):
     # AD11 · what shelters list with, and what the detail's health tags read.
     size_category = serializers.ChoiceField(choices=SIZES, required=False, allow_blank=True)
     spayed_neutered = serializers.BooleanField(required=False, allow_null=True)
+    temperament = serializers.CharField(max_length=160, required=False, allow_blank=True)
+
+    def validate_birthdate(self, value):
+        if value is not None and value > timezone.localdate():
+            raise serializers.ValidationError("A birthdate can't be in the future.")
+        return value
+
+
+class PartialAnimalFieldsMixin(serializers.Serializer):
+    """The same fields for a PATCH: nothing is required. Listed first in the bases so it wins."""
+    name = serializers.CharField(max_length=80, required=False)
+    species = serializers.ChoiceField(choices=[c.value for c in Species], required=False)
+
+
+class PetFieldsSerializer(AnimalFieldsSerializer):
+    """The `pet` object in US-A2's create body. These map onto AdoptionListing's own
+    denormalized descriptive fields — not a `Pet` row (see listings/models.py::Pet's
+    docstring: a Pet can't exist without an owner, and there is no owner yet)."""
     vaccinated = serializers.BooleanField(required=False, allow_null=True)
     walkable = serializers.BooleanField(required=False)
-    temperament = serializers.CharField(max_length=160, required=False, allow_blank=True)
 
 
 class ListingCreateSerializer(serializers.Serializer):
@@ -46,25 +65,18 @@ class ListingCreateSerializer(serializers.Serializer):
     photos = PhotoSerializer(many=True, required=False, max_length=MAX_PHOTOS)
 
 
-class ListingPatchSerializer(serializers.Serializer):
+class ListingPatchSerializer(PartialAnimalFieldsMixin, AnimalFieldsSerializer):
     """Any subset (US-A2) — everything optional. Flat, not nested under `pet`, since a
     partial update naming only the fields that changed is simpler than requiring a
-    full pet sub-object just to edit, say, the fee."""
-    name = serializers.CharField(max_length=80, required=False)
-    species = serializers.ChoiceField(choices=[c.value for c in Species], required=False)
-    breed = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    full pet sub-object just to edit, say, the fee. The animal's fields are the shared ones."""
     sex = serializers.ChoiceField(choices=[c.value for c in Sex], required=False, allow_blank=True)
-    birthdate = serializers.DateField(required=False, allow_null=True)
     description = serializers.CharField(required=False, allow_blank=True)
     adoption_fee = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=ZERO,
                                             required=False)
     city = serializers.CharField(max_length=80, required=False)
     requirements = serializers.CharField(required=False, allow_blank=True)
-    size_category = serializers.ChoiceField(choices=SIZES, required=False, allow_blank=True)
-    spayed_neutered = serializers.BooleanField(required=False, allow_null=True)
     vaccinated = serializers.BooleanField(required=False, allow_null=True)
     walkable = serializers.BooleanField(required=False)
-    temperament = serializers.CharField(max_length=160, required=False, allow_blank=True)
     # AD9 · present = the whole new set (the first flagged primary, else the first); absent = untouched.
     photos = PhotoSerializer(many=True, required=False, max_length=MAX_PHOTOS)
 
@@ -99,18 +111,10 @@ class StageUpdateSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True)
 
 
-class PetCreateSerializer(serializers.Serializer):
+class PetCreateSerializer(AnimalFieldsSerializer):
     """AQ8 · POST /me/pets. The fields that matter to the next owner travel with the Pet when it
     is rehomed (vet contact, medical notes, temperament...)."""
-    name = serializers.CharField(max_length=80)
-    species = serializers.ChoiceField(choices=[c.value for c in Species])
-    breed = serializers.CharField(max_length=80, required=False, allow_blank=True)
-    sex = serializers.ChoiceField(choices=[c.value for c in Sex], required=False)
-    birthdate = serializers.DateField(required=False, allow_null=True)
     color_markings = serializers.CharField(max_length=120, required=False, allow_blank=True)
-    size_category = serializers.ChoiceField(choices=SIZES, required=False, allow_blank=True)
-    spayed_neutered = serializers.BooleanField(required=False, allow_null=True)
-    temperament = serializers.CharField(max_length=160, required=False, allow_blank=True)
     medical_conditions = serializers.CharField(required=False, allow_blank=True)
     vet_contact = serializers.CharField(max_length=160, required=False, allow_blank=True)
     photos = PhotoSerializer(many=True, required=False, max_length=MAX_PHOTOS)
@@ -128,12 +132,10 @@ class PetCreateSerializer(serializers.Serializer):
         return photos
 
 
-class PetPatchSerializer(PetCreateSerializer):
+class PetPatchSerializer(PartialAnimalFieldsMixin, PetCreateSerializer):
     """PP12 · PATCH /me/pets/{id}: any subset. `photos` present = the whole new set (the first flagged
     primary, else the first); absent = untouched. A photo the pet already holds is kept even when it
     isn't this account's upload: an adopted pet's photos are its previous poster's (PP5)."""
-    name = serializers.CharField(max_length=80, required=False)
-    species = serializers.ChoiceField(choices=[c.value for c in Species], required=False)
 
     def validate_photos(self, photos):
         held = set(self.context["pet"].photos.values_list("url", flat=True))

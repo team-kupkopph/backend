@@ -13,6 +13,7 @@ from common.analytics import emit
 from common.cities import city_variants
 from listings.fees import fee_cap_for
 from listings.models import (
+    OPEN_REHOME_STATUSES,
     AdoptionInquiry,
     AdoptionListing,
     AdoptionListingPhoto,
@@ -61,11 +62,6 @@ PAGE_SIZE = 20
 # D12 · a rescue's draft is its handoff in progress.
 LIVE_HANDOFF_STATUSES = (ListingStatus.DRAFT, ListingStatus.AVAILABLE,
                          ListingStatus.PENDING, ListingStatus.ADOPTED)
-
-# PP1 · a pet's rehoming listing is OPEN while it can still lead to a handoff. An ADOPTED one is
-# finished: after a transfer it belongs to the previous owner's history, and the new owner must be
-# free to rehome the same pet again.
-OPEN_REHOME_STATUSES = (ListingStatus.DRAFT, ListingStatus.AVAILABLE, ListingStatus.PENDING)
 
 
 def _listing_removed():
@@ -142,13 +138,19 @@ def _set_photos(listing, photos):
                                             is_primary=(i == flagged))
 
 
+def _sex_out(sex):
+    """PP16 · one way to say "unknown" in a response: null. A pet stores it as `unknown` (the DDL's
+    default) and a listing as blank; the API never shows either."""
+    return None if sex in ("", Sex.UNKNOWN) else sex
+
+
 def _photo_urls(listing):
     return [p.url for p in sorted(listing.photos.all(), key=lambda p: not p.is_primary)]
 
 
 def _pet_fields(listing):
     return {"name": listing.name, "species": listing.species, "breed": listing.breed or None,
-            "sex": listing.sex or None,
+            "sex": _sex_out(listing.sex),
             "birthdate": listing.date_of_birth.isoformat() if listing.date_of_birth else None,
             "size_category": listing.size_category or None,
             "spayed_neutered": listing.spayed_neutered,
@@ -813,7 +815,7 @@ class MyPetDetailView(APIView):
         listing = _open_rehome_listing(pet)
         return Response({
             "pet_id": str(pet.pk), "name": pet.name, "species": pet.species,
-            "breed": pet.breed or None, "sex": pet.sex or None,
+            "breed": pet.breed or None, "sex": _sex_out(pet.sex),
             "birthdate": pet.date_of_birth.isoformat() if pet.date_of_birth else None,
             "color_markings": pet.color_markings or None, "size_category": pet.size_category or None,
             "spayed_neutered": pet.spayed_neutered, "temperament": pet.temperament or None,
