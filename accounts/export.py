@@ -30,7 +30,10 @@ def _dt(value):
     return value.isoformat() if value else None
 
 
-EXPORT_FORMAT = "kupkop.export.v2"
+# v3 (My Pets review step 7): `pets` reads through the app's own pet fields, so `date_of_birth`
+# is now `birthdate`, an unknown sex is null, and each pet carries `photos`, `ownership_history`,
+# `removed_at` / `removed_reason` and every column it has; `rehomed_pets` is new.
+EXPORT_FORMAT = "kupkop.export.v3"
 
 
 # ------------------------------------------------------------------------------ sections
@@ -86,26 +89,28 @@ def _identities(account):
 
 
 def _pets(account):
+    """Every pet the caller owns, archived ones included (they are still the caller's data), each
+    read through the same `pet_fields` the app's pet screen uses (PP6), with its photos and its
+    changes of hands as the caller may see them (PP18)."""
     from listings.models import Pet
-    return [
-        {"pet_id": str(p.pet_id), "name": p.name, "species": p.species,
-         "breed": p.breed or None, "sex": p.sex or None,
-         "date_of_birth": p.date_of_birth.isoformat() if p.date_of_birth else None,
-         "color_markings": p.color_markings or None,
-         "size_category": p.size_category or None,
-         "spayed_neutered": p.spayed_neutered,
-         "microchip_no": p.microchip_no or None,
-         "feeding_routine": p.feeding_routine or None,
-         "allergies": p.allergies or None, "medications": p.medications or None,
-         "medical_conditions": p.medical_conditions or None,
-         "temperament": p.temperament or None,
-         "vet_contact": p.vet_contact or None,
-         "emergency_contact": p.emergency_contact or None,
-         "removed_at": _dt(p.removed_at),
-         "removed_reason": p.removed_reason or None,
-         "created_at": _dt(p.created_at)}
-        for p in Pet.objects.filter(owner_account=account)
-    ]
+    from listings.representations import pet_fields, pet_ownership_history
+    pets = (Pet.objects.filter(owner_account=account).order_by("created_at")
+            .prefetch_related("photos", "ownership_history"))
+    return [{**pet_fields(p),
+             "ownership_history": pet_ownership_history(p, account),
+             "removed_at": _dt(p.removed_at), "removed_reason": p.removed_reason or None,
+             "created_at": _dt(p.created_at), "updated_at": _dt(p.updated_at)}
+            for p in pets]
+
+
+def _rehomed_pets(account):
+    """PQ2 · pets the caller rehomed through Kupkop: the name and photo frozen at the transfer, and
+    the caller's own listing. Never the new owner, and never the pet as it is now (theirs)."""
+    from listings.models import PetOwnershipHistory
+    from listings.representations import rehomed_row
+    rows = (PetOwnershipHistory.objects.filter(from_account=account).exclude(to_account=account)
+            .order_by("transferred_at"))
+    return [{**rehomed_row(h), "listing_id": str(h.listing_id) if h.listing_id else None} for h in rows]
 
 
 def _reports(account):
@@ -367,6 +372,7 @@ SECTIONS = {
     "verifications": _verifications,
     "devices": _devices,
     "pets": _pets,
+    "rehomed_pets": _rehomed_pets,
     "reports": _reports,
     "rescue_offers": _rescue_offers,
     "rescue_claims": _rescue_claims,

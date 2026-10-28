@@ -135,10 +135,10 @@ def _entries():
         ("listings.Pet", "owner_account"):
             E("pets", Delete()),                    # AS2 · a privately owned pet is the owner's data
         ("listings.PetOwnershipHistory", "from_account"):
-            E(Excluded("a transfer record on a pet; the pet itself is exported under `pets`"),
+            E("rehomed_pets",                       # PQ2 · the pets the caller rehomed
               Keep("who the animal came from; goes with the pet if its owner is erased")),
         ("listings.PetOwnershipHistory", "to_account"):
-            E(Excluded("a transfer record on a pet; the pet itself is exported under `pets`"),
+            E(Excluded("exported with the pet, as `pets[].ownership_history` (PP18)"),
               Keep("who the animal went to; goes with the pet if its owner is erased")),
         # --------------------------------------------------------------- moderation
         ("moderation.ModerationFlag", "reporter_account"):
