@@ -29,6 +29,12 @@ class ListingStatus(models.TextChoices):
     DRAFT = "draft"
 
 
+# PP1 · a pet's rehoming listing is OPEN while it can still lead to a handoff. An ADOPTED one is
+# finished: after a transfer it belongs to the previous owner's history, and the new owner must be
+# free to rehome the same pet again. PP15 · the database holds "one open listing per pet" too.
+OPEN_REHOME_STATUSES = (ListingStatus.DRAFT, ListingStatus.AVAILABLE, ListingStatus.PENDING)
+
+
 class InquiryStatus(models.TextChoices):
     ACTIVE = "active"
     ADOPTED = "adopted"
@@ -141,6 +147,14 @@ class Pet(models.Model):
 
     class Meta:
         db_table = "pet"
+        # PP15 · the rules the serializers keep, held by the database too. There is deliberately no
+        # "birthdate not in the future" CHECK: it would need current_date, which Postgres treats as
+        # non-immutable in a constraint (a dump can fail to restore). The serializer keeps that one.
+        constraints = [
+            models.CheckConstraint(condition=models.Q(name__regex=r"\S"), name="ck_pet_name_not_blank"),
+            models.CheckConstraint(condition=models.Q(weight_kg__isnull=True) | models.Q(weight_kg__gt=0),
+                                   name="ck_pet_weight_positive"),
+        ]
 
 
 class PetPhoto(models.Model):
@@ -152,6 +166,10 @@ class PetPhoto(models.Model):
 
     class Meta:
         db_table = "pet_photo"
+        constraints = [   # PP15 · at most one primary photo per pet
+            models.UniqueConstraint(fields=["pet"], condition=models.Q(is_primary=True),
+                                    name="uq_pet_photo_one_primary"),
+        ]
 
 
 class PetOwnershipHistory(models.Model):
@@ -228,6 +246,11 @@ class AdoptionListing(models.Model):
 
     class Meta:
         db_table = "adoption_listing"
+        constraints = [
+            models.UniqueConstraint(fields=["rehome_pet"],
+                                    condition=models.Q(status__in=[s.value for s in OPEN_REHOME_STATUSES]),
+                                    name="uq_adoption_listing_one_open_rehome"),
+        ]
 
 
 class AdoptionListingPhoto(models.Model):
