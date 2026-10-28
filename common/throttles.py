@@ -125,6 +125,13 @@ class PasswordChangeThrottle(AccountScopedThrottle):
     scope = "password_change"
 
 
+class EmailChangeThrottle(AccountScopedThrottle):
+    """T13 · POST /me/email takes the CURRENT password and mails a code to an address of the
+    caller's choosing: a password oracle for a stolen token, and a mail-sending primitive. Per
+    account, counting every attempt."""
+    scope = "email_change"
+
+
 # --- US-K2 · the write paths Sprints 4-6 added without a scope (§12.4) ----------------
 class MediaPresignThrottle(AccountScopedThrottle):
     """Presign hands out upload credentials. Unthrottled it is free storage for anyone with

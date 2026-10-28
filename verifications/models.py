@@ -14,6 +14,7 @@ class OtpPurpose(models.TextChoices):
     SIGNUP = "signup"
     PHONE = "phone"
     RESET = "reset"
+    EMAIL = "email"         # T13 · a candidate new sign-in address, sent to that address
     RESTORE = "restore"     # AS1 · a bearer token, not a typed code; see accounts/lifecycle.py
 
 

@@ -32,6 +32,11 @@ def compose_otp_email(purpose: str, code: str) -> tuple[str, str]:
         opener = "Your Kupkop PH password reset code is:"
         closer = ("If you didn't ask for this, ignore this message — your password stays "
                   "unchanged.")
+    elif purpose == "email":
+        subject = "Confirm your new Kupkop PH email"
+        opener = "Your Kupkop PH code to confirm this email address is:"
+        closer = ("If you didn't ask to use this address on Kupkop PH, ignore this message — "
+                  "nothing will change.")
     else:
         # A purpose the code does not know about is a programming error, not a runtime one.
         # Better to send SOMETHING than to swallow the send, so the user still gets in and
@@ -44,5 +49,26 @@ def compose_otp_email(purpose: str, code: str) -> tuple[str, str]:
             f"It expires in {ttl} minutes. Please don't share it with anyone — Kupkop PH "
             f"staff will never ask you for it.\n\n"
             f"{closer}\n\n"
+            f"— Kupkop PH")
+    return subject, body
+
+
+def mask_email(address: str) -> str:
+    """`n***@example.com`: enough for the owner to recognise it, not enough to mail it."""
+    local, _, domain = (address or "").partition("@")
+    return f"{local[:1]}***@{domain}" if domain else "***"
+
+
+def compose_email_changed_notice(new_address: str) -> tuple[str, str]:
+    """`(subject, body)` told to the OLD address when the account's email is changed (T13).
+
+    It exists so that a change made from a hijacked session cannot be silent: the person who still
+    owns this inbox is told, with the one thing that helps (reset the password, which also ends
+    every session). The new address is masked, because the reader may not be who changed it."""
+    subject = "Your Kupkop PH email was changed"
+    body = (f"The email on your Kupkop PH account was just changed to {mask_email(new_address)}.\n\n"
+            f"If that was you, there is nothing to do.\n\n"
+            f"If it wasn't, someone else has your account. Use \"Forgot password\" on the sign-in "
+            f"screen with the new address, or contact us, and change your password straight away.\n\n"
             f"— Kupkop PH")
     return subject, body

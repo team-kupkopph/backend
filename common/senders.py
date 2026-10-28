@@ -31,6 +31,11 @@ class Sender:
     def send(self, *, channel, to, code, purpose):
         raise NotImplementedError
 
+    def send_notice(self, *, to, subject, body):
+        """A plain-text notice with no code in it (T13: "your email was changed"). Best effort:
+        a notice that cannot be sent must never undo the action it reports."""
+        raise NotImplementedError
+
 
 class ConsoleSender(Sender):
     """The dev stub. Never talks to the network.
@@ -45,6 +50,12 @@ class ConsoleSender(Sender):
         logger.info("OTP via %s to %s (code hidden in logs)", channel, masked)
         if settings.DEBUG:
             print(f"[DEV OTP] {channel} {to}: {code}", flush=True)
+
+
+    def send_notice(self, *, to, subject, body):
+        logger.info("notice via email to %s (%s)", (to or "")[:2] + "***", subject)
+        if settings.DEBUG:
+            print(f"[DEV NOTICE] email {to}: {subject}\n{body}", flush=True)
 
 
 class SesEmailSender(Sender):
@@ -92,6 +103,20 @@ class SesEmailSender(Sender):
             logger.warning({"event": "ses_send_failed", "to": (to or "")[:2] + "***",
                             "purpose": purpose}, exc_info=True)
             self._fallback.send(channel=channel, to=to, code=code, purpose=purpose)
+
+
+    def send_notice(self, *, to, subject, body):
+        try:
+            self._client().send_email(
+                Source=settings.EMAIL_FROM,
+                Destination={"ToAddresses": [to]},
+                Message={"Subject": {"Data": subject, "Charset": "UTF-8"},
+                         "Body": {"Text": {"Data": body, "Charset": "UTF-8"}}},
+            )
+            logger.info("notice via email to %s (sent via SES)", (to or "")[:2] + "***")
+        except Exception:
+            logger.warning({"event": "ses_notice_failed", "to": (to or "")[:2] + "***"}, exc_info=True)
+            self._fallback.send_notice(to=to, subject=subject, body=body)
 
 
 class ResendSender(Sender):
@@ -154,6 +179,23 @@ class ResendSender(Sender):
             logger.warning({"event": "resend_send_failed", "to": masked,
                             "purpose": purpose, "detail": str(exc)[:200]})
             self._fallback.send(channel=channel, to=to, code=code, purpose=purpose)
+
+    def send_notice(self, *, to, subject, body):
+        masked = (to or "")[:2] + "***"
+        try:
+            response = requests.post(
+                self.ENDPOINT,
+                headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"from": settings.EMAIL_FROM, "to": [to], "subject": subject, "text": body},
+                timeout=self.TIMEOUT_SECONDS,
+            )
+            if not response.ok:
+                raise RuntimeError(f"resend responded {response.status_code}")
+            logger.info("notice via email to %s (sent via Resend)", masked)
+        except Exception as exc:
+            logger.warning({"event": "resend_notice_failed", "to": masked, "detail": str(exc)[:200]})
+            self._fallback.send_notice(to=to, subject=subject, body=body)
 
 
 def get_sender() -> Sender:

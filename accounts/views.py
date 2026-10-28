@@ -12,8 +12,10 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from accounts.models import Account, AccountSettings, AccountStatus
+from accounts.notices import notify_email_changed
 from accounts.serializers import (
     AccountTokenRefreshSerializer,
+    EmailChangeSerializer,
     EmailSerializer,
     EmailVerifySerializer,
     MeSettingsSerializer,
@@ -29,6 +31,7 @@ from common.otp import CodeExpired, CodeInvalid, CodeLocked, check_code, issue_c
 from common.phone import INVALID_PH_MOBILE_MESSAGE, normalize_ph_mobile
 from common.storage import PUBLIC, delete_object
 from common.throttles import (
+    EmailChangeThrottle,
     ExportRequestThrottle,
     LoginIdentifierThrottle,
     LoginIpThrottle,
@@ -458,6 +461,73 @@ class MePasswordView(APIView):
         acc.sessions_revoked_at = timezone.now() - timedelta(seconds=1)
         acc.save(update_fields=["password_hash", "sessions_revoked_at", "updated_at"])
         return Response(issue_session(acc))
+
+
+class MeEmailView(APIView):
+    """T13 (AS6) · POST /me/email {new_email, password} — start changing the sign-in email.
+
+    The code goes to the NEW address and is kept with the code row; the account keeps its current
+    email until `MeEmailVerifyView` sees the code come back. See `test_email_change.py` for why each
+    rule is here."""
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [EmailChangeThrottle]
+
+    def post(self, request):
+        acc = request.user
+        s = EmailChangeSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        if not acc.password_hash:
+            return Response({"error": {"code": "no_password",
+                                       "message": "This account signs in with Google or Apple. "
+                                                  "Use Forgot password to set a password first."}},
+                            status=409)
+        if not acc.check_password(s.validated_data["password"]):
+            return Response({"error": {"code": "invalid_password",
+                                       "message": "That isn't your current password.",
+                                       "field": "password"}}, status=400)
+        new_email = s.validated_data["new_email"].strip()
+        if new_email.lower() == acc.email.lower():
+            return Response({"error": {"code": "email_unchanged",
+                                       "message": "That is already your email.",
+                                       "field": "new_email"}}, status=400)
+        # An address somebody already uses answers exactly like a free one, with the same code row
+        # and the same attempts budget, and no mail: the response is not an oracle for who has an
+        # account. (`email` is case-insensitive in the database, so this is too.)
+        taken = Account.objects.filter(email=new_email).exclude(pk=acc.pk).exists()
+        issue_code(acc, channel="email", purpose="email", target=new_email, deliver=not taken)
+        return Response({}, status=202)
+
+
+class MeEmailVerifyView(APIView):
+    """T13 · POST /me/email/verify {code} — the code from the NEW inbox swaps the email, revokes
+    every other session, and tells the old address."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        acc = request.user
+        try:
+            row = verify_code(acc, purpose="email", code=request.data.get("code", ""))
+        except (CodeInvalid, CodeExpired, CodeLocked) as exc:
+            return _otp_error_response(exc)
+        new_email = row.target
+        taken = Response({"error": {"code": "email_taken", "message": "That email can't be used"}},
+                         status=409)
+        # The code is spent either way: a lost race must start over, not retry the same address.
+        if not new_email or Account.objects.filter(email=new_email).exclude(pk=acc.pk).exists():
+            return taken
+        old_email = acc.email
+        try:
+            with transaction.atomic():
+                acc.email = new_email
+                acc.email_verified_at = timezone.now()           # this address was just proven
+                # Same second-granular revocation as the password change: every session issued
+                # before now dies, the tokens minted below for this device do not.
+                acc.sessions_revoked_at = timezone.now() - timedelta(seconds=1)
+                acc.save(update_fields=["email", "email_verified_at", "sessions_revoked_at", "updated_at"])
+        except IntegrityError:
+            return taken
+        notify_email_changed(old_email, new_email)
+        return Response({**issue_session(acc), "email": acc.email})
 
 
 class MeExportView(APIView):
