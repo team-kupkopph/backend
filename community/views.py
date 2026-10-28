@@ -10,7 +10,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Account, AccountStatus
+from accounts.models import Account
+from accounts.visibility import account_is_public, public_account_q
 from common.analytics import emit
 from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCreateThrottle
 from notifications.service import notify
@@ -351,10 +352,10 @@ class StoriesView(APIView):
         return [StoryCreateThrottle()] if self.request.method == "POST" else []
 
     def get(self, request):
-        # US-N1 · the feed drops a deleted author's stories (the rows survive for the
-        # welfare record; the public surface does not show them).
+        # US-N1 / AS5 · the feed drops a deleted OR suspended author's stories (the rows survive for the
+        # welfare record and come back on reinstatement; the public surface does not show them).
         qs = (StoryPost.objects.filter(status=StoryStatus.PUBLISHED)
-              .exclude(author_account__status=AccountStatus.DELETED)
+              .filter(public_account_q("author_account__"))
               .select_related("author_account")
               .prefetch_related("photos", "author_account__addresses")
               .annotate(_rcount=Count("reactions")).order_by("-created_at"))
@@ -404,8 +405,8 @@ class StoryDetailView(APIView):
         story = (StoryPost.objects.select_related("author_account")
                  .prefetch_related("photos", "author_account__addresses")
                  .filter(pk=story_id).first())
-        if story is None:
-            return _err("not_found", "No such story.", 404)
+        if story is None or not account_is_public(story.author_account):
+            return _err("not_found", "No such story.", 404)      # AS5: a suspended or deleted author's story is gone for everyone
         is_author = (request.user and request.user.is_authenticated
                      and request.user.pk == story.author_account_id)
         if story.status == StoryStatus.HIDDEN and not is_author:
@@ -425,7 +426,8 @@ class StoryReactionView(APIView):
         return StoryReaction.objects.filter(story=story).count()
 
     def post(self, request, story_id):
-        story = StoryPost.objects.filter(pk=story_id, status=StoryStatus.PUBLISHED).first()
+        story = (StoryPost.objects.filter(pk=story_id, status=StoryStatus.PUBLISHED)
+                 .filter(public_account_q("author_account__")).first())
         if story is None:
             return _err("not_found", "No such story.", 404)
         _, created = StoryReaction.objects.get_or_create(story=story, account=request.user)
