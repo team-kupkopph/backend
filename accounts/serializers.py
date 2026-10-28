@@ -83,7 +83,9 @@ def me_repr(account):
             # X11 · the city had no read path, so a new phone or a reinstall showed "Set your
             # city" while the server had it. City + barangay only (§12.5): never a street
             # address or coordinates, even when a shelter's address carries them.
-            "location": _location_repr(account)}
+            "location": _location_repr(account),
+            # T14a · opt-in step-up for the five sensitive routes (accounts/stepup.py).
+            "two_factor_enabled": account.two_factor_enabled}
 
 
 def _location_repr(account):

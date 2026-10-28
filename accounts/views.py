@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from accounts import stepup
 from accounts.models import Account, AccountSettings, AccountStatus
 from accounts.notices import notify_email_changed
 from accounts.serializers import (
@@ -27,6 +28,7 @@ from accounts.serializers import (
 )
 from accounts.sessions import SessionRefused, can_hold_session, can_restore, issue_session
 from common import otp
+from common.messages import mask_email, mask_phone
 from common.otp import CodeExpired, CodeInvalid, CodeLocked, check_code, issue_code, verify_code
 from common.phone import INVALID_PH_MOBILE_MESSAGE, normalize_ph_mobile
 from common.storage import PUBLIC, delete_object
@@ -45,6 +47,7 @@ from common.throttles import (
     PasswordForgotIpThrottle,
     RestoreIpThrottle,
     SignupIpThrottle,
+    StepUpThrottle,
 )
 from common.uploads import own_upload_url_error
 
@@ -353,6 +356,12 @@ def _drop_replaced_photo(account, old_url):
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def get_permissions(self):
+        # T14a · only DELETE is a sensitive action; reading and editing the profile never ask for a code.
+        if self.request.method == "DELETE":
+            return [IsAuthenticated(), stepup.StepUpRequired()]
+        return super().get_permissions()
+
     def get(self, request):
         return Response(me_repr(request.user))
 
@@ -431,7 +440,7 @@ class MePasswordView(APIView):
     Every OTHER session is revoked (a password change is what you do when you fear someone else
     has the account) but the response carries fresh tokens for THIS device, so the caller is not
     signed out of the phone they just did it on."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, stepup.StepUpRequired]
     throttle_classes = [PasswordChangeThrottle]
 
     def post(self, request):
@@ -469,7 +478,7 @@ class MeEmailView(APIView):
     The code goes to the NEW address and is kept with the code row; the account keeps its current
     email until `MeEmailVerifyView` sees the code come back. See `test_email_change.py` for why each
     rule is here."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, stepup.StepUpRequired]
     throttle_classes = [EmailChangeThrottle]
 
     def post(self, request):
@@ -530,6 +539,68 @@ class MeEmailVerifyView(APIView):
         return Response({**issue_session(acc), "email": acc.email})
 
 
+class StepUpView(APIView):
+    """T14a · POST /me/step-up {channel?: "email"|"sms"} — send a code to a VERIFIED channel.
+
+    The reply carries only a masked destination: this route is for the signed-in owner, but it must
+    never become a way to read the full address or number back."""
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [StepUpThrottle]
+
+    def post(self, request):
+        acc = request.user
+        channel = request.data.get("channel", "email")
+        if channel == "sms" and acc.phone and acc.phone_verified_at:
+            issue_code(acc, channel="sms", purpose="stepup")
+            return Response({"sent_to": mask_phone(acc.phone)}, status=202)
+        if channel == "email" and acc.email_verified_at:
+            issue_code(acc, channel="email", purpose="stepup")
+            return Response({"sent_to": mask_email(acc.email)}, status=202)
+        # Never fall back to the other channel silently: the person asked for one, and a code that
+        # arrives somewhere they did not expect is how a confused user ends up locked out.
+        return Response({"error": {"code": "no_verified_channel",
+                                   "message": "There's no verified " + ("phone" if channel == "sms" else "email")
+                                              + " to send a code to."}}, status=409)
+
+
+class StepUpVerifyView(APIView):
+    """T14a · POST /me/step-up/verify {code} -> {step_up_token, expires_in}."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        acc = request.user
+        try:
+            verify_code(acc, purpose="stepup", code=request.data.get("code", ""))
+        except (CodeInvalid, CodeExpired, CodeLocked) as exc:
+            return _otp_error_response(exc)
+        return Response({"step_up_token": stepup.issue_token(acc), "expires_in": stepup.TTL_SECONDS})
+
+
+class TwoFactorEnableView(APIView):
+    """T14a · POST /me/2fa/enable. Needs a verified proof FIRST, which shows the code channel works
+    before the account depends on it (a typo'd email would otherwise lock the owner out of their own
+    export and delete)."""
+    permission_classes = [IsAuthenticated, stepup.StepUpProof]
+
+    def post(self, request):
+        acc = request.user
+        acc.two_factor_enabled = True
+        acc.save(update_fields=["two_factor_enabled", "updated_at"])
+        return Response({"two_factor_enabled": True})
+
+
+class TwoFactorDisableView(APIView):
+    """T14a · POST /me/2fa/disable. Also needs a proof: turning the protection off is the first thing
+    someone with a stolen session would do."""
+    permission_classes = [IsAuthenticated, stepup.StepUpProof]
+
+    def post(self, request):
+        acc = request.user
+        acc.two_factor_enabled = False
+        acc.save(update_fields=["two_factor_enabled", "updated_at"])
+        return Response({"two_factor_enabled": False})
+
+
 class MeExportView(APIView):
     """US-N3 · GET /me/export — RA 10173 portability, synchronously (D-S7-2).
 
@@ -537,7 +608,7 @@ class MeExportView(APIView):
     OS share sheet without inventing a filename. The contents rule lives in
     `accounts/export.py`: the caller's data and nobody else's.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, stepup.StepUpRequired]
     throttle_classes = [ExportRequestThrottle]
 
     def get(self, request):
