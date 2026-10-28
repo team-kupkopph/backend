@@ -1,5 +1,7 @@
 from django.db.models import Q
 
+from accounts.visibility import public_account_q
+
 
 def public_poster_q():
     """The public-visibility predicate for a listing's poster (§3.5): a **Verified
@@ -33,11 +35,10 @@ def account_is_verified_member(account):
 
 def listing_is_public(listing):
     """AD16 · whether people other than its poster may see `listing`: its poster passes
-    public_poster_q(), the account isn't deleted (US-N1) and no takedown holds it (AD7). The browse feed has always filtered on
+    public_poster_q(), the account is publicly visible (active: not suspended, not deleted; AS5) and no takedown holds it (AD7). The browse feed has always filtered on
     this. Detail and inquiry now do too, so a link an unverified poster shares off-platform leads
     nowhere."""
-    from accounts.models import AccountStatus
     from listings.models import AdoptionListing
     return (AdoptionListing.objects.filter(pk=listing.pk, hidden_at__isnull=True)
-            .exclude(posted_by__status=AccountStatus.DELETED)
+            .filter(public_account_q("posted_by__"))
             .filter(public_poster_q()).exists())

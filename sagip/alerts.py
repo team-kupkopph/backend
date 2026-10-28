@@ -11,7 +11,8 @@ from collections import Counter
 from django.db.models import Q
 from django.utils import timezone
 
-from accounts.models import Account, AccountStatus
+from accounts.models import Account
+from accounts.visibility import public_account_q
 from common.cities import city_variants
 from notifications.models import Notification
 from notifications.service import notify
@@ -51,7 +52,7 @@ def verified_in_city(city):
     can_act = (Q(capabilities__capability="rescuer", capabilities__status="approved")
                | Q(verifications__type="shelter_org", verifications__status="approved"))
     return (Account.objects
-            .filter(same_city, can_act, addresses__is_primary=True, status=AccountStatus.ACTIVE)
+            .filter(same_city, can_act, public_account_q(), addresses__is_primary=True)
             .distinct())
 
 

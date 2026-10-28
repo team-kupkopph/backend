@@ -8,6 +8,7 @@ verification rows would multiply that count by the number of approved verificati
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
+from accounts.visibility import public_account_q
 from verifications.models import VerificationRequest
 from volunteer.models import ShiftStatus, VolunteerShift
 
@@ -20,6 +21,6 @@ def _verified_org():
 def public_shifts():
     return (VolunteerShift.objects
             .filter(status__in=[ShiftStatus.OPEN, ShiftStatus.FULL],
-                    starts_at__gt=timezone.now(),
-                    shelter_account__status="active")
+                    starts_at__gt=timezone.now())
+            .filter(public_account_q("shelter_account__"))
             .filter(_verified_org()))

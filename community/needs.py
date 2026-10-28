@@ -13,7 +13,8 @@ before the lock (that was the double-count: AW1).
 from django.db import transaction
 from django.utils import timezone
 
-from accounts.models import Account, AccountStatus
+from accounts.models import Account
+from accounts.visibility import public_account_q
 from verifications.models import VerificationRequest
 
 from .models import NeedPledge, NeedStatus, PledgeStatus, ShelterNeed
@@ -53,8 +54,7 @@ def live_shelter_ids():
     shelter, or one still awaiting approval, is not live."""
     approved = VerificationRequest.objects.filter(type="shelter_org", status="approved")
     return (Account.objects
-            .filter(account_type="shelter", status=AccountStatus.ACTIVE,
-                    pk__in=approved.values("account_id"))
+            .filter(public_account_q(), account_type="shelter", pk__in=approved.values("account_id"))
             .values_list("pk", flat=True))
 
 

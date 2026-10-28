@@ -4,7 +4,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import AccountStatus, Address
+from accounts.models import Address
+from accounts.visibility import public_account_q
 from common.throttles import DonationQrUploadThrottle
 from listings.models import AdoptionInquiry, InquiryKind, ListingStatus
 from shelter.models import DonationQr, QrStatus, ShelterProfile
@@ -375,7 +376,7 @@ class ShelterDonationQrPublicView(APIView):
         # served to donors. Reads as the same 404 "No such shelter" as any non-org, so it leaks nothing.
         approved = VerificationRequest.objects.filter(
             account_id=account_id, type="shelter_org", status="approved",
-            account__status=AccountStatus.ACTIVE).exists()
+        ).filter(public_account_q("account__")).exists()
         if not approved:
             return Response({"error": {"code": "not_found", "message": "No such shelter"}},
                             status=404)

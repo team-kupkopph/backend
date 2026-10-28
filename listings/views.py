@@ -7,7 +7,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Account, AccountStatus, Address
+from accounts.models import Account, Address
+from accounts.visibility import public_account_q
 from common.analytics import emit
 from common.cities import city_variants
 from listings.fees import fee_cap_for
@@ -223,9 +224,9 @@ class ListingsView(APIView):
                 card["removed_by_moderation"] = item.hidden_at is not None   # AD7
                 cards.append(card)
             return Response({"results": cards, "next": next_page})
-        # US-N1 · a deleted account's listings leave every public surface at once.
+        # US-N1 / AS5 · a deleted OR suspended account's listings leave every public surface at once.
         qs = (AdoptionListing.objects.filter(status="available", hidden_at__isnull=True)
-              .exclude(posted_by__status=AccountStatus.DELETED)
+              .filter(public_account_q("posted_by__"))
               .filter(public_poster_q()).select_related("posted_by").distinct().order_by("-created_at"))
         city = request.query_params.get("city")
         if city:
@@ -1036,7 +1037,7 @@ class ShortlistListingsView(APIView):
         qs = (AdoptionListing.objects
               .filter(preferences__in=saved,
                       status__in=(ListingStatus.AVAILABLE, ListingStatus.PENDING, ListingStatus.ADOPTED))
-              .exclude(posted_by__status=AccountStatus.DELETED)
+              .filter(public_account_q("posted_by__"))
               .filter(public_poster_q()).select_related("posted_by").distinct()
               .annotate(saved_at=Max("preferences__updated_at", filter=Q(preferences__account=request.user)))
               .order_by("-saved_at"))
