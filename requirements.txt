@@ -41,7 +41,7 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.2.4
 PyYAML==6.0.3
 pytest==9.1.1
-pytest-django==4.12.0
+pytest-django==4.14.0
 # US-Q1 · §15.4 "coverage tracked as a trend, with a hard gate on the welfare-critical
 # packages". Config in pyproject.toml; the per-package gate is dev/coverage_gate.py.
 pytest-cov==7.1.0
