@@ -151,8 +151,8 @@ class ReportsCreateView(APIView):
         pet_id = d.get("pet_id")
         pet = None
         if pet_id is not None:
-            from listings.models import Pet
-            pet = Pet.objects.current().filter(pk=pet_id, owner_account=request.user).first()
+            from pets.service import find_own_pet
+            pet = find_own_pet(request.user, pet_id)
             if pet is not None:
                 for field in ("breed", "color_markings", "size_category", "sex"):
                     if not describables[field]:
@@ -636,7 +636,7 @@ class ReportDetailView(APIView):
             body["describe"] = {"breed": r.breed, "color_markings": r.color_markings,
                                 "size_category": r.size_category, "sex": r.sex}
         if r.report_type == ReportType.LOST and r.pet_id:
-            from listings.models import Pet
+            from pets.models import Pet
             # C20 · only a pet the reporter owns: rows filed before the ownership check may hold
             # someone else's pet_id, and naming it would leak that stranger's pet.
             pet = (Pet.objects.filter(pk=r.pet_id, owner_account_id=r.reporter_account_id)

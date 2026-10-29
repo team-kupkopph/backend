@@ -12,8 +12,8 @@ from django.contrib.auth.models import User
 
 from accounts.models import Account, AccountSettings, Address
 from adminapi.auth import tokens_for_staff
-from listings.models import Pet
 from listings.permissions import account_is_verified_rescuer
+from pets.models import Pet
 from sagip.alerts import verified_in_city
 from shelter.models import ShelterProfile
 

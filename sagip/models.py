@@ -67,7 +67,7 @@ class StrayReport(models.Model):
     # A lost report's pet (US-L1). PP16 · a real foreign key since sagip.0010, as the DDL always
     # had it (REFERENCES pet ON DELETE SET NULL): a purged owner's pet leaves the report standing
     # with no link, never a dangling id. `pet_id` reads and writes exactly as before.
-    pet = models.ForeignKey("listings.Pet", on_delete=models.SET_NULL, null=True, blank=True,
+    pet = models.ForeignKey("pets.Pet", on_delete=models.SET_NULL, null=True, blank=True,
                             db_column="pet_id", related_name="lost_reports")
     is_anonymous = models.BooleanField(default=False)
     # D1 · a §12.5 exception to masked_contact, like volunteer_signup's: this person lets the

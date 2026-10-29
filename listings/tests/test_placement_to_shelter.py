@@ -14,8 +14,9 @@ from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
 from accounts.models import Address
-from listings.models import AdoptionListing, AdoptionListingPhoto, Pet
+from listings.models import AdoptionListing, AdoptionListingPhoto
 from notifications.models import Notification
+from pets.models import Pet
 from sagip.models import RescueCase, StrayReport, StrayReportPhoto
 from shelter.models import ShelterProfile
 from verifications.models import AccountCapability, VerificationRequest

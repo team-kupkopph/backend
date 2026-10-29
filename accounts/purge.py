@@ -88,7 +88,7 @@ def anonymize_account(account, now=None):
 
 def _pet_photo_files(account):
     from common.uploads import own_upload_url_error
-    from listings.models import PetPhoto
+    from pets.models import PetPhoto
     urls = PetPhoto.objects.filter(pet__owner_account=account).values_list("url", flat=True)
     # PP5 · ONLY this account's own `listing_photo` keys. A pet's photo can be the previous
     # owner's (a transfer keeps them) or, on rows written before the rule, any URL at all; the
@@ -106,14 +106,15 @@ def _qr_image_files(account):
 
 #: Stored objects behind rows the map erases. Collected BEFORE the rows go (afterwards nothing
 #: can find them), deleted AFTER, and only if nothing else still points at the same file.
-_FILE_SOURCES = {"listings.Pet": _pet_photo_files, "shelter.DonationQr": _qr_image_files}
+_FILE_SOURCES = {"pets.Pet": _pet_photo_files, "shelter.DonationQr": _qr_image_files}
 
 
 def _file_is_still_used(url):
     """A pet's photo is COPIED from the adoption listing's photo (listings/views.py), so the two
     rows can name one stored file. Deleting it because the adopter left would break a poster's
     still-public listing."""
-    from listings.models import AdoptionListingPhoto, PetPhoto
+    from listings.models import AdoptionListingPhoto
+    from pets.models import PetPhoto
     return (AdoptionListingPhoto.objects.filter(url=url).exists()
             or PetPhoto.objects.filter(url=url).exists())
 

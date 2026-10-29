@@ -92,8 +92,8 @@ def _pets(account):
     """Every pet the caller owns, archived ones included (they are still the caller's data), each
     read through the same `pet_fields` the app's pet screen uses (PP6), with its photos and its
     changes of hands as the caller may see them (PP18)."""
-    from listings.models import Pet
-    from listings.representations import pet_fields, pet_ownership_history
+    from pets.models import Pet
+    from pets.representations import pet_fields, pet_ownership_history
     pets = (Pet.objects.filter(owner_account=account).order_by("created_at")
             .prefetch_related("photos", "ownership_history"))
     return [{**pet_fields(p),
@@ -106,8 +106,8 @@ def _pets(account):
 def _rehomed_pets(account):
     """PQ2 · pets the caller rehomed through Kupkop: the name and photo frozen at the transfer, and
     the caller's own listing. Never the new owner, and never the pet as it is now (theirs)."""
-    from listings.models import PetOwnershipHistory
-    from listings.representations import rehomed_row
+    from pets.models import PetOwnershipHistory
+    from pets.representations import rehomed_row
     rows = (PetOwnershipHistory.objects.filter(from_account=account).exclude(to_account=account)
             .order_by("transferred_at"))
     return [{**rehomed_row(h), "listing_id": str(h.listing_id) if h.listing_id else None} for h in rows]

@@ -4,7 +4,7 @@ from django.contrib.gis.geos import Point
 from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
-from listings.models import Pet
+from pets.models import Pet
 from sagip.models import StrayReport
 
 

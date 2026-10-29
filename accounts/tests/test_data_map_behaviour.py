@@ -68,7 +68,8 @@ def test_the_purge_deletes_notifications_and_codes():
 
 @pytest.mark.django_db
 def test_the_purge_deletes_pets_and_their_photos_but_not_a_file_a_listing_still_uses():
-    from listings.models import AdoptionListing, AdoptionListingPhoto, Pet, PetPhoto
+    from listings.models import AdoptionListing, AdoptionListingPhoto
+    from pets.models import Pet, PetPhoto
     owner = AccountFactory()
     listing = AdoptionListing.objects.create(posted_by=owner, name="Mochi", species="dog",
                                              city="Marikina")

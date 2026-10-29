@@ -14,8 +14,8 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
-from listings.models import Pet, PetPhoto
 from notifications.models import Notification
+from pets.models import Pet, PetPhoto
 from sagip.models import MatchStatus, ReportMatch, StrayReport, StrayReportPhoto
 from sagip.sweeps import escalate_reports
 from verifications.models import AccountCapability

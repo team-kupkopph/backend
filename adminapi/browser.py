@@ -61,7 +61,7 @@ SAFE_FIELDS: dict[tuple[str, str], tuple[str, ...]] = {
         "case_id", "report_id", "claimed_by_account_id", "claimed_at", "resolved_at",
         "expired_at",
     ),
-    ("listings", "Pet"): ("pet_id", "name", "species", "sex", "created_at"),
+    ("pets", "Pet"): ("pet_id", "name", "species", "sex", "created_at"),
     ("listings", "AdoptionListing"): (
         "listing_id", "posted_by", "adopted_pet_id", "status", "adoption_fee", "city",
         "created_at",

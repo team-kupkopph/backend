@@ -22,8 +22,6 @@ from listings.models import (
     InquiryKind,
     InquiryStatus,
     ListingStatus,
-    Pet,
-    PetRemovedReason,
     StageState,
 )
 from listings.representations import poster_contact_phone, poster_inquiry_rows
@@ -32,10 +30,10 @@ from listings.views import (
     _lock_handoff,
     _locked_inquiry,
     _no_such_inquiry,
-    _pet_from_listing,
     _take_back,
 )
 from listings.visibility import account_is_verified_member
+from pets import service as pets
 from sagip import notices as sagip_notices
 from sagip.models import StrayStatus
 from sagip.status import resolve_report
@@ -259,7 +257,7 @@ class CompleteView(APIView):
             inquiry.status, inquiry.decided_at, inquiry.ended_by_account = (
                 InquiryStatus.ADOPTED, now, request.user)
             inquiry.save(update_fields=["status", "decided_at", "ended_by_account", "updated_at"])
-            pet = _pet_from_listing(listing, adopter)
+            pet = pets.pet_from_listing(listing, adopter)
             listing.status, listing.adopted_pet, listing.adopted_by_account = (
                 ListingStatus.ADOPTED, pet, adopter)
             listing.save(update_fields=["status", "adopted_pet", "adopted_by_account", "updated_at"])
@@ -343,13 +341,8 @@ class MarkAdoptedView(APIView):
             now = timezone.now()
             listing.status = ListingStatus.ADOPTED
             listing.save(update_fields=["status", "updated_at"])
-            # PP2 / PQ1 · a pet rehomed outside Kupkop has left its owner: archive it out of My Pets
-            # (locked after the listing, the order _pet_from_listing uses). Kept, never deleted.
-            if listing.rehome_pet_id is not None:
-                Pet.objects.select_for_update().filter(
-                    pk=listing.rehome_pet_id, owner_account=listing.posted_by_id,
-                    removed_at__isnull=True,
-                ).update(removed_at=now, removed_reason=PetRemovedReason.REHOMED_OUTSIDE, updated_at=now)
+            # PP2 / PQ1 · a pet rehomed outside Kupkop has left its owner: archived out of My Pets.
+            pets.archive_rehomed_outside(listing, now)
             for other in active:
                 other.listing = listing
                 _end(other, InquiryStatus.DECLINED, request.user,

@@ -4,9 +4,10 @@ badges counted."""
 import pytest
 from django.contrib.gis.geos import Point
 
-from listings.models import AdoptionListingPhoto, AdoptionStage, ListingStatus, Pet
+from listings.models import AdoptionListingPhoto, AdoptionStage, ListingStatus
 from listings.tests.adoption_helpers import c, inquire, listing, person, post, shelter, types
 from notifications.models import Notification
+from pets.models import Pet
 from sagip.models import RescueCase, StrayReport, StrayStatus
 from verifications.models import AccountCapability
 

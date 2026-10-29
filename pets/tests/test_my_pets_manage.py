@@ -7,8 +7,9 @@ import pytest
 from django.db import connection
 
 from accounts.factories import AccountFactory
-from listings.models import AdoptionListing, ListingStatus, Pet, PetOwnershipHistory, PetRemovedReason
+from listings.models import AdoptionListing, ListingStatus
 from listings.tests.adoption_helpers import c, inquire, person, post
+from pets.models import Pet, PetOwnershipHistory, PetRemovedReason
 
 PET = {"name": "Mochi", "species": "cat", "breed": "Puspin", "sex": "female", "birthdate": "2022-03-01",
        "temperament": "Lap cat", "medical_conditions": "Mild asthma", "vet_contact": "Dr Reyes"}
@@ -226,9 +227,10 @@ def test_a_pet_with_no_photo_leaves_a_trace_with_a_null_photo():
 def test_the_migration_snapshots_transfers_recorded_before_the_columns_existed():
     import importlib
 
-    from django.apps import apps
+    from django.db import connection as conn
+    from django.db.migrations.loader import MigrationLoader
 
-    from listings.models import PetPhoto
+    from pets.models import PetPhoto
     a, b = person(), person()
     pet = Pet.objects.create(owner_account=b, name="Bruno", species="dog")
     PetPhoto.objects.create(pet=pet, url="https://bkt/side.jpg")
@@ -237,7 +239,10 @@ def test_the_migration_snapshots_transfers_recorded_before_the_columns_existed()
     done = PetOwnershipHistory.objects.create(pet=pet, from_account=b, to_account=a, pet_name="Kept")
 
     migration = importlib.import_module("listings.migrations.0012_pet_manage_rehomed_trace")
-    migration.snapshot_existing_transfers(apps, None)
+    # The function is run as the migration runs it: against the models as they were at 0012 (the
+    # pet tables belonged to `listings` then; step 10 moved them to `pets`).
+    historical = MigrationLoader(conn).project_state(("listings", "0012_pet_manage_rehomed_trace")).apps
+    migration.snapshot_existing_transfers(historical, None)
 
     old.refresh_from_db(); done.refresh_from_db()
     assert (old.pet_name, old.photo_url) == ("Bruno", "https://bkt/face.jpg")

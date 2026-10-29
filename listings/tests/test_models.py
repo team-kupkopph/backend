@@ -10,11 +10,10 @@ from listings.models import (
     AdoptionStage,
     AdoptionStageHistory,
     AdoptionStageKey,
-    Pet,
-    PetPhoto,
     StageState,
 )
 from listings.stages import StageError, set_stage_state
+from pets.models import Pet, PetPhoto
 
 
 @pytest.mark.django_db

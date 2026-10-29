@@ -84,6 +84,7 @@ INSTALLED_APPS = [
     "accounts",
     "verifications",
     "listings",
+    "pets",              # My Pets review step 10: a person's own animals, moved out of listings
     "shelter",
     "notifications",
     "sagip",

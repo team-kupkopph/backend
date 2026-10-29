@@ -4,8 +4,9 @@ archived (PQ1), PP3 a rehoming listing is the pet's own animal, PP4 a public ado
 adopter the listing's description of the animal, and PP5 a pet photo is the owner's own upload."""
 import pytest
 
-from listings.models import AdoptionListing, ListingStatus, Pet, PetRemovedReason
+from listings.models import AdoptionListing, ListingStatus
 from listings.tests.adoption_helpers import c, inquire, listing, person, post
+from pets.models import Pet, PetRemovedReason
 
 PET = {"name": "Mochi", "species": "cat", "breed": "Puspin", "sex": "female",
        "birthdate": "2022-03-01", "size_category": "small", "spayed_neutered": True,
