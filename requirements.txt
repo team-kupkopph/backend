@@ -2,7 +2,7 @@ argon2-cffi==25.1.0
 argon2-cffi-bindings==25.1.0
 asgiref==3.12.1
 boto3==1.43.78
-botocore==1.43.78
+botocore==1.43.117
 cffi==2.1.0
 certifi==2026.10.23         # PYSEC-2026-4320 (fixed in 2026.10.19)
 charset_normalizer==3.5.2
