@@ -29,9 +29,10 @@ def pet_photo_urls(pet):
 
 
 def pet_summary(pet):
-    """A My Pets row."""
+    """A My Pets row. Step 11 · `birthdate` so the card can say "Cat · 3 years", as its artboard does."""
     ph = primary_photo(pet)
     return {"pet_id": str(pet.pk), "name": pet.name, "species": pet.species,
+            "birthdate": pet.date_of_birth.isoformat() if pet.date_of_birth else None,
             "photo_url": ph.url if ph else None}
 
 

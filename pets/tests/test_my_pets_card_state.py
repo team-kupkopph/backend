@@ -37,7 +37,8 @@ def test_a_pet_with_nothing_going_on_says_so():
     pet = _pet(owner)
     row = _rows(owner)[str(pet.pk)]
     assert row["open_listing"] is None and row["lost_report_id"] is None
-    assert set(row) == {"pet_id", "name", "species", "photo_url", "open_listing", "lost_report_id"}
+    assert set(row) == {"pet_id", "name", "species", "birthdate", "photo_url", "open_listing", "lost_report_id"}
+    assert row["birthdate"] is None                     # step 11 · no birthdate, no age on the card
 
 
 @pytest.mark.django_db
