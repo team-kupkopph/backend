@@ -80,6 +80,7 @@ def test_the_detail_and_the_export_read_a_pet_the_same_way():
     assert (row["weight_kg"], row["birthdate"], row["dob_approximate"]) == ("4.20", "2022-03-01", True)
     [summary] = c(owner).get("/api/v1/me/pets").json()["results"]
     assert summary == {"pet_id": str(pet.pk), "name": "Mochi", "species": "cat",
+                       "birthdate": "2022-03-01",                         # step 11 · the card's age
                        "photo_url": "https://bkt/face.jpg",
                        "open_listing": None, "lost_report_id": None}      # PP14 · the card's state
 
