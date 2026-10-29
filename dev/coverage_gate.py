@@ -42,6 +42,7 @@ THRESHOLDS: dict[str, float] = {
     "accounts": 95.0,        # onboarding, OTP, consent, export/delete
     "community": 92.0,       # stories, needs, pledges, badges
     "listings": 96.0,        # adoption post → inquire → approve/decline
+    "pets": 96.0,            # My Pets: a person's own animals, moved out of listings (review step 10)
     "sagip": 96.0,           # the rescue loop, matching, §12.5 coordinates
     "verifications": 96.0,   # the trust gate everything else keys off
     "volunteer": 93.0,       # shifts, capacity, check-in/out

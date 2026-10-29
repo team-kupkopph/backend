@@ -2,7 +2,7 @@ import pytest
 from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
-from listings.models import Pet, PetPhoto
+from pets.models import Pet, PetPhoto
 
 
 @pytest.mark.django_db

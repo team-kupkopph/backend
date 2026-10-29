@@ -55,7 +55,7 @@ branch = true
 # Only the six welfare-critical packages of D-S7-6 plus the shared machinery they all route
 # through. Measuring the admin/moderation/shelter surfaces too would dilute the number that
 # the gate is actually about.
-source = ["accounts", "common", "community", "listings", "sagip", "verifications", "volunteer"]
+source = ["accounts", "common", "community", "listings", "pets", "sagip", "verifications", "volunteer"]
 omit = [
     # Django-generated; a migration's "coverage" measures whether a test happened to migrate
     # past it, which is neither a signal nor actionable.

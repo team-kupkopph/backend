@@ -10,8 +10,9 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from accounts.factories import AccountFactory
-from listings.models import AdoptionListing, ListingStatus, Pet, PetPhoto
+from listings.models import AdoptionListing, ListingStatus
 from listings.tests.adoption_helpers import c, listing, person
+from pets.models import Pet, PetPhoto
 from sagip.models import StrayReport
 
 TODAY = timezone.localdate()

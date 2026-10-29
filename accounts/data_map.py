@@ -132,12 +132,12 @@ def _entries():
             E(Excluded("an audit row of a stage change on a shared adoption"), _AUDIT),
         ("listings.ListingPreference", "account"):
             E("shortlist", Delete()),
-        ("listings.Pet", "owner_account"):
+        ("pets.Pet", "owner_account"):
             E("pets", Delete()),                    # AS2 · a privately owned pet is the owner's data
-        ("listings.PetOwnershipHistory", "from_account"):
+        ("pets.PetOwnershipHistory", "from_account"):
             E("rehomed_pets",                       # PQ2 · the pets the caller rehomed
               Keep("who the animal came from; goes with the pet if its owner is erased")),
-        ("listings.PetOwnershipHistory", "to_account"):
+        ("pets.PetOwnershipHistory", "to_account"):
             E(Excluded("exported with the pet, as `pets[].ownership_history` (PP18)"),
               Keep("who the animal went to; goes with the pet if its owner is erased")),
         # --------------------------------------------------------------- moderation

@@ -7,9 +7,10 @@ from decimal import Decimal
 
 import pytest
 
-from listings.models import AdoptionListing, Pet, PetPhoto
-from listings.representations import pet_fields
+from listings.models import AdoptionListing
 from listings.tests.adoption_helpers import c, inquire, person, post
+from pets.models import Pet, PetPhoto
+from pets.representations import pet_fields
 
 #: Pet columns that are not the animal's description, and the one whose key differs on the way out.
 NOT_EXPORTED_AS_FIELDS = {"owner_account"}          # the export IS the owner's; no self-reference

@@ -4,7 +4,7 @@ from django.contrib.gis.geos import Point
 
 from accounts.factories import AccountFactory
 from accounts.tokens import tokens_for
-from listings.models import Pet
+from pets.models import Pet
 from sagip.models import ReportMatch, ReportType, StrayReport
 
 

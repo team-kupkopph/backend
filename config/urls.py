@@ -23,6 +23,7 @@ urlpatterns = [
     path("api/v1/", include("accounts.urls")),
     path("api/v1/", include("verifications.urls")),
     path("api/v1/", include("listings.urls")),
+    path("api/v1/", include("pets.urls")),        # My Pets review step 10: moved out of listings
     path("api/v1/", include("shelter.urls")),
     path("api/v1/", include("notifications.urls")),
     path("api/v1/", include("sagip.urls")),

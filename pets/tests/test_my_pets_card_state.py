@@ -7,8 +7,9 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from listings.models import AdoptionListing, ListingStatus, Pet
+from listings.models import AdoptionListing, ListingStatus
 from listings.tests.adoption_helpers import c, person
+from pets.models import Pet
 from sagip.models import StrayReport, StrayStatus
 
 

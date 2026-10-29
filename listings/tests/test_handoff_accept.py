@@ -2,7 +2,8 @@ import pytest
 from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
-from listings.models import AdoptionInquiry, AdoptionListing, AdoptionStage, AdoptionStageKey, Pet, StageState
+from listings.models import AdoptionInquiry, AdoptionListing, AdoptionStage, AdoptionStageKey, StageState
+from pets.models import Pet
 
 
 def _c(a):
@@ -104,7 +105,8 @@ def test_accept_unknown_inquiry_404_not_found():
 
 @pytest.mark.django_db
 def test_a_person_accepting_a_placement_gets_the_listings_photos_on_the_pet():
-    from listings.models import AdoptionListingPhoto, PetPhoto
+    from listings.models import AdoptionListingPhoto
+    from pets.models import PetPhoto
     recipient = AccountFactory(); listing, inq = _placement(recipient)
     AdoptionListingPhoto.objects.create(listing=listing, url="https://example.invalid/a", is_primary=True)
     AdoptionListingPhoto.objects.create(listing=listing, url="https://example.invalid/b", is_primary=False)

@@ -2,8 +2,9 @@
 row changes hands (history kept) instead of a fresh one being made."""
 import pytest
 
-from listings.models import AdoptionListing, ListingStatus, Pet, PetOwnershipHistory
+from listings.models import AdoptionListing, ListingStatus
 from listings.tests.adoption_helpers import c, inquire, listing, person, post
+from pets.models import Pet, PetOwnershipHistory
 
 BODY = {"name": "Mochi", "species": "cat", "breed": "Puspin", "sex": "female",
         "birthdate": "2022-03-01", "size_category": "small", "spayed_neutered": True,

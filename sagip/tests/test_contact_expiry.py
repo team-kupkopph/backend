@@ -9,7 +9,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.factories import AccountFactory
-from listings.models import Pet
+from pets.models import Pet
 from sagip.models import CaseStatusHistory, RescueCase, StrayReport
 from verifications.models import AccountCapability
 

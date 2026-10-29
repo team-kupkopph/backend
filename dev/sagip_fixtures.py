@@ -38,7 +38,7 @@ from django.db import transaction  # noqa: E402
 from django.utils import timezone  # noqa: E402
 
 from accounts.models import Account, AccountSettings, Address, StaffProfile  # noqa: E402
-from listings.models import Pet, PetPhoto  # noqa: E402
+from pets.models import Pet, PetPhoto  # noqa: E402
 from shelter.models import OrgType, ShelterProfile, ShelterTier  # noqa: E402
 from verifications.models import AccountCapability, VerificationRequest  # noqa: E402
 
