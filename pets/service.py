@@ -83,14 +83,31 @@ def fill_from_pet(fields, pet):
     return filled
 
 
+def approximate_from_pet(fields, pet):
+    """Step 12 · a listing whose birthdate came from the pet says it is approximate when the pet's is."""
+    return bool(pet.dob_approximate and fields.get("birthdate") == pet.date_of_birth)
+
+
 # ── An owner's own writes ───────────────────────────────────────────────────────────────────
 
-#: PATCH body key -> Pet column, for the fields an owner edits as typed.
+#: Body key -> Pet column, for every field an owner enters (POST and PATCH /me/pets). Step 12 ·
+#: one map for both writers, so a new field can't reach one and miss the other.
 _EDITABLE = {"name": "name", "species": "species", "breed": "breed", "sex": "sex",
-             "birthdate": "date_of_birth", "color_markings": "color_markings",
-             "size_category": "size_category", "spayed_neutered": "spayed_neutered",
-             "temperament": "temperament", "medical_conditions": "medical_conditions",
-             "vet_contact": "vet_contact"}
+             "birthdate": "date_of_birth", "dob_approximate": "dob_approximate",
+             "color_markings": "color_markings", "size_category": "size_category",
+             "weight_kg": "weight_kg", "spayed_neutered": "spayed_neutered",
+             "microchip_no": "microchip_no", "temperament": "temperament",
+             "feeding_routine": "feeding_routine", "allergies": "allergies", "medications": "medications",
+             "medical_conditions": "medical_conditions", "vet_contact": "vet_contact",
+             "emergency_contact": "emergency_contact"}
+
+
+def _settle_approximate(pet):
+    """An approximate birthdate needs a birthdate: with none, the flag is meaningless and is cleared."""
+    if pet.date_of_birth is None and pet.dob_approximate:
+        pet.dob_approximate = False
+        return True
+    return False
 
 
 def _set_photos(pet, photos):
@@ -107,14 +124,9 @@ def create_pet(owner, data):
     if owner.account_type == "shelter":
         raise PetRefused("not_for_shelters", "A shelter's animals are its listings", 403)
     with transaction.atomic():
-        pet = Pet.objects.create(
-            owner_account=owner, name=data["name"], species=data["species"],
-            breed=data.get("breed", ""), sex=data.get("sex", Sex.UNKNOWN),
-            date_of_birth=data.get("birthdate"), color_markings=data.get("color_markings", ""),
-            size_category=data.get("size_category", ""), spayed_neutered=data.get("spayed_neutered"),
-            temperament=data.get("temperament", ""),
-            medical_conditions=data.get("medical_conditions", ""),
-            vet_contact=data.get("vet_contact", ""))
+        pet = Pet(owner_account=owner, **{column: data[key] for key, column in _EDITABLE.items() if key in data})
+        _settle_approximate(pet)
+        pet.save()
         _set_photos(pet, data.get("photos", []))
     return pet
 
@@ -134,6 +146,8 @@ def update_pet(owner, pet_id, validate):
         for key, column in _EDITABLE.items():
             if key in data:
                 setattr(pet, column, data[key])
+        if _settle_approximate(pet) and "dob_approximate" not in changed:
+            changed.append("dob_approximate")
         pet.save(update_fields=[*changed, "updated_at"])
         if "photos" in data:
             _set_photos(pet, data["photos"])

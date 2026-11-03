@@ -256,6 +256,7 @@ class ListingsView(APIView):
                                        "message": f"The adoption fee can't exceed ₱{cap}",
                                        "details": {"cap": cap}}}, status=422)
         pet = data["pet"]
+        approximate = False
         with transaction.atomic():
             rehome = None
             if data.get("pet_id"):
@@ -279,13 +280,14 @@ class ListingsView(APIView):
                                                "details": {"species": rehome.species}}},
                                     status=422)
                 pet = pets.fill_from_pet(pet, rehome)
+                approximate = pets.approximate_from_pet(pet, rehome)
                 if "photos" not in data:
                     data["photos"] = [{"file_url": u} for u in pet_photo_urls(rehome)]
             listing = AdoptionListing.objects.create(
                 rehome_pet=rehome,
                 posted_by=request.user, name=pet["name"], species=pet["species"],
                 breed=pet.get("breed", ""), sex=pet.get("sex", ""),
-                date_of_birth=pet.get("birthdate"), city=data["city"],
+                date_of_birth=pet.get("birthdate"), dob_approximate=approximate, city=data["city"],
                 size_category=pet.get("size_category", ""), spayed_neutered=pet.get("spayed_neutered"),
                 vaccinated=pet.get("vaccinated"), walkable=pet.get("walkable", False),
                 temperament=pet.get("temperament", ""), requirements=data.get("requirements", ""),
