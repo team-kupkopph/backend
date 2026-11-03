@@ -10,10 +10,17 @@ listing FIRST and the pet after (R1's order, extended: case -> report -> listing
 pet), except `remove_pet`, which locks only the pet and then READS the listing: a listing created
 at the same moment locks the pet too (`find_own_pet(..., lock=True)`), so either it is seen or it
 waits.
+
+Analytics (review step 13, PP19). Every writer records what happened as an account-free event
+(`common/analytics.py`: coarse dimensions only, never an id): pet_added {species, has_photo,
+source: self | adoption | placement}, pet_updated {species, fields}, pet_removed {species, reason},
+pet_transferred {species, via: adoption | placement}. They fire on COMMIT, so a write that rolls
+back never reports something that did not happen.
 """
 from django.db import transaction
 from django.utils import timezone
 
+from common.analytics import emit
 from listings.models import OPEN_REHOME_STATUSES, AdoptionListing, Sex
 from pets.models import Pet, PetOwnershipHistory, PetPhoto, PetRemovedReason
 from pets.representations import primary_photo
@@ -26,6 +33,11 @@ class PetRefused(Exception):
     def __init__(self, code, message, status, details=None):
         super().__init__(message)
         self.code, self.message, self.status, self.details = code, message, status, details
+
+
+def _record(event, **props):
+    """Emit an account-free analytics event once the surrounding transaction commits."""
+    transaction.on_commit(lambda: emit(event, **props))
 
 
 def no_such_pet():
@@ -128,6 +140,7 @@ def create_pet(owner, data):
         _settle_approximate(pet)
         pet.save()
         _set_photos(pet, data.get("photos", []))
+        _record("pet_added", species=pet.species, has_photo=bool(data.get("photos")), source="self")
     return pet
 
 
@@ -151,6 +164,7 @@ def update_pet(owner, pet_id, validate):
         pet.save(update_fields=[*changed, "updated_at"])
         if "photos" in data:
             _set_photos(pet, data["photos"])
+        _record("pet_updated", species=pet.species, fields=len(changed) + ("photos" in data))
     return pet
 
 
@@ -168,12 +182,13 @@ def remove_pet(owner, pet_id, reason):
         pet.removed_at = timezone.now()
         pet.removed_reason = reason
         pet.save(update_fields=["removed_at", "removed_reason", "updated_at"])
+        _record("pet_removed", species=pet.species, reason=reason)
     return pet
 
 
 # ── A pet changing hands (called by listings, inside its own transaction) ───────────────────
 
-def transfer_pet(pet, to_account, listing):
+def transfer_pet(pet, to_account, listing, via):
     """AQ8 · hand a locked pet to its new owner, keeping its record (vet, medical notes) and
     writing the history row with the PQ2 snapshot: the name and photo as they were when it left."""
     ph = primary_photo(pet)
@@ -181,26 +196,30 @@ def transfer_pet(pet, to_account, listing):
                                        listing=listing, pet_name=pet.name, photo_url=ph.url if ph else "")
     pet.owner_account = to_account
     pet.save(update_fields=["owner_account", "updated_at"])
+    _record("pet_transferred", species=pet.species, via=via)
     return pet
 
 
-def pet_from_listing(listing, owner):
+def pet_from_listing(listing, owner, via):
     """US-H3 / AQ3 / AQ8 · the adopter's Pet for an animal they just took home. A listing made from
     one of the poster's own pets hands that very Pet over; any other listing gets a fresh Pet
     carrying the listing's description of the animal and its photos (primary kept). Shared by a
-    placement Accept and a public Complete. The caller holds the listing's lock (R1)."""
+    placement Accept (`via="placement"`) and a public Complete (`via="adoption"`). The caller holds
+    the listing's lock (R1)."""
     if listing.rehome_pet_id:
         pet = Pet.objects.select_for_update().filter(pk=listing.rehome_pet_id).first()
         if pet is not None:
-            return transfer_pet(pet, owner, listing)
+            return transfer_pet(pet, owner, listing, via)
     # PP4 · everything the listing knew about the animal, so the adopter's My Pets isn't a bare name.
     pet = Pet.objects.create(
         owner_account=owner, name=listing.name or "Pet", species=listing.species,
         breed=listing.breed, sex=listing.sex or Sex.UNKNOWN, date_of_birth=listing.date_of_birth,
         dob_approximate=listing.dob_approximate, size_category=listing.size_category,
         spayed_neutered=listing.spayed_neutered, temperament=listing.temperament)
-    for ph in listing.photos.all():
+    photos = list(listing.photos.all())
+    for ph in photos:
         PetPhoto.objects.create(pet=pet, url=ph.url, is_primary=ph.is_primary)
+    _record("pet_added", species=pet.species, has_photo=bool(photos), source=via)
     return pet
 
 
@@ -209,6 +228,8 @@ def archive_rehomed_outside(listing, now):
     Archived, never deleted. The caller holds the listing's lock; the pet is locked after it."""
     if listing.rehome_pet_id is None:
         return
-    Pet.objects.select_for_update().filter(
+    archived = Pet.objects.select_for_update().filter(
         pk=listing.rehome_pet_id, owner_account=listing.posted_by_id, removed_at__isnull=True,
     ).update(removed_at=now, removed_reason=PetRemovedReason.REHOMED_OUTSIDE, updated_at=now)
+    if archived:
+        _record("pet_removed", species=listing.species, reason=PetRemovedReason.REHOMED_OUTSIDE.value)
