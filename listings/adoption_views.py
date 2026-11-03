@@ -257,7 +257,7 @@ class CompleteView(APIView):
             inquiry.status, inquiry.decided_at, inquiry.ended_by_account = (
                 InquiryStatus.ADOPTED, now, request.user)
             inquiry.save(update_fields=["status", "decided_at", "ended_by_account", "updated_at"])
-            pet = pets.pet_from_listing(listing, adopter)
+            pet = pets.pet_from_listing(listing, adopter, via="adoption")
             listing.status, listing.adopted_pet, listing.adopted_by_account = (
                 ListingStatus.ADOPTED, pet, adopter)
             listing.save(update_fields=["status", "adopted_pet", "adopted_by_account", "updated_at"])
@@ -274,7 +274,7 @@ class CompleteView(APIView):
             notices.adoption_completed(inquiry, pet)
             award_badges_for(listing.posted_by)
             emit("inquiry_decided", outcome="adopted")
-            emit("adoption_completed")
+            emit("adoption_completed", rehome=listing.rehome_pet_id is not None)   # step 13 · rehome or rescue
         return Response({"inquiry_id": str(inquiry.pk), "listing_id": str(listing.pk),
                          "pet_id": str(pet.pk)})
 
@@ -355,5 +355,5 @@ class MarkAdoptedView(APIView):
                     if case is not None:
                         sagip_notices.case_progress(report, case, StrayStatus.RESOLVED)
             award_badges_for(listing.posted_by)
-            emit("adoption_completed")
+            emit("adoption_completed", rehome=listing.rehome_pet_id is not None)
         return Response({"status": "adopted", "closed_inquiries": len(active)})

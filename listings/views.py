@@ -281,6 +281,9 @@ class ListingsView(APIView):
                                     status=422)
                 pet = pets.fill_from_pet(pet, rehome)
                 approximate = pets.approximate_from_pet(pet, rehome)
+                # Step 13 · how often owners rehome through My Pets (account-free, on commit).
+                species = rehome.species
+                transaction.on_commit(lambda: emit("pet_rehome_listed", species=species))
                 if "photos" not in data:
                     data["photos"] = [{"file_url": u} for u in pet_photo_urls(rehome)]
             listing = AdoptionListing.objects.create(
@@ -902,7 +905,7 @@ class PlacementDecisionView(APIView):
                     pet, draft = None, _shelter_draft_from(inq.listing, request.user)
                 else:
                     draft = None
-                    pet = pets.pet_from_listing(inq.listing, request.user)
+                    pet = pets.pet_from_listing(inq.listing, request.user, via="placement")
                 inq.listing.status = ListingStatus.ADOPTED
                 inq.listing.adopted_pet = pet
                 inq.listing.adopted_by_account = request.user
@@ -922,7 +925,7 @@ class PlacementDecisionView(APIView):
                 from community.badges import award_badges_for
                 award_badges_for(inq.listing.posted_by)
                 emit("inquiry_decided", outcome="accepted")
-                emit("adoption_completed")
+                emit("adoption_completed", rehome=inq.listing.rehome_pet_id is not None)
                 if draft is not None:
                     return Response({"listing_id": str(draft.pk), "draft": True}, status=200)
                 return Response({"pet_id": str(pet.pk)}, status=200)

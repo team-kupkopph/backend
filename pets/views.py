@@ -8,6 +8,9 @@ from pets import service
 from pets.representations import pet_fields, pet_summary, rehomed_row
 from pets.serializers import PetCreateSerializer, PetPatchSerializer, PetRemoveSerializer
 
+#: The most pets (and rehomed records) one GET /me/pets returns.
+MAX_PETS = 100
+
 
 def _refused(e):
     error = {"code": e.code, "message": e.message}
@@ -28,10 +31,16 @@ class MyPetsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        pets = list(request.user.pets.current().order_by("-created_at").prefetch_related("photos"))
+        # Step 14 (PP11) · bounded: a household, not a shelter, keeps pets here, so 100 is far above any
+        # real list and only stops a scripted account from growing the payload without limit. `more`
+        # says the list was cut; the newest are kept.
+        pets = list(request.user.pets.current().order_by("-created_at").prefetch_related("photos")[:MAX_PETS + 1])
+        rehomed = list(service.rehomed_by(request.user)[:MAX_PETS + 1])
+        more = len(pets) > MAX_PETS or len(rehomed) > MAX_PETS
+        pets, rehomed = pets[:MAX_PETS], rehomed[:MAX_PETS]
         states = service.pet_states(pets)
         return Response({"results": [{**pet_summary(p), **states[p.pk]} for p in pets],
-                         "rehomed": [rehomed_row(h) for h in service.rehomed_by(request.user)]})
+                         "rehomed": [rehomed_row(h) for h in rehomed], "more": more})
 
     def post(self, request):
         if request.user.account_type == "shelter":        # refused before the body is read
