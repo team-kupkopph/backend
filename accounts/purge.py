@@ -122,9 +122,20 @@ def _file_is_still_used(url):
             or PetPhoto.objects.filter(url=url).exists())
 
 
+def _withdraw_listings_of_erased_pets(account):
+    """U11 / NT-2 · the purge is the one thing that deletes a pet, and `rehome_pet` is SET_NULL, so a
+    rehoming listing of one would be left open describing an animal that no longer exists. Withdraw
+    it first. It has no applicants: an active inquiry blocks the deletion, and nobody can inquire on
+    a deleted poster's listing. The listing row stays (a posted animal is a record)."""
+    from listings.models import OPEN_REHOME_STATUSES, AdoptionListing, ListingStatus
+    AdoptionListing.objects.filter(rehome_pet__owner_account=account, status__in=OPEN_REHOME_STATUSES).update(
+        status=ListingStatus.WITHDRAWN, updated_at=timezone.now())
+
+
 def _erase_related(account):
     from django.apps import apps
 
+    _withdraw_listings_of_erased_pets(account)
     files = []
     for (label, field), entry in DATA_MAP.items():
         rule = entry.erasure
