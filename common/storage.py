@@ -14,6 +14,8 @@ a no-op. Wiring an actual bucket (env vars, IAM, lifecycle rules) stays a deploy
 for whoever has AWS access — this module's job is that the *code path* is real and tested
 against a mocked S3 (`moto`), not that a bucket is live.
 """
+from urllib.parse import urlsplit
+
 from django.conf import settings
 
 from common.media import PUBLIC, RESTRICTED  # noqa: F401 — re-exported for callers
@@ -61,8 +63,19 @@ def delete_object(file_url, visibility=RESTRICTED):
         return
     import boto3  # prod-only; not a dev dependency
 
-    key = file_url.split(f"{bucket}/", 1)[-1]
-    boto3.client("s3").delete_object(Bucket=bucket, Key=key)
+    boto3.client("s3").delete_object(Bucket=bucket, Key=object_key(file_url, visibility))
+
+
+def object_key(file_url, visibility=RESTRICTED):
+    """The bucket key behind `file_url` — what `delete_object` deletes, and the only part of a
+    stored reference that is safe to log (the URL can carry a host and a signature).
+
+    Dev (no bucket configured): the URL's path, which is the same key in the placeholder scheme.
+    """
+    bucket = _bucket_name(visibility)
+    if bucket and f"{bucket}/" in file_url:
+        return file_url.split(f"{bucket}/", 1)[-1].split("?", 1)[0]
+    return urlsplit(file_url).path.lstrip("/")
 
 
 def create_presigned_upload(visibility, key, content_type, max_bytes, expires_in=SIGNED_URL_TTL):

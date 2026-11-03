@@ -313,3 +313,39 @@ def test_purging_an_account_without_a_shelter_profile_still_works():
 
     account.refresh_from_db()
     assert account.anonymized_at is not None
+
+
+# ---------------------------------------------------------------- a storage error (NT-1)
+
+@pytest.mark.django_db
+def test_a_storage_error_is_logged_by_key_and_the_purge_carries_on(caplog, settings):
+    # NT-1 · a stored file that can't be deleted must not keep a person's data: the account is
+    # still anonymised, the accounts after it in the run are still purged, and the log names the
+    # object's KEY so someone can delete it by hand, never the full URL.
+    from unittest import mock
+
+    from pets.models import Pet, PetPhoto
+    settings.MEDIA_S3_BUCKET_PUBLIC = "bkt"
+    first = _deleted_days_ago(31, display_name="Ana Reyes")
+    first.photo_url = "https://bkt/avatar/ana.jpg?X-Amz-Signature=secret"
+    first.save(update_fields=["photo_url"])
+    pet = Pet.objects.create(owner_account=first, name="Mochi", species="dog")
+    PetPhoto.objects.create(pet=pet, url=f"https://bkt/listing_photo/{first.pk}/a.jpg")
+    second = _deleted_days_ago(32, display_name="Migs G.")
+
+    s3 = mock.Mock()
+    s3.delete_object.side_effect = RuntimeError("S3 is down")
+    with mock.patch("boto3.client", return_value=s3), caplog.at_level("WARNING"):
+        purged = anonymize_expired_accounts()
+
+    assert {a.pk for a in purged} == {first.pk, second.pk}
+    for account in (first, second):
+        account.refresh_from_db()
+        assert account.display_name == "Deleted user"
+        assert account.anonymized_at is not None
+    assert not Pet.objects.filter(pk=pet.pk).exists()
+    assert s3.delete_object.call_count == 2                 # the avatar and the pet photo
+    logged = caplog.text
+    assert "avatar/ana.jpg" in logged
+    assert f"listing_photo/{first.pk}/a.jpg" in logged
+    assert "https://" not in logged and "secret" not in logged

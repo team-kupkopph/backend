@@ -34,6 +34,7 @@ everything else stays attached to the same row, now anonymous.
 Mirrors `verifications/purge.py`'s shape: a plain, idempotent, unit-testable function that a
 management command invokes on a schedule (US-F0's cron-over-Celery decision).
 """
+import logging
 from datetime import timedelta
 
 from django.conf import settings
@@ -42,7 +43,9 @@ from django.utils import timezone
 
 from accounts.data_map import DATA_MAP, SHELTER_PERSONAL_FIELDS, Delete, Keep  # noqa: F401
 from accounts.models import Account, AccountStatus
-from common.storage import PUBLIC, delete_object
+from common.storage import PUBLIC, delete_object, object_key
+
+logger = logging.getLogger("kupkop.purge")
 
 
 def anonymized_email(account):
@@ -63,7 +66,7 @@ def anonymize_account(account, now=None):
     # The avatar is the one piece of PII living outside the row. Delete the object before
     # dropping the reference, or nothing will ever be able to find it again.
     if account.photo_url:
-        delete_object(account.photo_url, visibility=PUBLIC)
+        _delete_file(account.photo_url)
 
     account.email = anonymized_email(account)
     account.phone = None
@@ -136,7 +139,19 @@ def _erase_related(account):
             rows.update(**rule.values)
     for url in dict.fromkeys(files):          # de-duplicated, order kept
         if not _file_is_still_used(url):
-            delete_object(url, visibility=PUBLIC)
+            _delete_file(url)
+
+
+def _delete_file(url):
+    """NT-1 · a storage error must not stop the erasure. Raising here would roll this account's
+    scrub back and skip every account after it in the run, keeping a person's data because a
+    bucket hiccupped. The row goes regardless; the log names the KEY (never the URL, which can
+    carry a host and a signature) so the orphaned object can be deleted by hand."""
+    try:
+        delete_object(url, visibility=PUBLIC)
+    except Exception as exc:  # noqa: BLE001 — boto3 is prod-only, so its error types can't be named
+        logger.warning("purge: could not delete stored object %s (%s); left for manual cleanup",
+                       object_key(url, PUBLIC), type(exc).__name__)
 
 
 def anonymize_expired_accounts(now=None):
