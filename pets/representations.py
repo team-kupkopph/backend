@@ -29,10 +29,12 @@ def pet_photo_urls(pet):
 
 
 def pet_summary(pet):
-    """A My Pets row. Step 11 · `birthdate` so the card can say "Cat · 3 years", as its artboard does."""
+    """A My Pets row. Step 11 · `birthdate` so the card can say "Cat · 3 years", as its artboard does;
+    step 12 · `dob_approximate` so it says "About 3 years" when nobody knows the day."""
     ph = primary_photo(pet)
     return {"pet_id": str(pet.pk), "name": pet.name, "species": pet.species,
             "birthdate": pet.date_of_birth.isoformat() if pet.date_of_birth else None,
+            "dob_approximate": pet.dob_approximate,
             "photo_url": ph.url if ph else None}
 
 

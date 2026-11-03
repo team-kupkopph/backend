@@ -81,6 +81,7 @@ def test_the_detail_and_the_export_read_a_pet_the_same_way():
     [summary] = c(owner).get("/api/v1/me/pets").json()["results"]
     assert summary == {"pet_id": str(pet.pk), "name": "Mochi", "species": "cat",
                        "birthdate": "2022-03-01",                         # step 11 · the card's age
+                       "dob_approximate": True,                           # step 12 · "About …"
                        "photo_url": "https://bkt/face.jpg",
                        "open_listing": None, "lost_report_id": None}      # PP14 · the card's state
 
