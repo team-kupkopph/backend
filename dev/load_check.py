@@ -59,7 +59,7 @@ from django.utils import timezone  # noqa: E402
 from accounts.models import Account, AccountStatus  # noqa: E402
 from accounts.tokens import tokens_for  # noqa: E402
 from community.models import StoryPost  # noqa: E402
-from listings.models import AdoptionListing  # noqa: E402
+from listings.models import AdoptionInquiry, AdoptionListing, InquiryStatus  # noqa: E402
 from sagip.geo import CITY_CENTROIDS  # noqa: E402
 from sagip.models import ReportType, StrayReport, StrayStatus  # noqa: E402
 from verifications.models import AccountCapability  # noqa: E402
@@ -69,9 +69,16 @@ from verifications.models import AccountCapability  # noqa: E402
 # scenario that is linear and a scenario that is quadratic separate visibly instead of
 # both looking "fine" at a single size.
 SCALES = {
-    "year1":  {"accounts": 3_000,  "reports": 5_000,  "listings": 2_000, "stories": 1_000},
-    "stress": {"accounts": 20_000, "reports": 50_000, "listings": 20_000, "stories": 10_000},
+    "year1":  {"accounts": 3_000,  "reports": 5_000,  "listings": 2_000, "stories": 1_000, "inbox_closed": 2_000},
+    "stress": {"accounts": 20_000, "reports": 50_000, "listings": 20_000, "stories": 10_000, "inbox_closed": 20_000},
 }
+
+# F5 (shelter home test plan) · one shelter whose Requests inbox carries a long CLOSED history and 30 open requests.
+# Step 4 rewrote the inbox as one SQL UNION paged with LIMIT 21; before it, every call loaded the shelter's whole
+# history into Python. The two scales separate "grows with the page" from "grows with all-time history".
+INBOX_SHELTER_EMAIL = "load.inbox.shelter@kupkop.invalid"
+INBOX_OPEN = 30
+INBOX_LISTINGS = 40
 
 # §13.1, verbatim. `None` means the spec sets no target for it — reported, never failed.
 TARGETS_MS = {
@@ -176,6 +183,8 @@ def seed(scale: str) -> dict:
         for i in range(cfg["listings"])], batch_size=2000)
     print(f"  adoption listings   {cfg['listings']:>7,}")
 
+    _seed_inbox(rng, now, cfg, [a for a in accounts if a.account_type == "personal"])
+
     StoryPost.objects.bulk_create([
         StoryPost(story_id=uuid.uuid4(), author_account=rng.choice(accounts),
                   story_type="general", caption=f"Seeded story {i}. " * 8,
@@ -188,6 +197,38 @@ def seed(scale: str) -> dict:
         cur.execute("ANALYZE;")       # without this the planner is choosing on stale stats
     print("  ANALYZE done.")
     return cfg
+
+
+def _seed_inbox(rng, now, cfg, people):
+    """F5 · one shelter with `inbox_closed` decided inquiries spread over a year, plus INBOX_OPEN active ones.
+
+    One inquiry per (listing, adopter) is a database rule, so the history is spread over INBOX_LISTINGS listings."""
+    shelter = Account.objects.create(
+        account_id=uuid.uuid4(), email=INBOX_SHELTER_EMAIL, password_hash="!", display_name="Load Inbox Shelter",
+        account_type="shelter", status=AccountStatus.ACTIVE, email_verified_at=now)
+    listings = AdoptionListing.objects.bulk_create([
+        AdoptionListing(listing_id=uuid.uuid4(), posted_by=shelter, species=rng.choice(SPECIES),
+                        name=f"Inbox pet {i}", status="available", city="Manila")
+        for i in range(INBOX_LISTINGS + 1)])
+    history, open_on = listings[:-1], listings[-1]
+    per_listing = math.ceil(cfg["inbox_closed"] / len(history))
+    if per_listing > len(people):
+        raise SystemExit(f"Need {per_listing} adopters per listing; the scale seeds only {len(people)}.")
+    closed_states = [InquiryStatus.DECLINED, InquiryStatus.WITHDRAWN, InquiryStatus.ADOPTED]
+    rows = []
+    for i in range(cfg["inbox_closed"]):
+        rows.append(AdoptionInquiry(listing=history[i // per_listing], adopter_account=people[i % per_listing],
+                                    status=closed_states[i % 3], decided_at=now))
+    rows += [AdoptionInquiry(listing=open_on, adopter_account=people[i], status=InquiryStatus.ACTIVE)
+             for i in range(INBOX_OPEN)]
+    AdoptionInquiry.objects.bulk_create(rows, batch_size=2000)
+    # `created_at` is auto_now_add, so bulk_create stamps every row "now": spread the history over a year afterwards,
+    # or the ORDER BY created_at the inbox pages on would sort a column of ties.
+    with connection.cursor() as cur:
+        cur.execute("UPDATE adoption_inquiry SET created_at = now() - random() * interval '365 days' "
+                    "WHERE status <> 'active' AND listing_id IN "
+                    "(SELECT listing_id FROM adoption_listing WHERE posted_by_account_id = %s)", [shelter.pk])
+    print(f"  inbox history       {cfg['inbox_closed']:>7,} closed + {INBOX_OPEN} open, one shelter")
 
 
 # ── measuring ───────────────────────────────────────────────────────────────────────
@@ -229,11 +270,14 @@ def timed(fn, n, warmup=5):
     return samples, statuses
 
 
-def build_scenarios(client, writers):
+def build_scenarios(client, writers, inbox_shelter=None):
     manila = {"city": "Manila", "radius_km": "10"}
 
-    def get(path, params=None):
-        return lambda: client.get(path, params or {})
+    def get(path, params=None, **headers):
+        return lambda: client.get(path, params or {}, **headers)
+
+    inbox_auth = ({"HTTP_AUTHORIZATION": f"Bearer {tokens_for(inbox_shelter)['access']}"}
+                  if inbox_shelter is not None else None)
 
     # ⚠️ ONE ACCOUNT CANNOT DRIVE THE WRITE SCENARIO. `report_create` is throttled at
     # 20/day per account (US-SEC2), so a single actor's 21st POST is a 429 — served in
@@ -268,6 +312,11 @@ def build_scenarios(client, writers):
         Scenario("GET /listings?city=&species= (filtered)", "read",
                  get("/api/v1/listings", {"city": "Manila", "species": "dog"})),
         Scenario("GET /stories (feed)", "read", get("/api/v1/stories")),
+        *([Scenario("GET /shelter/requests?status=open (inbox)", "read",
+                    get("/api/v1/shelter/requests", {"status": "open"}, **inbox_auth)),
+           Scenario("GET /shelter/requests?kind=adoption (history)", "read",
+                    get("/api/v1/shelter/requests", {"kind": "adoption"}, **inbox_auth))]
+          if inbox_auth else []),
         Scenario("POST /reports (write)", "write", post_report, n=40),
         # Not a request path and not in §13.1's table — measured because US-Q2 names it as
         # one of the two things that will move, and because a cron job that cannot finish
@@ -318,7 +367,19 @@ def print_query_plans():
                     print(f"    {line.strip()[:150]}")
 
 
-def measure(scale: str) -> int:
+def peak_kib(fn):
+    """Peak Python heap one call allocates (tracemalloc), in KiB. The inbox used to hold the shelter's whole
+    history in memory per request; this is the number that should stay flat between the two scales."""
+    import tracemalloc
+    tracemalloc.start()
+    try:
+        fn()
+        return tracemalloc.get_traced_memory()[1] / 1024
+    finally:
+        tracemalloc.stop()
+
+
+def measure(scale: str, only: str | None = None) -> int:
     cfg = SCALES[scale]
     counts = {
         "accounts": Account.objects.count(),
@@ -345,8 +406,18 @@ def measure(scale: str) -> int:
     print("-" * 88)
 
     breaches = []
-    for sc in build_scenarios(client, writers):
+    inbox_shelter = Account.objects.filter(email=INBOX_SHELTER_EMAIL).first()
+    if inbox_shelter is not None:
+        history = AdoptionInquiry.objects.filter(listing__posted_by=inbox_shelter)
+        print(f"Inbox shelter: {history.count():,} inquiries, "
+              f"{history.filter(status=InquiryStatus.ACTIVE).count()} open")
+    peaks = []
+    for sc in build_scenarios(client, writers, inbox_shelter):
+        if only and only not in sc.name:
+            continue
         samples, statuses = timed(sc.fn, sc.n, sc.warmup)
+        if "/shelter/requests" in sc.name:
+            peaks.append((sc.name, peak_kib(sc.fn)))
         p50, p95, mx = percentile(samples, 50), percentile(samples, 95), max(samples)
         target = TARGETS_MS[sc.kind]
         bad = statuses - {200, 201, 202}
@@ -358,7 +429,10 @@ def measure(scale: str) -> int:
         tgt = "—" if target is None else f"<{target}"
         print(f"{sc.name:<44} {p50:>7.1f}ms {p95:>7.1f}ms {mx:>7.1f}ms {tgt:>8}  {verdict}")
 
-    print_query_plans()
+    for name, kib in peaks:
+        print(f"  peak heap per request · {name}: {kib:,.0f} KiB")
+    if not only:
+        print_query_plans()
 
     print("\n⚠️  Local laptop, sequential requests, no network. Real p95 under concurrency "
           "will be higher — see this file's header.")
@@ -376,12 +450,13 @@ def main(argv=None):
     ap.add_argument("--seed", action="store_true")
     ap.add_argument("--measure", action="store_true")
     ap.add_argument("--scale", choices=sorted(SCALES), default="year1")
+    ap.add_argument("--only", help="measure only the scenarios whose name contains this text, e.g. /shelter/requests")
     args = ap.parse_args(argv)
     if not (args.seed or args.measure):
         ap.error("pass --seed and/or --measure")
     if args.seed:
         seed(args.scale)
-    return measure(args.scale) if args.measure else 0
+    return measure(args.scale, args.only) if args.measure else 0
 
 
 if __name__ == "__main__":
