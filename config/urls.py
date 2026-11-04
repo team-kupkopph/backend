@@ -43,3 +43,5 @@ urlpatterns = [
 # malformed id rejected by a `<uuid:…>` converter before DRF runs still answers the JSON
 # envelope on /api/ paths instead of Django's HTML 404 page.
 handler404 = "common.errors.api_not_found"
+# I3 · the same for an unhandled error: API paths answer a 500 in the envelope with the request id.
+handler500 = "common.errors.api_server_error"
