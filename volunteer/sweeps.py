@@ -9,12 +9,14 @@ with a stored `escalation_level`; here the notification rows themselves are the 
 a reminder is due only if no `shift_reminder` row exists for that signup AND window. No
 migration, and it handles both windows independently (one boolean could not).
 """
+from django.db import transaction
 from django.utils import timezone
 
 from notifications.models import Notification
 from notifications.service import notify
 
-from .models import SignupStatus, VolunteerShift, VolunteerSignup
+from .models import SignupEndReason, SignupStatus, VolunteerShift, VolunteerSignup
+from .status import set_signup_status
 
 # (label, upper_hours, lower_hours): remind when lower_h < (starts_at - now) <= upper_h.
 # Bands are disjoint so a shift within 1h is ONLY in the 1h band — it never also gets the
@@ -89,3 +91,30 @@ def nudge_attendance(now=None):
                    data={"shift_id": str(shift.pk), "window": label})
             nudged.append(shift)
     return nudged
+
+
+# SH4 / SQ1 (decided 2026-11-04) · a request for a shift that ended with no decision can no
+# longer be meaningfully approved, so it is answered: declined, with `end_reason = shift_passed`,
+# and the volunteer gets the same `signup_declined` notice a shelter's decline sends. Idempotent
+# because the status itself moves: a swept row is no longer `requested`, so a re-run finds nothing.
+def decline_lapsed_requests(now=None):
+    """Decline every `requested` signup whose shift has ended. Returns the signups declined."""
+    now = now or timezone.now()
+    declined = []
+    lapsed = VolunteerSignup.objects.filter(status=SignupStatus.REQUESTED, shift__ends_at__lte=now)
+    for pk in lapsed.values_list("pk", flat=True):
+        with transaction.atomic():
+            # The same row lock SignupApproveView / SignupDeclineView take, so a shelter deciding
+            # at this instant wins or loses cleanly instead of being overwritten.
+            signup = VolunteerSignup.objects.select_for_update().get(pk=pk)
+            if signup.status != SignupStatus.REQUESTED:
+                continue
+            signup.end_reason = SignupEndReason.SHIFT_PASSED
+            signup.save(update_fields=["end_reason"])
+            set_signup_status(signup, SignupStatus.DECLINED, now=now)
+            notify(signup.volunteer_account, "signup_declined",
+                   title="Your shift request wasn't accepted",
+                   body="The shift ended before the shelter answered your request.",
+                   data={"shift_id": str(signup.shift_id), "signup_id": str(signup.pk)})
+        declined.append(signup)
+    return declined
