@@ -316,3 +316,23 @@ def test_the_detail_shows_profile_changes_after_approval_newest_first(client, au
     assert [(c["field"], c["new_value"]) for c in changes] == [
         ("official_phone", "+639170000002"), ("website_url", "https://new.paws.org")]
     assert set(changes[0]) == {"field", "old_value", "new_value", "outcome", "created_at"}
+
+
+def test_probe_a_staff_suspension_leaves_the_request_open_in_the_inbox(client, auth):
+    # SH15 (shelter home review step 12) · the probe: suspending a person closes none of their open requests,
+    # so the shelter's inbox keeps them (SQ4: flagged `counterparty_suspended`;
+    # see shelter/tests/test_suspended_counterparty.py).
+    from accounts.tokens import tokens_for
+    from listings.models import InquiryStatus
+    from listings.tests.adoption_helpers import inquire, listing, person, shelter
+    the_shelter, adopter = shelter(), person()
+    inq = inquire(adopter, listing(the_shelter))
+    r = client.post(f"/admin-api/members/{adopter.pk}/suspend", {"reason": "spam"},
+                    content_type="application/json", **auth)
+    assert r.status_code == 200, r.content
+    inq.refresh_from_db()
+    assert inq.status == InquiryStatus.ACTIVE                     # SH15: suspension closes nothing
+    shelter_hdr = {"HTTP_AUTHORIZATION": f"Bearer {tokens_for(the_shelter)['access']}"}
+    rows = client.get("/api/v1/shelter/requests", {"kind": "adoption", "status": "open"},
+                      **shelter_hdr).json()["results"]
+    assert [(r["id"], r["counterparty_suspended"]) for r in rows] == [(str(inq.pk), True)]

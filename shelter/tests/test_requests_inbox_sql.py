@@ -9,7 +9,7 @@ The contract tests here were written first and passed against `main` before the 
 is unchanged. `count` (the total for the filter, for Requests' "{n} {segment} requests" line, step 10)
 is the one new key. An unknown `kind` or `status` is now a 400 instead of a silent empty list.
 """
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 import pytest
 from django.utils import timezone
@@ -74,7 +74,7 @@ class TestRowContract:
         assert row == {
             "kind": "adoption", "id": str(inq.pk), "title": "Bantay", "subtitle": "Ana Cruz",
             "status": "active", "created_at": inq.created_at.isoformat(),
-            "target": {"route": "inquiry", "id": str(inq.pk)},
+            "target": {"route": "inquiry", "id": str(inq.pk)}, "counterparty_suspended": False,
         }
 
     def test_volunteer_row(self, client):
@@ -87,9 +87,19 @@ class TestRowContract:
             "kind": "volunteer", "id": str(su.pk), "title": su.volunteer_account.display_name,
             "subtitle": "Sat, Oct 5 · Dog walking", "status": "requested",
             "created_at": su.created_at.isoformat(),
-            "target": {"route": "shelterVolunteerRequests", "id": str(su.shift_id)},
+            "target": {"route": "shelterVolunteerRequests", "id": str(su.shift_id)}, "counterparty_suspended": False,
+            # SH18 (step 16) · the raw fields, so the phone formats the date in its own locale and clock.
+            "shift_starts_at": starts.astimezone(UTC).isoformat(), "shift_title": "Dog walking",
         }
         assert rows[str(titled.pk)]["subtitle"] == "Sun, Oct 6 · Bath day"
+        assert rows[str(titled.pk)]["shift_title"] == "Bath day"
+
+    def test_the_server_subtitle_is_portable(self):
+        # SH18 · `%-d` is a glibc extension (Windows and some libcs reject it). Kept for older app builds only.
+        import inspect
+
+        import shelter.views
+        assert "%-d" not in inspect.getsource(shelter.views)
 
     def test_placement_row(self, client):
         shelter = _shelter()
@@ -100,7 +110,7 @@ class TestRowContract:
             "kind": "placement", "id": str(inq.pk), "title": "Kalabaw",
             "subtitle": "Placed by Case Worker Lim", "status": "active",
             "created_at": inq.created_at.isoformat(),
-            "target": {"route": "inquiry", "id": str(inq.pk)},
+            "target": {"route": "inquiry", "id": str(inq.pk)}, "counterparty_suspended": False,
         }
 
     def test_a_placement_is_not_an_adoption_row_for_the_poster(self, client):

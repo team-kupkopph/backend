@@ -11,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.visibility import COUNTERPARTY_SUSPENDED, is_suspended
 from common.analytics import emit
 from listings import notices
 from listings.models import (
@@ -44,15 +45,19 @@ def _err(code, message, status):
     return Response({"error": {"code": code, "message": message}}, status=status)
 
 
-def _poster_gate(inquiry, user):
+def _poster_gate(inquiry, user, forward=False):
     """What every poster action checks, on locked rows: the caller posted the listing, it's a
-    public inquiry (a placement is answered by its recipient), and it's still open."""
+    public inquiry (a placement is answered by its recipient), and it's still open. A `forward`
+    action (screen, reserve, complete) also needs an adopter who isn't suspended (SH15 / SQ4):
+    declining stays open, so the poster can still close the request."""
     if inquiry.listing.posted_by_id != user.pk:
         return _err("not_your_listing", "Only the poster can do this", 403)
     if inquiry.kind != InquiryKind.INQUIRY:
         return _err("is_placement", "A placement is answered by the person it was offered to", 409)
     if inquiry.status != InquiryStatus.ACTIVE:
         return _err("inquiry_closed", "This inquiry is already closed", 409)
+    if forward and is_suspended(inquiry.adopter_account):
+        return _err(*COUNTERPARTY_SUSPENDED, 409)
     return None
 
 
@@ -74,7 +79,7 @@ class ScreenView(APIView):
             listing, inquiry = _locked_inquiry(inquiry_id)
             if inquiry is None:
                 return _no_such_inquiry()
-            refusal = _poster_gate(inquiry, request.user)
+            refusal = _poster_gate(inquiry, request.user, forward=True)
             if refusal:
                 return refusal
             if inquiry.accepted_at is not None:
@@ -165,7 +170,7 @@ class ReserveView(APIView):
             listing, inquiry = _locked_inquiry(inquiry_id)
             if inquiry is None:
                 return _no_such_inquiry()
-            refusal = _poster_gate(inquiry, request.user)
+            refusal = _poster_gate(inquiry, request.user, forward=True)
             if refusal:
                 return refusal
             if inquiry.accepted_at is None:
@@ -241,7 +246,7 @@ class CompleteView(APIView):
             listing, inquiry = _locked_inquiry(inquiry_id)
             if inquiry is None:
                 return _no_such_inquiry()
-            refusal = _poster_gate(inquiry, request.user)
+            refusal = _poster_gate(inquiry, request.user, forward=True)
             if refusal:
                 return refusal
             if inquiry.reserved_at is None:

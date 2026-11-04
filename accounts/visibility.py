@@ -22,3 +22,12 @@ def public_account_q(prefix=""):
 def account_is_public(account):
     """The per-account form of `public_account_q`."""
     return account.status == AccountStatus.ACTIVE
+
+
+#: SH15 / SQ4 (shelter home review) · the refusal a forward action on a request gets when the person on the other
+#: side is suspended. The request itself stays visible (with a chip) and can still be declined.
+COUNTERPARTY_SUSPENDED = ("counterparty_suspended", "This account is suspended. You can still decline the request.")
+
+
+def is_suspended(account):
+    return account.status == AccountStatus.SUSPENDED

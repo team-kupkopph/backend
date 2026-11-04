@@ -1,3 +1,5 @@
+import logging
+
 from django.db import transaction
 from django.db.models import CharField, DateTimeField, F, Value
 from django.utils import timezone
@@ -5,7 +7,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Address
+from accounts.models import AccountStatus, Address
 from accounts.visibility import public_account_q
 from common.storage import PUBLIC, delete_object
 from common.throttles import DonationQrUploadThrottle
@@ -28,7 +30,9 @@ from shelter.serializers import (
 )
 from shelter.telemetry import emit_profile_created, emit_profile_updated
 from verifications.models import VerificationRequest
-from volunteer.models import VolunteerShift, VolunteerSignup, VolunteerType
+from volunteer.models import ShiftStatus, VolunteerShift, VolunteerSignup, VolunteerType
+
+logger = logging.getLogger(__name__)
 
 REQUESTS_PAGE_SIZE = 20
 
@@ -170,10 +174,10 @@ class ShelterRequestsView(APIView):
 
 
 REQUEST_KINDS = ("adoption", "volunteer", "placement")
-_ROW = ("k", "rid", "ts", "st", "title", "sub", "sub_at", "sub_type", "tgt")
+_ROW = ("k", "rid", "ts", "st", "title", "sub", "sub_at", "sub_type", "tgt", "cp")
 
 
-def _row_values(qs, kind, *, title, sub, sub_at=None, sub_type=None, tgt):
+def _row_values(qs, kind, *, title, sub, sub_at=None, sub_type=None, tgt, cp):
     """One kind's projection onto the shared `_ROW` columns, so the three can `UNION`.
     Every column is an annotation (never a model field) so their order is `_ROW`'s on all three."""
     return qs.annotate(
@@ -181,7 +185,7 @@ def _row_values(qs, kind, *, title, sub, sub_at=None, sub_type=None, tgt):
         title=title, sub=sub,
         sub_at=sub_at or Value(None, output_field=DateTimeField()),
         sub_type=sub_type or Value("", output_field=CharField()),
-        tgt=tgt,
+        tgt=tgt, cp=cp,
     ).values(*_ROW)
 
 
@@ -193,7 +197,7 @@ def _adoption_rows(shelter, open_only):
     if open_only:
         qs = qs.filter(status=InquiryStatus.ACTIVE)
     return _row_values(qs, "adoption", title=F("listing__name"),
-                       sub=F("adopter_account__display_name"), tgt=F("pk"))
+                       sub=F("adopter_account__display_name"), tgt=F("pk"), cp=F("adopter_account__status"))
 
 
 def _volunteer_rows(shelter, open_only):
@@ -203,7 +207,7 @@ def _volunteer_rows(shelter, open_only):
           else VolunteerSignup.objects.filter(shift__shelter_account=shelter))
     return _row_values(qs, "volunteer", title=F("volunteer_account__display_name"),
                        sub=F("shift__title"), sub_at=F("shift__starts_at"), sub_type=F("shift__type"),
-                       tgt=F("shift_id"))
+                       tgt=F("shift_id"), cp=F("volunteer_account__status"))
 
 
 def _placement_rows(shelter, open_only):
@@ -212,7 +216,8 @@ def _placement_rows(shelter, open_only):
     if open_only:
         qs = qs.filter(status=InquiryStatus.ACTIVE)
     return _row_values(qs, "placement", title=F("listing__name"),
-                       sub=F("listing__posted_by__display_name"), tgt=F("pk"))
+                       sub=F("listing__posted_by__display_name"), tgt=F("pk"),
+                       cp=F("listing__posted_by__status"))
 
 
 _VOLUNTEER_TYPE_LABEL = dict(VolunteerType.choices)
@@ -220,9 +225,14 @@ _VOLUNTEER_TYPE_LABEL = dict(VolunteerType.choices)
 
 def _request_item(r):
     kind = r["k"]
+    extra = {}
     if kind == "volunteer":
-        subtitle = (f"{timezone.localtime(r['sub_at']):%a, %b %-d} · "
-                    f"{r['sub'] or _VOLUNTEER_TYPE_LABEL.get(r['sub_type'], r['sub_type'])}")
+        shift_title = r["sub"] or _VOLUNTEER_TYPE_LABEL.get(r["sub_type"], r["sub_type"])
+        local = timezone.localtime(r["sub_at"])
+        # SH18 · the phone formats `shift_starts_at` itself (its locale, its clock). This server-side subtitle stays for
+        # older app builds, and is portable now (no glibc-only day directive).
+        subtitle = f"{local:%a, %b} {local.day} · {shift_title}"
+        extra = {"shift_starts_at": r["sub_at"].isoformat(), "shift_title": shift_title}
         route = "shelterVolunteerRequests"
     else:
         subtitle = f"Placed by {r['sub']}" if kind == "placement" else r["sub"]
@@ -231,6 +241,10 @@ def _request_item(r):
         "kind": kind, "id": str(r["rid"]), "title": r["title"], "subtitle": subtitle,
         "status": r["st"], "created_at": r["ts"].isoformat(),
         "target": {"route": route, "id": str(r["tgt"])},
+        # SH15 / SQ4 · the person on the other side is suspended: the row stays, with a chip, and the forward
+        # actions refuse (`counterparty_suspended`). Declining still works.
+        "counterparty_suspended": r["cp"] == AccountStatus.SUSPENDED,
+        **extra,
     }
 
 
@@ -280,9 +294,14 @@ class ShelterDashboardView(APIView):
                 shift__ends_at__lte=now).count(),
             "next_shift": ({"shift_id": str(nxt.pk), "title": nxt.title or nxt.get_type_display(),
                             "starts_at": nxt.starts_at.isoformat()} if nxt else None),
+            # SH12 · You's "Volunteer program · n active": the same set as `/shelter/shifts?when=upcoming` filtered to
+            # open and full, counted here so You need not page the list (it used to say "20+" past one page).
+            "active_shifts": VolunteerShift.objects.filter(
+                shelter_account=request.user, ends_at__gt=now,
+                status__in=[ShiftStatus.OPEN, ShiftStatus.FULL]).count(),
         }
         return Response({
-            "rescue": _rescue_summary(request.user),
+            "rescue": _isolated("rescue", _rescue_summary, request.user),
             "verification": {"submitted": submitted,
                              "status": vr.status if vr else None, "docs": docs},
             "counts": {"draft_listings": draft_listings,
@@ -295,7 +314,7 @@ class ShelterDashboardView(APIView):
                        "donations": _donations_count(request.user)},
             "gates": {"can_publish": approved, "donations_enabled": donations_enabled},
             "volunteer": volunteer,
-            "wishlist": _wishlist_summary(request.user),
+            "wishlist": _isolated("wishlist", _wishlist_summary, request.user),
         })
 
 
@@ -312,6 +331,18 @@ def _donations_count(shelter):
     from community.models import NeedPledge, PledgeStatus
     return NeedPledge.objects.filter(need__shelter_account=shelter,
                                      status=PledgeStatus.DELIVERED).count()
+
+
+def _isolated(block, build, shelter):
+    """SH12b · one of Home's optional blocks, isolated: if it fails it answers None (mobile treats `rescue` and
+    `wishlist` as optional) and is logged, instead of a 500 for the whole dashboard. Its own savepoint, so a failed
+    query does not abort the transaction the rest of the response still reads. Looked up by name at call time."""
+    try:
+        with transaction.atomic():
+            return build(shelter)
+    except Exception:
+        logger.exception("shelter dashboard: the %s block failed", block)
+        return None
 
 
 def _wishlist_summary(shelter):
