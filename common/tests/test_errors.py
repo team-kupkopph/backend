@@ -71,3 +71,16 @@ def test_a_malformed_shelter_id_on_the_public_donation_qr_route_is_json(client, 
     assert res.status_code == 404
     assert res["Content-Type"].startswith("application/json")
     assert res.json()["error"]["code"] == "not_found"
+
+
+def test_an_api_500_is_the_envelope_and_a_non_api_500_keeps_djangos_page(rf):
+    # I3 (shelter home test plan) · handler500. The full path (a dropped query mid-request) is in
+    # shelter/tests/test_shelter_home_nt5.py.
+    import json
+
+    from common.errors import api_server_error
+    api = api_server_error(rf.get("/api/v1/shelter/dashboard"))
+    assert api.status_code == 500 and api["Content-Type"].startswith("application/json")
+    assert json.loads(api.content)["error"]["code"] == "server_error"
+    page = api_server_error(rf.get("/admin/"))
+    assert page.status_code == 500 and not page["Content-Type"].startswith("application/json")

@@ -1,5 +1,5 @@
 from django.http import JsonResponse
-from django.views.defaults import page_not_found
+from django.views.defaults import page_not_found, server_error
 from rest_framework.exceptions import Throttled
 from rest_framework.views import exception_handler
 
@@ -72,3 +72,15 @@ def api_not_found(request, exception=None):
         return JsonResponse({"error": {"code": "not_found", "message": "Not found",
                                        "request_id": request_id_var.get()}}, status=404)
     return page_not_found(request, exception)
+
+
+def api_server_error(request):
+    """I3 (shelter home test plan) · an unhandled error (a dropped database connection, a bug) used to answer API clients
+    with Django's HTML "Server Error (500)" page: no envelope for the app to read and no request id for support. DRF's
+    handler never sees these (it returns None for non-API exceptions), so this is Django's `handler500`. API paths answer
+    in the envelope, with nothing about the cause; everything else keeps Django's default page. Logged as before, once,
+    by `django.request`."""
+    if request.path.startswith("/api/"):
+        return JsonResponse({"error": {"code": "server_error", "message": "Something went wrong on our side.",
+                                       "request_id": request_id_var.get()}}, status=500)
+    return server_error(request)
