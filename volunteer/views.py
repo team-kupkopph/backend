@@ -12,6 +12,7 @@ from common.throttles import ShiftCreateThrottle, SignupCreateThrottle
 from listings.models import AdoptionListing
 from notifications.service import notify
 from shelter.permissions import IsShelter, IsVerifiedShelter
+from shelter.telemetry import request_decided
 from verifications.models import AccountCapability
 from volunteer.models import ShiftStatus, SignupStatus, VolunteerShift, VolunteerSignup
 from volunteer.reliability import reliability_for, reliability_for_many
@@ -479,6 +480,7 @@ class SignupApproveView(APIView):
                    title="Your shift is confirmed",
                    body="The shelter approved your request.",
                    data={"shift_id": str(shift.pk), "signup_id": str(signup.pk)})
+            request_decided(request.user, "volunteer", "approved", signup.created_at)   # SH16
         return Response({"status": SignupStatus.APPROVED})
 
 
@@ -514,6 +516,7 @@ class SignupDeclineView(APIView):
                    title="Your shift request wasn't accepted",
                    body="The shelter declined this request.",
                    data={"shift_id": str(signup.shift_id), "signup_id": str(signup.pk)})
+            request_decided(request.user, "volunteer", "declined", signup.created_at)   # SH16
         return Response({"status": SignupStatus.DECLINED})
 
 

@@ -7,9 +7,18 @@ from rest_framework.views import APIView
 
 from accounts.models import Address
 from accounts.visibility import public_account_q
+from common.storage import PUBLIC, delete_object
 from common.throttles import DonationQrUploadThrottle
+from common.uploads import own_upload_url_error
 from listings.models import AdoptionInquiry, InquiryKind, InquiryStatus, ListingStatus
-from shelter.models import DonationQr, QrStatus, ShelterProfile
+from shelter.models import (
+    AUDITED_PROFILE_FIELDS,
+    DonationQr,
+    ProfileChangeOutcome,
+    QrStatus,
+    ShelterProfile,
+    ShelterProfileChange,
+)
 from shelter.permissions import IsShelter
 from shelter.qr_rules import discard_image, own_repr
 from shelter.serializers import (
@@ -17,6 +26,7 @@ from shelter.serializers import (
     ShelterProfileCreateSerializer,
     ShelterProfilePatchSerializer,
 )
+from shelter.telemetry import emit_profile_created, emit_profile_updated
 from verifications.models import VerificationRequest
 from volunteer.models import VolunteerShift, VolunteerSignup, VolunteerType
 
@@ -50,6 +60,7 @@ class ShelterProfileView(APIView):
                 account=request.user, is_primary=True,
                 defaults={"line1": addr.get("line1", ""), "barangay": addr.get("barangay", ""),
                           "city": addr["city"], "province": addr.get("province", ""), "geom": None})
+        emit_profile_created(profile)   # SH16
         return Response({"shelter_profile_id": str(profile.shelter_profile_id)}, status=201)
 
     def get(self, request):
@@ -57,35 +68,69 @@ class ShelterProfileView(APIView):
         its own text back through the PUBLIC needs route, and nothing could show the rest."""
         profile = ShelterProfile.objects.filter(account=request.user).first()
         if profile is None:
-            return Response({"error": {"code": "no_profile",
-                                       "message": "Create the shelter profile first"}}, status=404)
+            return _no_profile()
         return Response(_profile_repr(profile))
 
     def patch(self, request):
-        profile = ShelterProfile.objects.filter(account=request.user).first()
-        if profile is None:
-            return Response({"error": {"code": "no_profile",
-                                       "message": "Create the shelter profile first"}}, status=409)
         s = ShelterProfilePatchSerializer(data=request.data, partial=True,
                                           context={"request": request})
+        # SH9 · the same 404 as GET for the same condition (it was 409 here).
+        if not ShelterProfile.objects.filter(account=request.user).exists():
+            return _no_profile()
         s.is_valid(raise_exception=True)
         data = dict(s.validated_data)
-        # AS7 · the org name is what the reviewers verified. Once ANY shelter_org verification is
-        # approved it can no longer change here — otherwise a verified shelter could become a
-        # different organisation under the same badge. Re-sending the current name is not a rename
-        # (the edit screen submits the whole form).
-        if "org_name" in data and data["org_name"] != profile.org_name:
-            if request.user.verifications.filter(type="shelter_org", status="approved").exists():
-                return Response({"error": {
+        if "logo_file_url" in data:
+            data["logo_url"] = data.pop("logo_file_url")
+
+        # SH14b · the lock check and the save are one transaction on the locked row, and the save writes only
+        # what changed: an approval landing in between can no longer let a rename through, and two devices
+        # editing different fields no longer overwrite each other.
+        with transaction.atomic():
+            profile = ShelterProfile.objects.select_for_update().filter(account=request.user).first()
+            if profile is None:
+                return _no_profile()
+            verified = request.user.verifications.filter(type="shelter_org", status="approved").exists()
+            # The edit form re-sends everything: only a different value is a change.
+            changed = sorted(k for k, v in data.items() if getattr(profile, k) != v)
+            # AS7 · the org name is what the reviewers verified. Once ANY shelter_org verification is
+            # approved it can no longer change here — otherwise a verified shelter could become a
+            # different organisation under the same badge.
+            if "org_name" in changed and verified:
+                _audit(request.user, "org_name", profile.org_name, data["org_name"], ProfileChangeOutcome.REFUSED)
+                refused = Response({"error": {
                     "code": "org_name_locked", "field": "org_name",
                     "message": "Your organization's name is what we verified. "
                                "Contact us to change it."}}, status=409)
-        if "logo_file_url" in data:
-            profile.logo_url = data.pop("logo_file_url")
-        for key, value in data.items():
-            setattr(profile, key, value)
-        profile.save()
+                return refused      # the attempt's row commits with this transaction: it is the record
+            if verified:    # SH14a / SQ3
+                for key in changed:
+                    if key in AUDITED_PROFILE_FIELDS:
+                        _audit(request.user, key, getattr(profile, key), data[key], ProfileChangeOutcome.CHANGED)
+            old_logo = profile.logo_url
+            for key in changed:
+                setattr(profile, key, data[key])
+            if changed:
+                profile.save(update_fields=changed)
+            if "logo_url" in changed:
+                _discard_logo(old_logo, request.user)   # SH14c
+        emit_profile_updated(changed)   # SH16
         return Response(_profile_repr(profile))
+
+
+def _no_profile():
+    return Response({"error": {"code": "no_profile", "message": "Create the shelter profile first"}}, status=404)
+
+
+def _audit(account, field, old, new, outcome):
+    ShelterProfileChange.objects.create(account=account, field=field, old_value=old or "", new_value=new or "",
+                                        outcome=outcome)
+
+
+def _discard_logo(url, account):
+    """SH14c · `shelter_logo` is a PUBLIC bucket kind, so a replaced logo stayed reachable forever. Delete the old
+    object once the save commits, and only when it is this account's own upload (never a legacy foreign URL)."""
+    if url and own_upload_url_error(url, account, "shelter_logo", noun="logo") is None:
+        transaction.on_commit(lambda: delete_object(url, PUBLIC))
 
 
 class ShelterRequestsView(APIView):

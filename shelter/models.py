@@ -115,3 +115,31 @@ class DonationQr(models.Model):
             models.UniqueConstraint(fields=["account", "provider"], condition=models.Q(status="live"), name="uq_donation_qr_one_live"),
             models.UniqueConstraint(fields=["account", "provider"], condition=models.Q(status="pending"), name="uq_donation_qr_one_pending"),
         ]
+
+
+class ProfileChangeOutcome(models.TextChoices):
+    CHANGED = "changed"
+    REFUSED = "refused"      # an attempt the server turned down (a rename of a verified org, AS7)
+
+
+class ShelterProfileChange(models.Model):
+    """SH14a / SQ3 · what changed on a VERIFIED org's profile, for the reviewer: the fields they relied on
+    (`AUDITED_PROFILE_FIELDS`) and every attempt to rename it. Written only once a `shelter_org` request has been
+    approved: before that the reviewer reads the current values at review time. Account deletion blanks the
+    values and keeps the record that something changed (accounts/data_map.py)."""
+    change_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="shelter_profile_changes")
+    field = models.CharField(max_length=40)
+    old_value = models.TextField(blank=True)
+    new_value = models.TextField(blank=True)
+    outcome = models.CharField(max_length=10, choices=ProfileChangeOutcome.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "shelter_profile_change"
+        indexes = [models.Index(fields=["account", "-created_at"], name="idx_profile_change_account")]
+
+
+#: SQ3 · the contact fields a reviewer relied on. `org_name` is audited separately: it cannot change once verified,
+#: so what is recorded for it is the refused attempt.
+AUDITED_PROFILE_FIELDS = ("official_email", "official_phone", "website_url")

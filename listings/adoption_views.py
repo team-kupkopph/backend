@@ -37,6 +37,7 @@ from pets import service as pets
 from sagip import notices as sagip_notices
 from sagip.models import StrayStatus
 from sagip.status import resolve_report
+from shelter.telemetry import request_decided
 
 
 def _err(code, message, status):
@@ -126,6 +127,7 @@ class RejectView(APIView):
                                           "no_response or other", 422)
             _end(inquiry, InquiryStatus.DECLINED, request.user, body["reason"])
             notices.inquiry_rejected(inquiry)
+            request_decided(request.user, "adoption", "declined", inquiry.created_at)   # SH16
         return Response({"status": inquiry.status, "end_reason": inquiry.end_reason})
 
 
