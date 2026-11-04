@@ -154,10 +154,13 @@ def test_tier_and_org_type_are_not_editable_here(client):
 
 
 @pytest.mark.django_db
-def test_a_patch_before_setup_is_still_a_409_no_profile(client):
+def test_a_patch_before_setup_is_a_404_no_profile_like_the_get(client):
+    # SH9 (shelter home review) · it was 409 while GET said 404 for the same condition.
     account = AccountFactory(account_type="shelter", email_verified_at=timezone.now())
 
-    assert _patch(client, account, {"description": "x"}).status_code == 409
+    res = _patch(client, account, {"description": "x"})
+
+    assert res.status_code == 404 and res.json()["error"]["code"] == "no_profile"
 
 
 # ------------------------------------------------------------------------- the org name

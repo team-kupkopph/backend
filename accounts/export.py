@@ -327,6 +327,16 @@ def _shelter_profile(account):
     }
 
 
+def _shelter_profile_changes(account):
+    from shelter.models import ShelterProfileChange
+    # SQ3 · the org's own edits after approval, as the reviewer sees them.
+    return [
+        {"field": c.field, "old_value": c.old_value or None, "new_value": c.new_value or None,
+         "outcome": c.outcome, "created_at": _dt(c.created_at)}
+        for c in ShelterProfileChange.objects.filter(account=account).order_by("created_at")
+    ]
+
+
 def _needs(account):
     from community.models import NeedPledge, ShelterNeed
     # The shelter's own wishlist. Who pledged is the DONORS' data, so a need carries only a
@@ -388,12 +398,13 @@ SECTIONS = {
     "notifications": _notifications,
     "moderation_flags": _moderation_flags,
     "shelter_profile": _shelter_profile,
+    "shelter_profile_changes": _shelter_profile_changes,
     "needs": _needs,
     "hosted_shifts": _hosted_shifts,
 }
 
 #: Present only in a shelter account's export; a personal account has none of these.
-SHELTER_ONLY = frozenset({"shelter_profile", "needs", "hosted_shifts"})
+SHELTER_ONLY = frozenset({"shelter_profile", "shelter_profile_changes", "needs", "hosted_shifts"})
 
 
 def build_export(account):

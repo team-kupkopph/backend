@@ -301,3 +301,18 @@ def test_the_shelter_hears_the_decision(client, auth):
     client.post(f"/admin-api/donation-qrs/{pend.pk}/refuse", {"notes": "Blurry"}, content_type="application/json", **auth)
     n = Notification.objects.get(account=profile.account, type="donation_qr_decided")
     assert "Blurry" in n.body and n.data["decision"] == "refused"
+
+
+@pytest.mark.django_db
+def test_the_detail_shows_profile_changes_after_approval_newest_first(client, auth):
+    # SH14a / SQ3 (shelter home review) · a reviewer sees what changed after they approved.
+    from accounts.tokens import tokens_for
+    profile = make_shelter(verified=True)
+    shelter_hdr = {"HTTP_AUTHORIZATION": f"Bearer {tokens_for(profile.account)['access']}"}
+    for body in ({"website_url": "https://new.paws.org"}, {"official_phone": "+639170000002"}):
+        r = client.patch("/api/v1/shelter/profile", body, content_type="application/json", **shelter_hdr)
+        assert r.status_code == 200, r.content
+    changes = client.get(f"/admin-api/shelters/{profile.pk}", **auth).json()["profile_changes"]
+    assert [(c["field"], c["new_value"]) for c in changes] == [
+        ("official_phone", "+639170000002"), ("website_url", "https://new.paws.org")]
+    assert set(changes[0]) == {"field", "old_value", "new_value", "outcome", "created_at"}

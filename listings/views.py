@@ -48,6 +48,7 @@ from sagip import notices
 from sagip.models import RescueCase, StrayReport, StrayStatus
 from sagip.status import resolve_report
 from shelter.models import ShelterProfile
+from shelter.telemetry import request_decided
 
 PAGE_SIZE = 20
 
@@ -926,6 +927,7 @@ class PlacementDecisionView(APIView):
                 award_badges_for(inq.listing.posted_by)
                 emit("inquiry_decided", outcome="accepted")
                 emit("adoption_completed", rehome=inq.listing.rehome_pet_id is not None)
+                request_decided(request.user, "placement", "accepted", inq.created_at)   # SH16
                 if draft is not None:
                     return Response({"listing_id": str(draft.pk), "draft": True}, status=200)
                 return Response({"pet_id": str(pet.pk)}, status=200)
@@ -942,6 +944,7 @@ class PlacementDecisionView(APIView):
             inq.listing.save(update_fields=["status"])
             notices.placement_decided(inq.listing, inq, "declined")   # S18
             emit("inquiry_decided", outcome="declined")
+            request_decided(request.user, "placement", "declined", inq.created_at)   # SH16
             return Response(status=200)
 
 

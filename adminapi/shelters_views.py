@@ -9,7 +9,7 @@ from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
 from listings.models import AdoptionListing
 from sagip.geo import centroid_for
-from shelter.models import DonationQr, QrStatus, ShelterProfile, ShelterTier
+from shelter.models import DonationQr, QrStatus, ShelterProfile, ShelterProfileChange, ShelterTier
 from shelter.qr_rules import discard_image, is_overdue, notify_decision, swap_in
 from verifications.models import VerificationRequest
 
@@ -55,6 +55,11 @@ def shelter_detail(profile):
         "website_url": profile.website_url,
         "vet_prc_number": profile.vet_prc_number,
         "listing_count": listing_count,
+        # SH14a / SQ3 · what changed on the profile after approval, newest first.
+        "profile_changes": [
+            {"field": c.field, "old_value": c.old_value, "new_value": c.new_value, "outcome": c.outcome,
+             "created_at": c.created_at.isoformat()}
+            for c in ShelterProfileChange.objects.filter(account=profile.account).order_by("-created_at")[:50]],
         "verifications": [{"verification_id": str(v.verification_id), "status": v.status,
                            "submitted_at": v.submitted_at.isoformat()} for v in verifications],
         "donation_qrs": [{"donation_qr_id": str(q.donation_qr_id), "provider": q.provider,

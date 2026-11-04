@@ -14,6 +14,7 @@ from django.utils import timezone
 
 from notifications.models import Notification
 from notifications.service import notify
+from shelter.telemetry import request_decided
 
 from .models import SignupEndReason, SignupStatus, VolunteerShift, VolunteerSignup
 from .status import set_signup_status
@@ -116,5 +117,6 @@ def decline_lapsed_requests(now=None):
                    title="Your shift request wasn't accepted",
                    body="The shift ended before the shelter answered your request.",
                    data={"shift_id": str(signup.shift_id), "signup_id": str(signup.pk)})
+            request_decided(None, "volunteer", "lapsed", signup.created_at)   # SH16 · no answer
         declined.append(signup)
     return declined

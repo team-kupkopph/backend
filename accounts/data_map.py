@@ -170,6 +170,10 @@ def _entries():
             E(_STAFF, _AUDIT),
         ("shelter.ShelterProfile", "account"):
             E("shelter_profile", Scrub({f: "" for f in SHELTER_PERSONAL_FIELDS})),
+        ("shelter.ShelterProfileChange", "account"):
+            # SQ3 · the reviewer's record that a key field changed after approval stays; the values
+            # (an email, a phone number) go with the rest of the contact fields.
+            E("shelter_profile_changes", Scrub({"old_value": "", "new_value": ""})),
         # -------------------------------------------------------------- verifications
         ("verifications.AccountCapability", "account"):
             E("capabilities", Keep("whether the account was approved as a rescuer; no PII")),

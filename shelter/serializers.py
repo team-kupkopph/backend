@@ -33,6 +33,14 @@ class ShelterProfileCreateSerializer(serializers.Serializer):
         return attrs
 
 
+class _WebsiteField(serializers.URLField):
+    """The forms ask for "Website / Facebook" and people type `paws.ph`: a bare address is read as https."""
+    def to_internal_value(self, data):
+        if isinstance(data, str) and data.strip() and "://" not in data:
+            data = "https://" + data.strip()
+        return super().to_internal_value(data)
+
+
 class ShelterProfilePatchSerializer(serializers.Serializer):
     # US-B3 (contact) and US-C1 (vet) both PATCH this profile; accept either subset. T8 adds the
     # rest of what a shelter shows the world. `tier` and `org_type` are deliberately NOT here: a
@@ -45,7 +53,8 @@ class ShelterProfilePatchSerializer(serializers.Serializer):
     contact_person_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
     contact_person_role = serializers.CharField(max_length=60, required=False, allow_blank=True)
     official_phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
-    website_url = serializers.CharField(required=False, allow_blank=True)
+    # SH14d · an http(s) URL, bounded: it is served to the admin console and shown to donors.
+    website_url = _WebsiteField(max_length=500, required=False, allow_blank=True)
     vet_name = serializers.CharField(max_length=120, required=False, allow_blank=True)
     vet_prc_number = serializers.CharField(max_length=30, required=False, allow_blank=True)
     # US-W3 · the drop-off how-to shown on the wishlist; blank clears it.
@@ -59,6 +68,11 @@ class ShelterProfilePatchSerializer(serializers.Serializer):
         error = own_upload_url_error(value, self.context["request"].user, "shelter_logo", noun="logo")
         if error:
             raise serializers.ValidationError(error)
+        return value
+
+    def validate_website_url(self, value):
+        if value and not value.lower().startswith(("http://", "https://")):
+            raise serializers.ValidationError("Enter a web address starting with http:// or https://.")
         return value
 
     def validate_official_phone(self, value):
