@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.utils import timezone
 
 from accounts.models import Account
 
@@ -29,6 +30,21 @@ class SignupStatus(models.TextChoices):
     CANCELLED = "cancelled"
     COMPLETED = "completed"
     NO_SHOW = "no_show"
+
+
+class SignupEndReason(models.TextChoices):
+    """SH4 / SQ1 · why the SYSTEM ended a signup. Blank for a person's decision (the shelter's
+    decline, the volunteer's cancel), the same convention as `adoption_inquiry.end_reason`."""
+    SHIFT_PASSED = "shift_passed"   # the shift ended with the request still undecided
+
+
+class VolunteerSignupQuerySet(models.QuerySet):
+    def awaiting_decision(self, shelter, now=None):
+        """SH4 · the ONE meaning of an open volunteer request: `requested`, on this shelter's shift,
+        and the shift has not ended (`ends_at > now`). Home's `pending_requests` and the inbox's
+        `status=open` both read this, so their numbers cannot disagree again."""
+        return self.filter(shift__shelter_account=shelter, status=SignupStatus.REQUESTED,
+                           shift__ends_at__gt=now or timezone.now())
 
 
 class VolunteerShift(models.Model):
@@ -118,6 +134,9 @@ class VolunteerSignup(models.Model):
     # staff-initiated cancels, so this field deliberately does not pin its choices here.
     cancelled_by = models.CharField(max_length=10, blank=True)
     attendance_marked_at = models.DateTimeField(null=True, blank=True)
+    end_reason = models.CharField(max_length=20, choices=SignupEndReason.choices, blank=True)
+
+    objects = VolunteerSignupQuerySet.as_manager()
 
     class Meta:
         db_table = "volunteer_signup"

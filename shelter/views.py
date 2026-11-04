@@ -105,7 +105,7 @@ class ShelterRequestsView(APIView):
         if kind in (None, "adoption"):
             items += self._adoption_items(request.user)
         if kind in (None, "volunteer"):
-            items += self._volunteer_items(request.user)
+            items += self._volunteer_items(request.user, open_only)
         if kind in (None, "placement"):
             items += self._placement_items(request.user)
 
@@ -138,9 +138,12 @@ class ShelterRequestsView(APIView):
         return items
 
     @staticmethod
-    def _volunteer_items(shelter):
-        qs = (VolunteerSignup.objects.filter(shift__shelter_account=shelter)
-              .select_related("shift", "volunteer_account").order_by("-created_at"))
+    def _volunteer_items(shelter, open_only=False):
+        # SH4 · "open" is `awaiting_decision` (the shift has not ended), the same rule as the
+        # dashboard's `pending_requests`. A request for a finished shift is history, not open.
+        qs = (VolunteerSignup.objects.awaiting_decision(shelter) if open_only
+              else VolunteerSignup.objects.filter(shift__shelter_account=shelter))
+        qs = qs.select_related("shift", "volunteer_account").order_by("-created_at")
         return [{
             "kind": "volunteer", "id": str(su.pk),
             "title": su.volunteer_account.display_name,
@@ -214,9 +217,7 @@ class ShelterDashboardView(APIView):
         nxt = (mine.filter(starts_at__gt=now, status__in=["open", "full"])
                .order_by("starts_at").first())
         volunteer = {
-            "pending_requests": VolunteerSignup.objects.filter(
-                shift__shelter_account=request.user, status="requested",
-                shift__ends_at__gt=now).count(),
+            "pending_requests": VolunteerSignup.objects.awaiting_decision(request.user, now=now).count(),
             "attendance_due": VolunteerSignup.objects.filter(
                 shift__shelter_account=request.user, status="approved",
                 shift__ends_at__lte=now).count(),

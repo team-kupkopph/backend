@@ -25,7 +25,7 @@ from common.management_base import SingletonCommand
 from community.sweeps import award_badges
 from listings.sweeps import close_stale_inquiries, expire_placements, nudge_stale_inquiries
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims, warn_due_claims
-from volunteer.sweeps import nudge_attendance, remind_shifts
+from volunteer.sweeps import decline_lapsed_requests, nudge_attendance, remind_shifts
 
 logger = logging.getLogger("kupkop.sweeps")
 
@@ -48,6 +48,7 @@ SWEEPS = [
     ("inquiries_closed", close_stale_inquiries),   # AD23 · three weeks unanswered closes politely
     ("reminded", remind_shifts),
     ("attendance_nudged", nudge_attendance),
+    ("requests_lapsed", decline_lapsed_requests),   # SH4 / SQ1 · a request whose shift ended undecided gets an answer
     ("badged", award_badges),
 ]
 
