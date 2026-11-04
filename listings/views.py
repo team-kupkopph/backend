@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account, Address
-from accounts.visibility import public_account_q
+from accounts.visibility import COUNTERPARTY_SUSPENDED, is_suspended, public_account_q
 from common.analytics import emit
 from common.cities import city_variants
 from listings.fees import fee_cap_for
@@ -896,6 +896,10 @@ class PlacementDecisionView(APIView):
                                 status=409)
 
             now = timezone.now()
+            if action == "accept" and is_suspended(listing.posted_by):
+                # SH15 / SQ4 · the rescuer offering it is suspended: the offer can be declined, not taken.
+                code, message = COUNTERPARTY_SUSPENDED
+                return Response({"error": {"code": code, "message": message}}, status=409)
             if action == "accept":
                 inq.status = InquiryStatus.ADOPTED
                 inq.decided_at = now

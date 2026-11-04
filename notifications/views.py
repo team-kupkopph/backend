@@ -18,6 +18,15 @@ class NotificationsView(APIView):
         return Response({"notifications": [_repr(n) for n in qs]})
 
 
+class NotificationsUnreadCountView(APIView):
+    """SH12 (shelter home review) · GET /me/notifications/unread-count — the bell's dot. Each Home used to fetch the
+    whole list on every focus only to ask "is anything unread?"."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({"unread": request.user.notifications.filter(read=False).count()})
+
+
 class NotificationsReadView(APIView):
     """Mark the caller's unread notifications read (on opening the bell)."""
     permission_classes = [IsAuthenticated]

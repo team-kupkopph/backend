@@ -8,6 +8,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.visibility import COUNTERPARTY_SUSPENDED, is_suspended
 from common.throttles import ShiftCreateThrottle, SignupCreateThrottle
 from listings.models import AdoptionListing
 from notifications.service import notify
@@ -441,6 +442,11 @@ class SignupApproveView(APIView):
             listing, error = _own_walking_listing(listing_id, request.user, signup.shift)
             if error:
                 return error
+
+        # SH15 / SQ4 · a suspended volunteer's request stays visible and can be declined, not approved.
+        if is_suspended(signup.volunteer_account):
+            code, message = COUNTERPARTY_SUSPENDED
+            return Response({"error": {"code": code, "message": message}}, status=409)
 
         rel = reliability_for(signup.volunteer_account)
         if rel["needs_reapproval"] and request.data.get("acknowledged_reapproval") is not True:
