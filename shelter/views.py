@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import CharField, DateTimeField, F, Value
 from django.utils import timezone
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -7,7 +8,7 @@ from rest_framework.views import APIView
 from accounts.models import Address
 from accounts.visibility import public_account_q
 from common.throttles import DonationQrUploadThrottle
-from listings.models import AdoptionInquiry, InquiryKind, ListingStatus
+from listings.models import AdoptionInquiry, InquiryKind, InquiryStatus, ListingStatus
 from shelter.models import DonationQr, QrStatus, ShelterProfile
 from shelter.permissions import IsShelter
 from shelter.qr_rules import discard_image, own_repr
@@ -17,7 +18,7 @@ from shelter.serializers import (
     ShelterProfilePatchSerializer,
 )
 from verifications.models import VerificationRequest
-from volunteer.models import VolunteerShift, VolunteerSignup
+from volunteer.models import VolunteerShift, VolunteerSignup, VolunteerType
 
 REQUESTS_PAGE_SIZE = 20
 
@@ -91,101 +92,112 @@ class ShelterRequestsView(APIView):
     """B-be2 · GET /shelter/requests — one merged inbox across the shelter's three
     inbound-request surfaces: adoption inquiries on its own listings, volunteer signups
     on its own shifts, and placements addressed to it (a case-worker `.../place`d
-    inquiry where the shelter is the *adopter* and every stage is SKIPPED — the
-    placement bypass; see listings/tests/test_inquiries.py). Merged and sorted in
-    Python rather than in SQL: the three sources are different models with no shared
-    table to `UNION`, and shelf-inbox volumes make an in-memory merge cheap enough."""
+    inquiry where the shelter is the *adopter*; see listings/tests/test_inquiries.py).
+
+    SH7 / SH7b · one `UNION ALL` of three narrow projections, filtered by kind and open status,
+    ordered `(-created_at, -id)` and paged in SQL. It used to load the shelter's whole history into
+    Python and merge it there, so the cost grew with every request ever made, not with the page.
+    SH8 · an unknown `kind` or `status` is a 400, not a silent empty list."""
     permission_classes = [IsShelter]
 
     def get(self, request):
         kind = request.query_params.get("kind")
-        open_only = request.query_params.get("status") == "open"
+        status = request.query_params.get("status")
+        if kind is not None and kind not in REQUEST_KINDS:
+            return _invalid("kind", f"kind must be one of {', '.join(REQUEST_KINDS)}")
+        if status is not None and status != "open":
+            return _invalid("status", "status must be open, or left out")
+        open_only = status == "open"
 
-        items = []
-        if kind in (None, "adoption"):
-            items += self._adoption_items(request.user)
-        if kind in (None, "volunteer"):
-            items += self._volunteer_items(request.user, open_only)
-        if kind in (None, "placement"):
-            items += self._placement_items(request.user)
+        parts = [build(request.user, open_only) for k, build in (
+            ("adoption", _adoption_rows), ("volunteer", _volunteer_rows), ("placement", _placement_rows),
+        ) if kind in (None, k)]
+        union = parts[0].union(*parts[1:], all=True) if len(parts) > 1 else parts[0]
 
-        if open_only:
-            items = [i for i in items if i["status"] in ("active", "requested")]
-        items.sort(key=lambda i: i["created_at"], reverse=True)
-
-        page_items, next_page = _paginate_items(items, request)
-        for item in page_items:
-            item["created_at"] = item["created_at"].isoformat()
-        return Response({"results": page_items, "next": next_page})
-
-    @staticmethod
-    def _adoption_items(shelter):
-        # `listing__posted_by=shelter` covers everything the shelter posted; placements
-        # (`kind=placement`) are excluded here and surfaced separately by
-        # `_placement_items` instead, keyed off who the *adopter* is.
-        qs = (AdoptionInquiry.objects.filter(listing__posted_by=shelter)
-              .select_related("listing", "adopter_account").order_by("-created_at"))
-        items = []
-        for inq in qs:
-            if _is_placement(inq):
-                continue
-            items.append({
-                "kind": "adoption", "id": str(inq.pk), "title": inq.listing.name,
-                "subtitle": inq.adopter_account.display_name, "status": inq.status,
-                "created_at": inq.created_at,
-                "target": {"route": "inquiry", "id": str(inq.pk)},
-            })
-        return items
-
-    @staticmethod
-    def _volunteer_items(shelter, open_only=False):
-        # SH4 · "open" is `awaiting_decision` (the shift has not ended), the same rule as the
-        # dashboard's `pending_requests`. A request for a finished shift is history, not open.
-        qs = (VolunteerSignup.objects.awaiting_decision(shelter) if open_only
-              else VolunteerSignup.objects.filter(shift__shelter_account=shelter))
-        qs = qs.select_related("shift", "volunteer_account").order_by("-created_at")
-        return [{
-            "kind": "volunteer", "id": str(su.pk),
-            "title": su.volunteer_account.display_name,
-            "subtitle": (f"{timezone.localtime(su.shift.starts_at):%a, %b %-d} · "
-                         f"{su.shift.title or su.shift.get_type_display()}"),
-            "status": su.status, "created_at": su.created_at,
-            "target": {"route": "shelterVolunteerRequests", "id": str(su.shift_id)},
-        } for su in qs]
-
-    @staticmethod
-    def _placement_items(shelter):
-        qs = (AdoptionInquiry.objects.filter(adopter_account=shelter)
-              .select_related("listing", "listing__posted_by").order_by("-created_at"))
-        items = []
-        for inq in qs:
-            if not _is_placement(inq):
-                continue
-            items.append({
-                "kind": "placement", "id": str(inq.pk), "title": inq.listing.name,
-                "subtitle": f"Placed by {inq.listing.posted_by.display_name}",
-                "status": inq.status, "created_at": inq.created_at,
-                "target": {"route": "inquiry", "id": str(inq.pk)},
-            })
-        return items
+        page = _page_number(request)
+        start = (page - 1) * REQUESTS_PAGE_SIZE
+        rows = list(union.order_by("-ts", "-rid")[start:start + REQUESTS_PAGE_SIZE + 1])
+        return Response({
+            "results": [_request_item(r) for r in rows[:REQUESTS_PAGE_SIZE]],
+            "next": page + 1 if len(rows) > REQUESTS_PAGE_SIZE else None,
+            "count": union.count(),
+        })
 
 
-def _is_placement(inquiry):
-    """A placement is an `AdoptionInquiry` created via the case-worker `.../place` path
-    (decision 9's placement bypass). AD22 · said by its `kind` column: the old test (every
-    stage SKIPPED) broke once AQ5 started public ladders with skipped stages."""
-    return inquiry.kind == InquiryKind.PLACEMENT
+REQUEST_KINDS = ("adoption", "volunteer", "placement")
+_ROW = ("k", "rid", "ts", "st", "title", "sub", "sub_at", "sub_type", "tgt")
 
 
-def _paginate_items(items, request):
+def _row_values(qs, kind, *, title, sub, sub_at=None, sub_type=None, tgt):
+    """One kind's projection onto the shared `_ROW` columns, so the three can `UNION`.
+    Every column is an annotation (never a model field) so their order is `_ROW`'s on all three."""
+    return qs.annotate(
+        k=Value(kind, output_field=CharField()), rid=F("pk"), ts=F("created_at"), st=F("status"),
+        title=title, sub=sub,
+        sub_at=sub_at or Value(None, output_field=DateTimeField()),
+        sub_type=sub_type or Value("", output_field=CharField()),
+        tgt=tgt,
+    ).values(*_ROW)
+
+
+def _adoption_rows(shelter, open_only):
+    # Everything the shelter posted, minus placements: those are surfaced by `_placement_rows`,
+    # keyed off who the *adopter* is.
+    qs = (AdoptionInquiry.objects.filter(listing__posted_by=shelter)
+          .exclude(kind=InquiryKind.PLACEMENT))
+    if open_only:
+        qs = qs.filter(status=InquiryStatus.ACTIVE)
+    return _row_values(qs, "adoption", title=F("listing__name"),
+                       sub=F("adopter_account__display_name"), tgt=F("pk"))
+
+
+def _volunteer_rows(shelter, open_only):
+    # SH4 · "open" is `awaiting_decision` (the shift has not ended), the same rule as the
+    # dashboard's `pending_requests`. A request for a finished shift is history, not open.
+    qs = (VolunteerSignup.objects.awaiting_decision(shelter) if open_only
+          else VolunteerSignup.objects.filter(shift__shelter_account=shelter))
+    return _row_values(qs, "volunteer", title=F("volunteer_account__display_name"),
+                       sub=F("shift__title"), sub_at=F("shift__starts_at"), sub_type=F("shift__type"),
+                       tgt=F("shift_id"))
+
+
+def _placement_rows(shelter, open_only):
+    # AD22 · a placement is said by its `kind` column, never inferred from the stage ladder.
+    qs = AdoptionInquiry.objects.filter(adopter_account=shelter, kind=InquiryKind.PLACEMENT)
+    if open_only:
+        qs = qs.filter(status=InquiryStatus.ACTIVE)
+    return _row_values(qs, "placement", title=F("listing__name"),
+                       sub=F("listing__posted_by__display_name"), tgt=F("pk"))
+
+
+_VOLUNTEER_TYPE_LABEL = dict(VolunteerType.choices)
+
+
+def _request_item(r):
+    kind = r["k"]
+    if kind == "volunteer":
+        subtitle = (f"{timezone.localtime(r['sub_at']):%a, %b %-d} · "
+                    f"{r['sub'] or _VOLUNTEER_TYPE_LABEL.get(r['sub_type'], r['sub_type'])}")
+        route = "shelterVolunteerRequests"
+    else:
+        subtitle = f"Placed by {r['sub']}" if kind == "placement" else r["sub"]
+        route = "inquiry"
+    return {
+        "kind": kind, "id": str(r["rid"]), "title": r["title"], "subtitle": subtitle,
+        "status": r["st"], "created_at": r["ts"].isoformat(),
+        "target": {"route": route, "id": str(r["tgt"])},
+    }
+
+
+def _invalid(field, message):
+    return Response({"error": {"code": "invalid", "field": field, "message": message}}, status=400)
+
+
+def _page_number(request):
     try:
-        page = max(1, int(request.query_params.get("page") or 1))
+        return max(1, int(request.query_params.get("page") or 1))
     except (TypeError, ValueError):
-        page = 1
-    start = (page - 1) * REQUESTS_PAGE_SIZE
-    page_items = items[start:start + REQUESTS_PAGE_SIZE]
-    has_next = len(items) > start + REQUESTS_PAGE_SIZE
-    return page_items, (page + 1 if has_next else None)
+        return 1
 
 
 class ShelterDashboardView(APIView):
