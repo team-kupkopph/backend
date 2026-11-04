@@ -4,7 +4,7 @@ from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from common.storage import PUBLIC, delete_object
+from common.storage import PUBLIC, delete_object, delete_object_or_log
 from common.uploads import own_upload_url_error
 
 OVERDUE_BUSINESS_DAYS = 2   # owner decision, DW2 plan Q2: past this a pending QR is flagged Overdue (never auto-approved)
@@ -62,7 +62,8 @@ def discard_image(qr):
     if donation_qr_url_error(qr.qr_image_url, qr.account) is not None:
         return
     url = qr.qr_image_url
-    transaction.on_commit(lambda: delete_object(url, PUBLIC))
+    # F3 · on commit, so a storage error is logged by key instead of turning the committed change into a 500.
+    transaction.on_commit(lambda: delete_object_or_log(url, PUBLIC, why="donation QR image", deleter=delete_object))
 
 
 def withdraw_for_departure(account):

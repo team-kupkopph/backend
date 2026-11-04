@@ -31,7 +31,15 @@ def approve_request(vr, reviewer):
 
     For a Verified Member (`type='rescuer'`) this also grants the rescuer capability — no
     separate gate flag is written; the approved request/capability *is* the gate.
+
+    F1 (shelter home test plan) · a `shelter_org` approval first takes the `shelter_profile` row lock that
+    `PATCH /shelter/profile` holds while it checks the org-name lock and saves. Without it a rename could commit
+    beside the approval: an approved org whose name nobody reviewed (AS7). Both take the profile row first, so
+    there is one lock order and no deadlock.
     """
+    if vr.type == VerificationType.SHELTER_ORG:
+        from shelter.models import ShelterProfile
+        ShelterProfile.objects.select_for_update().filter(account=vr.account).first()
     vr.status = VerificationStatus.APPROVED
     vr.reviewed_by = reviewer
     vr.reviewed_at = timezone.now()
