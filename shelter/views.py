@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 
 from accounts.models import AccountStatus, Address
 from accounts.visibility import public_account_q
-from common.storage import PUBLIC, delete_object
+from common.storage import PUBLIC, delete_object, delete_object_or_log
 from common.throttles import DonationQrUploadThrottle
 from common.uploads import own_upload_url_error
 from listings.models import AdoptionInquiry, InquiryKind, InquiryStatus, ListingStatus
@@ -110,6 +110,10 @@ class ShelterProfileView(APIView):
                 for key in changed:
                     if key in AUDITED_PROFILE_FIELDS:
                         _audit(request.user, key, getattr(profile, key), data[key], ProfileChangeOutcome.CHANGED)
+            elif "org_name" in changed and request.user.verifications.filter(
+                    type="shelter_org", status__in=["pending", "needs_info"]).exists():
+                # F1 · renamed while a reviewer has the request: they see it on the admin page before approving.
+                _audit(request.user, "org_name", profile.org_name, data["org_name"], ProfileChangeOutcome.CHANGED)
             old_logo = profile.logo_url
             for key in changed:
                 setattr(profile, key, data[key])
@@ -134,7 +138,7 @@ def _discard_logo(url, account):
     """SH14c · `shelter_logo` is a PUBLIC bucket kind, so a replaced logo stayed reachable forever. Delete the old
     object once the save commits, and only when it is this account's own upload (never a legacy foreign URL)."""
     if url and own_upload_url_error(url, account, "shelter_logo", noun="logo") is None:
-        transaction.on_commit(lambda: delete_object(url, PUBLIC))
+        transaction.on_commit(lambda: delete_object_or_log(url, PUBLIC, why="replaced logo", deleter=delete_object))
 
 
 class ShelterRequestsView(APIView):

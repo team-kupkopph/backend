@@ -14,6 +14,7 @@ a no-op. Wiring an actual bucket (env vars, IAM, lifecycle rules) stays a deploy
 for whoever has AWS access — this module's job is that the *code path* is real and tested
 against a mocked S3 (`moto`), not that a bucket is live.
 """
+import logging
 from urllib.parse import urlsplit
 
 from django.conf import settings
@@ -64,6 +65,21 @@ def delete_object(file_url, visibility=RESTRICTED):
     import boto3  # prod-only; not a dev dependency
 
     boto3.client("s3").delete_object(Bucket=bucket, Key=object_key(file_url, visibility))
+
+
+def delete_object_or_log(file_url, visibility, *, why, deleter=None):
+    """Delete a superseded object, and on a storage error log its KEY and carry on (F3, shelter home test plan).
+
+    For deletes that run after the change they clean up has committed (a replaced logo, a withdrawn QR's image):
+    raising there turned a saved change into a 500. The log names the key, never the URL (it can carry a host and a
+    signature) and never an account id, so the orphan can be found and removed by hand. `deleter` is the caller's
+    own `delete_object` reference, so tests that patch it where it is imported keep working."""
+    try:
+        (deleter or delete_object)(file_url, visibility)
+    except Exception as exc:  # noqa: BLE001 — boto3 is prod-only, so its error types can't be named
+        logging.getLogger("kupkop.storage").warning(
+            "could not delete %s object %s (%s); left for cleanup", why, object_key(file_url, visibility),
+            type(exc).__name__)
 
 
 def object_key(file_url, visibility=RESTRICTED):
