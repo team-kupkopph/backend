@@ -306,7 +306,7 @@ Quick-start (development):
 
 The sweep framework uses plain cron (decision US-F0: no Celery-beat for MVP). Every command is idempotent — safe to run more often than scheduled during testing.
 
-⚠️ **All four refuse to run twice at once** (US-Q2 follow-up). Each subclasses `SingletonCommand` (`common/management_base.py`) and takes a Postgres advisory lock named after itself; if the previous run is still going, the next logs a skip and exits 0. It is a database lock rather than `flock` because §16.1 runs 1–2 Fargate tasks, and a file lock guards one host while *looking* in the crontab exactly as though it guards both.
+⚠️ **All five refuse to run twice at once** (US-Q2 follow-up). Each subclasses `SingletonCommand` (`common/management_base.py`) and takes a Postgres advisory lock named after itself; if the previous run is still going, the next logs a skip and exits 0. It is a database lock rather than `flock` because §16.1 runs 1–2 Fargate tasks, and a file lock guards one host while *looking* in the crontab exactly as though it guards both.
 
 ⚠️ `run_matching_sweep` is **§11.4's safety net, not the matcher.** A lost/found report is scanned synchronously when it is filed, so nobody's reunion waits on this job — which is why it can be nightly. It was inside `run_sweeps` (hourly, 24× what §11.4 asks) until US-Q2 measured it at **11.5 minutes over 50,000 reports**: 11.5 minutes of database load every hour, competing with the reads §13.1 budgets. A sweep belongs in `run_sweeps` only if a one-hour delay would hurt someone.
 

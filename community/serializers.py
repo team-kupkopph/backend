@@ -1,3 +1,5 @@
+from datetime import UTC
+
 from rest_framework import serializers
 from rest_framework.exceptions import APIException
 
@@ -66,3 +68,39 @@ class StoryCreateSerializer(serializers.Serializer):
     photos = StoryPhotoSerializer(many=True, required=False, default=list)
     adoption_listing_id = serializers.UUIDField(required=False, allow_null=True)
     rescue_case_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+# --- IB26 · GET /me/impact: the response, as a contract ------------------------
+# The payload was a hand-built dict, and the app read it as `any`. These say what it is, the view returns it, and
+# community/tests/test_impact_contract.py holds the app's TypeScript types (`ImpactResponse`, `Impact`, `BadgeShape`,
+# `BadgeProgress` in mobile_app/src/community.ts) to the same field names.
+
+class BadgeProgressSerializer(serializers.Serializer):
+    """How far along a badge is. `current` is honest and can pass `target`: a badge held after its stat fell reads
+    earned with `current` below `target`."""
+    current = serializers.IntegerField()
+    target = serializers.IntegerField()
+
+
+class ImpactCountsSerializer(serializers.Serializer):
+    shifts_completed = serializers.IntegerField()
+    rescues_helped = serializers.IntegerField()
+    pets_rehomed = serializers.IntegerField()
+    pledges_delivered = serializers.IntegerField()
+
+
+class ImpactBadgeSerializer(serializers.Serializer):
+    badge_code = serializers.CharField()
+    name = serializers.CharField()
+    description = serializers.CharField(allow_blank=True)
+    icon = serializers.CharField(allow_blank=True)
+    criteria = serializers.CharField(allow_blank=True)
+    earned = serializers.BooleanField()
+    # UTC, as stored. DRF would render it in TIME_ZONE (Asia/Manila, +08:00): the same instant, but not what this said before.
+    earned_at = serializers.DateTimeField(allow_null=True, default_timezone=UTC)
+    progress = BadgeProgressSerializer(allow_null=True)
+
+
+class MeImpactSerializer(serializers.Serializer):
+    impact = ImpactCountsSerializer()
+    badges = ImpactBadgeSerializer(many=True)
