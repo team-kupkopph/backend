@@ -125,7 +125,7 @@ def test_me_impact_returns_badges_and_aggregates(client):
 
 
 @pytest.mark.django_db
-def test_attendance_completed_awards_a_badge(client):
+def test_attendance_completed_awards_a_badge(client, django_capture_on_commit_callbacks):
     """The event hook: marking a shift Attended earns first_shift without any sweep."""
     volunteer = AccountFactory()
     shelter = AccountFactory(account_type="shelter")
@@ -135,8 +135,9 @@ def test_attendance_completed_awards_a_badge(client):
         ends_at=now - timezone.timedelta(hours=1))
     su = VolunteerSignup.objects.create(shift=shift, volunteer_account=volunteer,
                                         status=SignupStatus.APPROVED, waiver_accepted=True)
-    res = client.post(f"/api/v1/shelter/signups/{su.pk}/attendance", {"outcome": "completed"},
-                      content_type="application/json", **_hdr(shelter))
+    with django_capture_on_commit_callbacks(execute=True):
+        res = client.post(f"/api/v1/shelter/signups/{su.pk}/attendance", {"outcome": "completed"},
+                          content_type="application/json", **_hdr(shelter))
     assert res.status_code == 200
     assert AccountBadge.objects.filter(account=volunteer, badge_id="first_shift").exists()
 

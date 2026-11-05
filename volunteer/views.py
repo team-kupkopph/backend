@@ -724,7 +724,9 @@ class SignupRemoveView(APIView):
 
 
 class AttendanceUndoView(APIView):
-    """P4 · K16. A mis-tapped No-show used to be permanent and fed the re-approval gate."""
+    """P4 · K16. A mis-tapped No-show used to be permanent and fed the re-approval gate. A
+    mis-tapped Attended takes back what it earned (IB1 / IQ1), inside this transaction: a failed
+    revoke undoes the undo, so the shelter can retry and the badge can't outlive its shift."""
     permission_classes = [IsShelter]
 
     def post(self, request, signup_id):
@@ -738,9 +740,13 @@ class AttendanceUndoView(APIView):
             if (signup.attendance_marked_at is None or timezone.now()
                     > signup.attendance_marked_at + timezone.timedelta(hours=UNDO_HOURS)):
                 return _conflict("undo_expired", "Attendance can be changed for 24 hours")
+            was_completed = signup.status == SignupStatus.COMPLETED
             signup.status = SignupStatus.APPROVED
             signup.attendance_marked_at = None
             signup.save(update_fields=["status", "attendance_marked_at", "updated_at"])
+            if was_completed:
+                from community.badges import reconcile_shift_badges
+                reconcile_shift_badges(signup.volunteer_account)
         return Response({"status": SignupStatus.APPROVED})
 
 
@@ -884,11 +890,6 @@ class SignupAttendanceView(APIView):
                                            "message": "Only a confirmed shift has attendance"}},
                                 status=409)
             set_signup_status(signup, outcome)
-        if outcome == SignupStatus.COMPLETED:
-            # US-B1 · a completed shift can earn a badge. Idempotent + reconciled nightly,
-            # so this immediacy hook never double-awards (deferred import avoids a cycle).
-            from community.badges import award_badges_for
-            award_badges_for(signup.volunteer_account)
         from common.analytics import emit
         emit("shift_completed" if outcome == SignupStatus.COMPLETED else "shift_no_show")
         return Response({"status": outcome})

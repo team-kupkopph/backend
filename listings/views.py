@@ -927,8 +927,8 @@ class PlacementDecisionView(APIView):
                 notices.placement_decided(inq.listing, inq, "accepted")   # S18
                 # US-B1 · rehoming a pet can earn a badge for the lister (idempotent +
                 # reconciled nightly; deferred import avoids a cycle).
-                from community.badges import award_badges_for
-                award_badges_for(inq.listing.posted_by)
+                from community.badges import award_after_commit
+                award_after_commit(inq.listing.posted_by, source="rehome")
                 emit("inquiry_decided", outcome="accepted")
                 emit("adoption_completed", rehome=inq.listing.rehome_pet_id is not None)
                 request_decided(request.user, "placement", "accepted", inq.created_at)   # SH16
