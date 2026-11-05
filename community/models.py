@@ -109,6 +109,14 @@ class NeedPledge(models.Model):
         ]
 
 
+class BadgeMetric(models.TextChoices):
+    SHIFTS = "shifts_completed"
+    RESCUES = "rescues_helped"
+    REHOMED = "pets_rehomed"
+    PLEDGES = "pledges_delivered"
+    AREAS = "areas_helped"
+
+
 class Badge(models.Model):
     """The badge catalog (kupkop_mvp_schema.sql `badge`). Seeded, not user-created.
 
@@ -121,6 +129,13 @@ class Badge(models.Model):
     description = models.TextField(blank=True)
     icon = models.TextField(blank=True)
     criteria = models.TextField(blank=True)
+    # IB5 · the rule, on the row: earned when `metric` reaches `threshold`. `criteria` stays the
+    # words people read; a row with no metric is never awarded by the system. `areas_helped` is
+    # how many of shifts, rescues and rehomes are above zero, so Bayani is "3 of 3".
+    metric = models.CharField(max_length=20, blank=True, default="", choices=BadgeMetric.choices)
+    threshold = models.PositiveIntegerField(null=True, blank=True)
+    # The grid's order. Earned or not, a badge keeps its place, so the list does not shuffle.
+    sort_order = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
         db_table = "badge"

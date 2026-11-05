@@ -25,13 +25,12 @@ from notifications.models import Notification
 from notifications.service import notify
 from sagip.models import RescueCase
 
-from .models import AccountBadge, Badge, NeedPledge, PledgeStatus
+from .models import AccountBadge, Badge, BadgeMetric, NeedPledge, PledgeStatus
 
 logger = logging.getLogger("kupkop.badges")
 
-# The completed shifts each shift badge needs. Bayani's shift leg is judged separately: it has
-# two other legs, which `reconcile_shift_badges` must not re-open.
-SHIFT_FLOORS = {"first_shift": 1, "shifts_10": 10, "shifts_50": 50}
+# The three areas a person can help in. `areas_helped` is how many of them are above zero.
+AREAS = ("shifts_completed", "rescues_helped", "pets_rehomed")
 
 
 def _per_account(rows, key):
@@ -83,16 +82,30 @@ def impact_counts(account):
     return impact_counts_many([account])[account.pk]
 
 
-def _earned_codes(c):
-    earned = {code for code, floor in SHIFT_FLOORS.items() if c["shifts_completed"] >= floor}
-    if c["rescues_helped"] >= 1:
-        earned.add("first_rescue")
-    if c["pets_rehomed"] >= 1:
-        earned.add("rehomed_1")
-    if c["pets_rehomed"] >= 5:
-        earned.add("rehomed_5")
-    if c["shifts_completed"] >= 1 and c["rescues_helped"] >= 1 and c["pets_rehomed"] >= 1:
-        earned.add("bayani")
+def metric_value(counts, metric):
+    """How far `counts` has got on `metric`, or None for a metric nothing here knows (a row
+    written ahead of its code, or a typo): such a badge is skipped, never an error."""
+    if metric == BadgeMetric.AREAS:
+        return sum(1 for area in AREAS if counts[area] >= 1)
+    return counts.get(metric) if metric in BadgeMetric.values else None
+
+
+def badge_progress(badge, counts):
+    """{current, target} for a badge with a rule, else None. `current` is honest, so it can pass
+    `target`: a held badge whose stat has since fallen reads below it, and the screen clamps."""
+    current = metric_value(counts, badge.metric) if badge.metric and badge.threshold else None
+    if current is None:
+        return None
+    return {"current": current, "target": badge.threshold}
+
+
+def earned_codes(counts, badges):
+    """The codes in `badges` that `counts` has reached: the rule is the row's own (IB5)."""
+    earned = set()
+    for badge in badges:
+        progress = badge_progress(badge, counts)
+        if progress and progress["current"] >= progress["target"]:
+            earned.add(badge.pk)
     return earned
 
 
@@ -106,23 +119,21 @@ def award_badges_for(account, source="sweep"):
     IB3 · a badge and its notice land together or not at all: a badge that outlived a failed
     notice was held, so no rerun could ever tell its owner. One failure stops only that badge.
     """
-    earned = _earned_codes(impact_counts(account))
-    # Only award badges that actually exist in the catalog — you can't earn a badge that
-    # isn't seeded. Also keeps this a no-op (never an FK error) if the catalog is absent.
-    catalog = set(Badge.objects.filter(pk__in=earned).values_list("pk", flat=True))
+    # The catalog is the rules, so a badge that isn't seeded can't be earned, and an absent
+    # catalog is a no-op (never an FK error).
+    badges = {b.pk: b for b in Badge.objects.all()}
+    earned = earned_codes(impact_counts(account), badges.values())
     have = set(AccountBadge.objects.filter(account=account).values_list("badge_id", flat=True))
     awarded = []
-    for code in sorted(catalog - have):
+    for code in sorted(earned - have):
         try:
             with transaction.atomic():
                 # A concurrent award is absorbed by uq_account_badge; only the real insert notifies.
                 _, created = AccountBadge.objects.get_or_create(account=account, badge_id=code)
                 if not created:
                     continue
-                badge = Badge.objects.filter(pk=code).first()
                 notify(account, "badge_earned", title="New badge!",
-                       body=f"You earned “{badge.name}”." if badge else "You earned a badge.",
-                       data={"badge_code": code})
+                       body=f"You earned “{badges[code].name}”.", data={"badge_code": code})
         except Exception:
             logger.exception("badge %s not awarded to %s", code, account.pk)
             continue
@@ -152,10 +163,11 @@ def reconcile_shift_badges(account):
     """
     from volunteer.reliability import reliability_for
     shifts = reliability_for(account)["shifts_completed"]
-    gone = {code for code, floor in SHIFT_FLOORS.items() if shifts < floor}
+    gone = Q(metric=BadgeMetric.SHIFTS, threshold__gt=shifts)
     if shifts < 1:
-        gone.add("bayani")
-    held = AccountBadge.objects.filter(account=account, badge_id__in=gone)
+        gone |= Q(metric=BadgeMetric.AREAS)
+    held = AccountBadge.objects.filter(account=account,
+                                       badge__in=Badge.objects.filter(gone))
     revoked = sorted(held.values_list("badge_id", flat=True))
     held.delete()
     Notification.objects.filter(account=account, type="badge_earned",

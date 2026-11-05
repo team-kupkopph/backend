@@ -17,9 +17,10 @@ from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCrea
 from notifications.service import notify
 from shelter.permissions import IsShelter, IsVerifiedShelterForNeeds
 
-from .badges import impact_counts
+from .badges import badge_progress, impact_counts
 from .models import (
     AccountBadge,
+    Badge,
     NeedPledge,
     NeedStatus,
     ShelterNeed,
@@ -306,18 +307,18 @@ class MeImpactView(APIView):
         # Return the WHOLE catalog with an earned flag, so the grid can show earned badges
         # bright and unearned ones dimmed-with-criteria (US-B2) from a single call — an
         # unearned badge is never rendered as earned (the Reliable-chip trust rule).
-        from .models import Badge
+        # Catalog order (V7), not earned-first: a badge keeps its place, and the screen groups them.
+        # `progress` is {current, target} so it can say "8 of 10" without knowing any badge by name.
         earned = {b.badge_id: b.earned_at
                   for b in AccountBadge.objects.filter(account=request.user)}
-        catalog = Badge.objects.all().order_by("badge_code")
+        counts = impact_counts(request.user)
         badges = [{"badge_code": b.pk, "name": b.name, "description": b.description,
                    "icon": b.icon, "criteria": b.criteria,
                    "earned": b.pk in earned,
-                   "earned_at": earned[b.pk].isoformat() if b.pk in earned else None}
-                  for b in catalog]
-        # earned first, then the rest — stable within each group.
-        badges.sort(key=lambda x: (not x["earned"], x["badge_code"]))
-        return Response({"impact": impact_counts(request.user), "badges": badges})
+                   "earned_at": earned[b.pk].isoformat() if b.pk in earned else None,
+                   "progress": badge_progress(b, counts)}
+                  for b in Badge.objects.order_by("sort_order", "badge_code")]
+        return Response({"impact": counts, "badges": badges})
 
 
 # --- US-T1 · success stories ---------------------------------------------------
