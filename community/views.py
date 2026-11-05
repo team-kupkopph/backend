@@ -17,7 +17,7 @@ from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCrea
 from notifications.service import notify
 from shelter.permissions import IsShelter, IsVerifiedShelterForNeeds
 
-from .badges import badge_progress, impact_counts
+from .badges import award_after_commit, badge_progress, impact_counts
 from .models import (
     AccountBadge,
     Badge,
@@ -295,6 +295,9 @@ class NeedReceivedView(APIView):
                title="Pledge received",
                body=f"{request.user.display_name} received your pledge to “{need.title}”. Salamat!",
                data={"need_id": str(need.pk), "pledge_id": str(pledge.pk)})
+        # IQ5 · a shelter confirming receipt is the evidence for the donor badge (a second party, and an approved shelter).
+        # After commit and never raising, so a failing award cannot fail the confirmation (IB2); the sweep repairs a miss.
+        award_after_commit(pledge.pledger_account, source="pledge")
         emit("pledge_delivered", category=need.category)
         return Response({"need_status": need.status})
 

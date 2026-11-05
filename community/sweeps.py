@@ -19,7 +19,7 @@ from sagip.models import RescueCase
 from volunteer.models import SignupStatus, VolunteerSignup
 
 from .badges import award_badges_for, earned_codes, impact_counts_many
-from .models import AccountBadge, Badge
+from .models import AccountBadge, Badge, NeedPledge, PledgeStatus
 
 logger = logging.getLogger("kupkop.badges")
 
@@ -28,8 +28,9 @@ BATCH = 500
 
 
 def _candidate_account_ids():
-    """Accounts with activity a badge can come from. Pledges are absent on purpose: no badge
-    uses them (IB20), so checking a pledge-only account every night would find nothing."""
+    """Accounts with activity a badge can come from: a completed shift, a resolved rescue, an adopted listing, a delivered
+    pledge. Pledges were left out while no badge used them (IB20); Generous does (IQ5), so a donor whose event hook missed is
+    found here. Only DELIVERED pledges: one that was made or cancelled earns nothing."""
     ids = set()
     ids.update(VolunteerSignup.objects.filter(status=SignupStatus.COMPLETED)
                .values_list("volunteer_account_id", flat=True))
@@ -37,6 +38,8 @@ def _candidate_account_ids():
                .values_list("claimed_by_account_id", flat=True))
     ids.update(AdoptionListing.objects.filter(status=ListingStatus.ADOPTED)
                .values_list("posted_by_id", flat=True))
+    ids.update(NeedPledge.objects.filter(status=PledgeStatus.DELIVERED)
+               .values_list("pledger_account_id", flat=True))
     return ids
 
 
