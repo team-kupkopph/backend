@@ -52,4 +52,9 @@ def set_signup_status(signup, status, *, now=None, by=""):
         signup.attendance_marked_at = now or timezone.now()
         fields.append("attendance_marked_at")
     signup.save(update_fields=fields)
+    if status == SignupStatus.COMPLETED:
+        # US-B1 / D-S6-3 · a completed shift can earn a badge, whoever wrote it. Idempotent and
+        # after commit, so it never blocks this write (deferred import avoids a cycle).
+        from community.badges import award_after_commit
+        award_after_commit(signup.volunteer_account, source="shift")
     return signup

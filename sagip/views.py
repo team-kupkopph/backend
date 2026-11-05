@@ -347,8 +347,8 @@ class CaseStatusView(APIView):
 
         if target == StrayStatus.RESOLVED:
             # US-B1 · a resolved rescue can earn a badge (idempotent + reconciled nightly).
-            from community.badges import award_badges_for
-            award_badges_for(case.claimed_by_account)
+            from community.badges import award_after_commit
+            award_after_commit(case.claimed_by_account, source="rescue")
             emit("case_resolved")
 
         return Response({"status": target}, status=200)

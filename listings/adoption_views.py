@@ -240,7 +240,7 @@ class CompleteView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, inquiry_id):
-        from community.badges import award_badges_for  # deferred: avoids an import cycle
+        from community.badges import award_after_commit  # deferred: avoids an import cycle
 
         with transaction.atomic():
             listing, inquiry = _locked_inquiry(inquiry_id)
@@ -279,7 +279,7 @@ class CompleteView(APIView):
                     if case is not None:
                         sagip_notices.case_progress(report, case, StrayStatus.RESOLVED)
             notices.adoption_completed(inquiry, pet)
-            award_badges_for(listing.posted_by)
+            award_after_commit(listing.posted_by, source="rehome")
             emit("inquiry_decided", outcome="adopted")
             emit("adoption_completed", rehome=listing.rehome_pet_id is not None)   # step 13 · rehome or rescue
         return Response({"inquiry_id": str(inquiry.pk), "listing_id": str(listing.pk),
@@ -328,7 +328,7 @@ class MarkAdoptedView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, listing_id):
-        from community.badges import award_badges_for  # deferred: avoids an import cycle
+        from community.badges import award_after_commit  # deferred: avoids an import cycle
 
         with transaction.atomic():
             listing, error = _locked_own_listing(listing_id, request.user)
@@ -361,6 +361,6 @@ class MarkAdoptedView(APIView):
                     case = report.cases.filter(expired_at__isnull=True).first()
                     if case is not None:
                         sagip_notices.case_progress(report, case, StrayStatus.RESOLVED)
-            award_badges_for(listing.posted_by)
+            award_after_commit(listing.posted_by, source="rehome")
             emit("adoption_completed", rehome=listing.rehome_pet_id is not None)
         return Response({"status": "adopted", "closed_inquiries": len(active)})
