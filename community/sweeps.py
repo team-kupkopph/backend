@@ -18,8 +18,8 @@ from listings.models import AdoptionListing, ListingStatus
 from sagip.models import RescueCase
 from volunteer.models import SignupStatus, VolunteerSignup
 
-from .badges import _earned_codes, award_badges_for, impact_counts_many
-from .models import AccountBadge
+from .badges import award_badges_for, earned_codes, impact_counts_many
+from .models import AccountBadge, Badge
 
 logger = logging.getLogger("kupkop.badges")
 
@@ -51,6 +51,7 @@ def award_badges():
     """
     touched, failed, scanned, awarded = [], [], 0, 0
     ids = sorted(_candidate_account_ids(), key=str)
+    catalog = list(Badge.objects.all())
     for start in range(0, len(ids), BATCH):
         accounts = list(Account.objects.filter(pk__in=ids[start:start + BATCH],
                                                status=AccountStatus.ACTIVE).order_by("pk"))
@@ -61,7 +62,7 @@ def award_badges():
             held.setdefault(account_id, set()).add(code)
         for account in accounts:
             scanned += 1
-            if _earned_codes(counts[account.pk]) <= held.get(account.pk, set()):
+            if earned_codes(counts[account.pk], catalog) <= held.get(account.pk, set()):
                 continue
             try:
                 codes = award_badges_for(account, source="sweep")

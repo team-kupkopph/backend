@@ -124,7 +124,7 @@ def test_me_impact_returns_badges_and_aggregates(client):
     assert by_code["first_shift"]["earned_at"] is not None
     assert by_code["shifts_50"]["earned"] is False          # unearned, but present with criteria
     assert by_code["shifts_50"]["criteria"]
-    assert body["badges"][0]["earned"] is True              # earned sort first
+    assert body["badges"][0]["badge_code"] == "first_shift"   # catalog order, earned or not
 
 
 @pytest.mark.django_db
