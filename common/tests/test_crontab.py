@@ -75,7 +75,7 @@ def test_the_crontab_is_where_we_think_it_is():
 
 @pytest.mark.parametrize("name", scheduled_commands())
 def test_every_scheduled_command_refuses_to_run_twice_at_once(name):
-    app = {"run_sweeps": "sagip", "run_matching_sweep": "sagip",
+    app = {"run_sweeps": "sagip", "run_matching_sweep": "sagip", "run_badge_sweep": "community",
            "purge_deleted_accounts": "accounts",
            "purge_expired_documents": "verifications"}.get(name)
     assert app, (f"'{name}' is scheduled in deploy/cron.d/kupkop but this test does not know "

@@ -284,12 +284,13 @@ recurrence rate stays observable. See `../dev/HANDOFF.md` for the underlying iss
 
 ## Scheduled tasks
 
-Four management commands must run on a schedule in production. A ready-to-install crontab is at [`deploy/cron.d/kupkop`](./deploy/cron.d/kupkop).
+Five management commands must run on a schedule in production. A ready-to-install crontab is at [`deploy/cron.d/kupkop`](./deploy/cron.d/kupkop).
 
 | Command | Frequency | Purpose |
 |---|---|---|
-| `run_sweeps` | Every hour | Stray escalation, stalled claim expiry, offer expiry, shift reminders, badges (US-F0/E1/E2/N2/V7/B1) |
+| `run_sweeps` | Every hour | Stray escalation, stalled claim expiry, offer expiry, shift reminders (US-F0/E1/E2/N2/V7) |
 | `run_matching_sweep` | Nightly 18:20 UTC · 02:20 PHT | §11.4's lost↔found **safety net** — re-score still-open reports so a near miss gets another look (US-L2) |
+| `run_badge_sweep` | Nightly 19:50 UTC · 03:50 PHT | The safety net under the badge hooks — award what an account qualifies for and does not hold, in batches; active accounts only (US-B1, IB23) |
 | `purge_expired_documents` | Nightly 18:50 UTC · 02:50 PHT | RA 10173 data minimization — null `file_url` 90 days after a terminal verification decision (US-SEC4) |
 | `purge_deleted_accounts` | Nightly 19:20 UTC · 03:20 PHT | RA 10173 erasure — anonymize soft-deleted accounts in place once the 30-day grace window closes (US-N2, §12.7) |
 
@@ -298,6 +299,7 @@ Quick-start (development):
 ```bash
 .venv/bin/python manage.py run_sweeps
 .venv/bin/python manage.py run_matching_sweep
+.venv/bin/python manage.py run_badge_sweep
 .venv/bin/python manage.py purge_expired_documents
 .venv/bin/python manage.py purge_deleted_accounts
 ```

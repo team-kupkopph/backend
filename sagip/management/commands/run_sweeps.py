@@ -22,7 +22,6 @@ import logging
 from django.core.management.base import CommandError
 
 from common.management_base import SingletonCommand
-from community.sweeps import award_badges
 from listings.sweeps import close_stale_inquiries, expire_placements, nudge_stale_inquiries
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims, warn_due_claims
 from volunteer.sweeps import decline_lapsed_requests, nudge_attendance, remind_shifts
@@ -49,13 +48,12 @@ SWEEPS = [
     ("reminded", remind_shifts),
     ("attendance_nudged", nudge_attendance),
     ("requests_lapsed", decline_lapsed_requests),   # SH4 / SQ1 · a request whose shift ended undecided gets an answer
-    ("badged", award_badges),
 ]
 
 
 class Command(SingletonCommand):
     help = ("Run every scheduled sweep: escalation, stalled claims, placement expiry, offer expiry, "
-            "shift reminders, badges.")
+            "shift reminders.")
 
     def run(self, *args, **options):
         # R2 · each sweep is isolated: one raising (a bad row, a deadlock victim) is logged and

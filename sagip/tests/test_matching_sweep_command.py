@@ -84,5 +84,5 @@ def test_the_hourly_sweeps_still_run(capsys):
     # reminders — must stay hourly. Splitting the wrong sweep out would delay an escalation.
     call_command("run_sweeps")
     out = capsys.readouterr().out
-    for label in ("escalated", "expired", "reminded", "badged", "offer"):
+    for label in ("escalated", "expired", "reminded", "offer"):
         assert label in out, out

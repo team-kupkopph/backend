@@ -153,11 +153,13 @@ def test_a_no_show_awards_nothing(django_capture_on_commit_callbacks):
 
 
 @pytest.mark.django_db
-def test_mark_adopted_still_awards_the_poster(django_capture_on_commit_callbacks):
-    poster = person(member=True)
-    the_listing = listing(poster, status=ListingStatus.AVAILABLE)
+def test_completing_an_adoption_still_awards_the_poster(django_capture_on_commit_callbacks):
+    poster = shelter()
+    inquiry = inquire(person(member=True), listing(poster))
+    post(poster, inquiry, "screen")
+    post(poster, inquiry, "reserve")
     with django_capture_on_commit_callbacks(execute=True):
-        c(poster).post(f"/api/v1/listings/{the_listing.pk}/mark-adopted")
+        assert post(poster, inquiry, "complete").status_code == 200
     assert AccountBadge.objects.filter(account=poster, badge_id="rehomed_1").exists()
 
 
@@ -166,7 +168,8 @@ def test_resolving_a_case_still_awards_the_claimer(django_capture_on_commit_call
     claimer = AccountFactory()
     case = _claimed_case(claimer)
     with django_capture_on_commit_callbacks(execute=True):
-        c(claimer).post(f"/api/v1/cases/{case.pk}/status", {"status": "resolved"}, format="json")
+        c(claimer).post(f"/api/v1/cases/{case.pk}/status",
+                        {"status": "resolved", "outcome_notes": "Home safe"}, format="json")
     assert AccountBadge.objects.filter(account=claimer, badge_id="first_rescue").exists()
 
 

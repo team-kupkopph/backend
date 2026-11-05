@@ -17,6 +17,7 @@ attendance that had already saved. The sweep repairs anything missed.
 import logging
 
 from django.db import transaction
+from django.db.models import Count, Exists, F, OuterRef, Q
 
 from common.analytics import emit
 from listings.models import AdoptionListing, ListingStatus
@@ -33,23 +34,53 @@ logger = logging.getLogger("kupkop.badges")
 SHIFT_FLOORS = {"first_shift": 1, "shifts_10": 10, "shifts_50": 50}
 
 
+def _per_account(rows, key):
+    """{account_id: count} for a queryset, grouped on `key`."""
+    return {r[key]: r["n"] for r in rows.values(key).annotate(n=Count("pk"))}
+
+
+def impact_counts_many(accounts):
+    """The four impact aggregates for every account in `accounts`, in a fixed number of queries
+    however many there are (IB23), keyed by account pk. Computed on read from existing tables
+    (§6.6). The one counting path: `impact_counts` is this for a single account, and the
+    completed-shift count is US-V5's `reliability_for_many`, not a second query for the same fact."""
+    from volunteer.reliability import reliability_for_many
+    ids = {getattr(a, "pk", a) for a in accounts}
+    if not ids:
+        return {}
+    shifts = reliability_for_many(ids)
+    # D13 · a rescue of your own report, or an animal "placed" with yourself, is real work but
+    # not a badge: otherwise report → claim → resolve mints one in a minute.
+    # IQ3 · and it leaves evidence (an outcome note or photo, or an adoption through Kupkop that
+    # resolved it) and was not taken down: one call from claimed to resolved is not a rescue.
+    adopted_through_kupkop = (AdoptionListing.objects
+                              .filter(source_report_id=OuterRef("report_id"),
+                                      status=ListingStatus.ADOPTED,
+                                      adopted_by_account__isnull=False)
+                              .exclude(adopted_by_account_id=OuterRef("claimed_by_account_id")))
+    rescues = _per_account(
+        RescueCase.objects.filter(claimed_by_account_id__in=ids, resolved_at__isnull=False,
+                                  report__hidden_at__isnull=True)
+        .exclude(report__reporter_account_id=F("claimed_by_account_id"))
+        .filter(~Q(outcome_notes="") | ~Q(outcome_photo_url="") | Exists(adopted_through_kupkop)),
+        "claimed_by_account_id")
+    # IQ2 · a rehome has a second party: `mark-adopted` ("found a home outside Kupkop") records
+    # no adopter, so it earns nothing.
+    rehomed = _per_account(
+        AdoptionListing.objects.filter(posted_by_id__in=ids, status=ListingStatus.ADOPTED,
+                                       adopted_by_account__isnull=False)
+        .exclude(adopted_by_account_id=F("posted_by_id")), "posted_by_id")
+    pledges = _per_account(
+        NeedPledge.objects.filter(pledger_account_id__in=ids, status=PledgeStatus.DELIVERED),
+        "pledger_account_id")
+    return {pk: {"shifts_completed": shifts[pk]["shifts_completed"],
+                 "rescues_helped": rescues.get(pk, 0),
+                 "pets_rehomed": rehomed.get(pk, 0),
+                 "pledges_delivered": pledges.get(pk, 0)} for pk in ids}
+
+
 def impact_counts(account):
-    """The four impact aggregates, computed on read from existing tables (§6.6). Reuses the
-    US-V5 reliability query for the completed-shift count rather than forking a second one."""
-    from volunteer.reliability import reliability_for
-    return {
-        "shifts_completed": reliability_for(account)["shifts_completed"],
-        # D13 · a rescue of your own report, or an animal "placed" with yourself, is real work but
-        # not a badge: otherwise report → claim → resolve mints one in a minute.
-        "rescues_helped": (RescueCase.objects.filter(claimed_by_account=account,
-                                                     resolved_at__isnull=False)
-                           .exclude(report__reporter_account=account).count()),
-        "pets_rehomed": (AdoptionListing.objects.filter(posted_by=account,
-                                                        status=ListingStatus.ADOPTED)
-                         .exclude(adopted_by_account=account).count()),
-        "pledges_delivered": NeedPledge.objects.filter(pledger_account=account,
-                                                       status=PledgeStatus.DELIVERED).count(),
-    }
+    return impact_counts_many([account])[account.pk]
 
 
 def _earned_codes(c):
@@ -133,4 +164,5 @@ def reconcile_shift_badges(account):
         transaction.on_commit(lambda code=code: emit("badge_revoked", badge_code=code,
                                                      reason="attendance_undo"))
     return revoked
+
 

@@ -34,16 +34,19 @@ def _complete_shifts(account, n):
 
 
 def _resolve_case(account):
+    """IQ3 · a rescue counts with an outcome note, which is what the claimer writes on resolving."""
     report = StrayReport.objects.create(species="dog", condition="injured", status="resolved",
                                         geom=Point(121.05, 14.63, srid=4326))
     RescueCase.objects.create(report=report, claimed_by_account=account,
-                              resolved_at=timezone.now())
+                              resolved_at=timezone.now(), outcome_notes="Safe with a neighbour")
 
 
 def _rehome(account, n):
+    """IQ2 · a rehome counts when someone else adopted the animal."""
     for _ in range(n):
         AdoptionListing.objects.create(posted_by=account, name="Rex", species="dog",
-                                       status=ListingStatus.ADOPTED)
+                                       status=ListingStatus.ADOPTED,
+                                       adopted_by_account=AccountFactory())
 
 
 @pytest.mark.django_db
@@ -149,6 +152,7 @@ def test_the_sweep_reconciles_missed_badges(client):
     acc = AccountFactory()
     _complete_shifts(acc, 1)
     assert not AccountBadge.objects.filter(account=acc).exists()
-    touched = award_badges()
+    touched, failed = award_badges()
+    assert failed == []
     assert any(aid == acc.pk for aid, _ in touched)
     assert AccountBadge.objects.filter(account=acc, badge_id="first_shift").exists()
