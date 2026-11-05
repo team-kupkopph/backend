@@ -42,6 +42,11 @@ SHELL=/bin/bash
 # was not — which a comment cannot catch, because the comment was the thing that was wrong.
 20 18 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py run_matching_sweep >> /var/log/kupkop/sweeps.log 2>&1
 
+# Nightly badge reconciliation (US-B1 / D-S6-3, IB23) — the safety net under the event hooks.
+# It was inside the hourly run_sweeps, which only takes sweeps a one-hour delay would hurt; a
+# badge arriving a night late hurts nobody. 19:50 UTC = 03:50 PHT, asserted by test_crontab.py.
+50 19 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py run_badge_sweep >> /var/log/kupkop/sweeps.log 2>&1
+
 # Nightly document retention purge — RA 10173 data minimization (US-SEC4)
 # Nulls file_url + deletes the backing object 90 days after a terminal verification decision.
 # 18:50 UTC = 02:50 PHT (was 02:00 UTC = 10:00 PHT, mid-morning despite the old comment).

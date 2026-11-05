@@ -149,6 +149,7 @@ def test_the_sweep_reconciles_missed_badges(client):
     acc = AccountFactory()
     _complete_shifts(acc, 1)
     assert not AccountBadge.objects.filter(account=acc).exists()
-    touched = award_badges()
+    touched, failed = award_badges()
+    assert failed == []
     assert any(aid == acc.pk for aid, _ in touched)
     assert AccountBadge.objects.filter(account=acc, badge_id="first_shift").exists()
