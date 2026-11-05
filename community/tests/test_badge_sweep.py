@@ -137,14 +137,16 @@ def test_an_active_account_is_still_badged():
 
 
 @pytest.mark.django_db
-def test_a_pledge_only_account_is_not_a_candidate():
-    """No badge uses pledges, so checking such an account every night finds nothing."""
-    donor = AccountFactory()
+def test_a_pledge_only_account_is_a_candidate_now_that_a_badge_uses_pledges():
+    """IB20 left pledge-only accounts out because no badge used pledges; Generous does (IQ5), so a donor whose event hook
+    missed is found by the sweep. A pledge that was never delivered is still not a candidate."""
+    donor, maker = AccountFactory(), AccountFactory()
     need = ShelterNeed.objects.create(shelter_account=AccountFactory(account_type="shelter"),
                                       title="Dog food", category="food", quantity_needed=10)
-    NeedPledge.objects.create(need=need, pledger_account=donor, quantity=2,
-                              status=PledgeStatus.DELIVERED)
-    assert donor.pk not in _candidate_account_ids()
+    NeedPledge.objects.create(need=need, pledger_account=donor, quantity=2, status=PledgeStatus.DELIVERED)
+    NeedPledge.objects.create(need=need, pledger_account=maker, quantity=2, status=PledgeStatus.PLEDGED)
+    candidates = _candidate_account_ids()
+    assert donor.pk in candidates and maker.pk not in candidates
 
 
 # ── cost ────────────────────────────────────────────────────────

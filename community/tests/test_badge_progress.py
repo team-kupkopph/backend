@@ -24,7 +24,7 @@ SEEDED = {
     "first_shift": ("shifts_completed", 1), "shifts_10": ("shifts_completed", 10),
     "shifts_50": ("shifts_completed", 50), "first_rescue": ("rescues_helped", 1),
     "rehomed_1": ("pets_rehomed", 1), "rehomed_5": ("pets_rehomed", 5),
-    "bayani": ("areas_helped", 3),
+    "first_pledge": ("pledges_delivered", 1), "bayani": ("areas_helped", 3),
 }
 
 
@@ -72,7 +72,7 @@ def test_every_seeded_badge_carries_its_rule(code, rule):
 def test_the_catalog_is_in_a_deliberate_order():
     codes = list(Badge.objects.order_by("sort_order", "badge_code").values_list("pk", flat=True))
     assert codes == ["first_shift", "shifts_10", "shifts_50", "first_rescue",
-                     "rehomed_1", "rehomed_5", "bayani"]
+                     "rehomed_1", "rehomed_5", "first_pledge", "bayani"]
 
 
 @pytest.mark.django_db
@@ -175,7 +175,7 @@ def test_the_catalog_comes_back_in_catalog_order_not_earned_first():
     award_badges_for(volunteer)
     codes = [b["badge_code"] for b in _impact(volunteer)["badges"]]
     assert codes == ["first_shift", "shifts_10", "shifts_50", "first_rescue",
-                     "rehomed_1", "rehomed_5", "bayani"]
+                     "rehomed_1", "rehomed_5", "first_pledge", "bayani"]
 
 
 @pytest.mark.django_db
