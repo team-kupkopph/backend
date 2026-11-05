@@ -17,7 +17,7 @@ attendance that had already saved. The sweep repairs anything missed.
 import logging
 
 from django.db import transaction
-from django.db.models import Count, F
+from django.db.models import Count, Exists, F, OuterRef, Q
 
 from common.analytics import emit
 from listings.models import AdoptionListing, ListingStatus
@@ -51,11 +51,24 @@ def impact_counts_many(accounts):
     shifts = reliability_for_many(ids)
     # D13 · a rescue of your own report, or an animal "placed" with yourself, is real work but
     # not a badge: otherwise report → claim → resolve mints one in a minute.
+    # IQ3 · and it leaves evidence (an outcome note or photo, or an adoption through Kupkop that
+    # resolved it) and was not taken down: one call from claimed to resolved is not a rescue.
+    adopted_through_kupkop = (AdoptionListing.objects
+                              .filter(source_report_id=OuterRef("report_id"),
+                                      status=ListingStatus.ADOPTED,
+                                      adopted_by_account__isnull=False)
+                              .exclude(adopted_by_account_id=OuterRef("claimed_by_account_id")))
     rescues = _per_account(
-        RescueCase.objects.filter(claimed_by_account_id__in=ids, resolved_at__isnull=False)
-        .exclude(report__reporter_account_id=F("claimed_by_account_id")), "claimed_by_account_id")
+        RescueCase.objects.filter(claimed_by_account_id__in=ids, resolved_at__isnull=False,
+                                  report__hidden_at__isnull=True)
+        .exclude(report__reporter_account_id=F("claimed_by_account_id"))
+        .filter(~Q(outcome_notes="") | ~Q(outcome_photo_url="") | Exists(adopted_through_kupkop)),
+        "claimed_by_account_id")
+    # IQ2 · a rehome has a second party: `mark-adopted` ("found a home outside Kupkop") records
+    # no adopter, so it earns nothing.
     rehomed = _per_account(
-        AdoptionListing.objects.filter(posted_by_id__in=ids, status=ListingStatus.ADOPTED)
+        AdoptionListing.objects.filter(posted_by_id__in=ids, status=ListingStatus.ADOPTED,
+                                       adopted_by_account__isnull=False)
         .exclude(adopted_by_account_id=F("posted_by_id")), "posted_by_id")
     pledges = _per_account(
         NeedPledge.objects.filter(pledger_account_id__in=ids, status=PledgeStatus.DELIVERED),

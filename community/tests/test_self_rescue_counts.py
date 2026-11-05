@@ -16,5 +16,6 @@ def test_a_rescue_of_your_own_report_does_not_count():
                                         condition="injured", status="resolved",
                                         geom=Point(121.1, 14.65, srid=4326))
     for r in (mine, theirs):
-        RescueCase.objects.create(report=r, claimed_by_account=me, resolved_at=timezone.now())
+        RescueCase.objects.create(report=r, claimed_by_account=me, resolved_at=timezone.now(),
+                                  outcome_notes="Safe")
     assert impact_counts(me)["rescues_helped"] == 1
