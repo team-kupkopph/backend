@@ -51,6 +51,7 @@ from .reads import (
     ways_to_help_rows,
 )
 from .serializers import (
+    MeImpactSerializer,
     NeedCreateSerializer,
     NeedPatchSerializer,
     PledgeCreateSerializer,
@@ -315,10 +316,11 @@ class MeImpactView(APIView):
         badges = [{"badge_code": b.pk, "name": b.name, "description": b.description,
                    "icon": b.icon, "criteria": b.criteria,
                    "earned": b.pk in earned,
-                   "earned_at": earned[b.pk].isoformat() if b.pk in earned else None,
+                   "earned_at": earned.get(b.pk),
                    "progress": badge_progress(b, counts)}
                   for b in Badge.objects.order_by("sort_order", "badge_code")]
-        return Response({"impact": counts, "badges": badges})
+        # IB26 · the response is its serializer, so what the app reads is one declared shape (and `earned_at` is UTC with a Z).
+        return Response(MeImpactSerializer({"impact": counts, "badges": badges}).data)
 
 
 # --- US-T1 · success stories ---------------------------------------------------
