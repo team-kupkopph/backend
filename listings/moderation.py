@@ -17,7 +17,8 @@ class ListingNotHidden(Exception):
 
 @transaction.atomic
 def hide_listing(listing, by):
-    """Hide `listing` and close the inquiries a takedown strands.
+    """Hide `listing` and close the inquiries a takedown strands. Returns True if it hid it, False if there
+    was nothing to do (already hidden, or gone), so the caller's `side_effects` stays honest.
 
     Every open inquiry closes as `listing_withdrawn` (ended by the system, so no account is
     named) and its adopter is told, EXCEPT the one the animal is reserved for: AQ7, a takedown
@@ -30,10 +31,10 @@ def hide_listing(listing, by):
 
     peek = (type(listing).objects.filter(pk=listing.pk).values("source_report_id").first())
     if peek is None:
-        return
+        return False
     locked = _lock_handoff(listing.pk, peek["source_report_id"])
     if locked is None or locked.hidden_at is not None:
-        return
+        return False
     now = timezone.now()
     locked.hidden_at = now
     locked.save(update_fields=["hidden_at", "updated_at"])
@@ -51,6 +52,7 @@ def hide_listing(listing, by):
            body=f"Our moderators removed {locked.name or 'your listing'}, so it's no longer on Kupkop.",
            data={"listing_id": str(locked.pk)})
     listing.hidden_at = now
+    return True
 
 
 @transaction.atomic

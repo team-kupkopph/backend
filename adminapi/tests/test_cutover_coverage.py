@@ -188,16 +188,20 @@ def test_the_story_hiding_behaviour_survives_the_admin():
 
     "Actioning a story flag hides the story" (US-T3 / D-S6-4) lived only inside
     ModerationFlagAdmin._resolve — the file US-X2 deletes. A registry check would have said
-    ModerationFlag was covered while the behaviour went with the admin. It now lives in
-    moderation/actions.py, and this asserts it is not back in the admin.
+    ModerationFlag was covered while the behaviour went with the admin. It now lives in the shared
+    service (the story's take-down in moderation/targets.py, which moderation/actions.py's
+    resolve_flag calls through the registry), and this asserts it is not back in the admin.
     """
     import inspect
 
-    from moderation import actions
+    from moderation import actions, targets
     from moderation import admin as moderation_admin
 
     assert hasattr(actions, "resolve_flag"), "the shared decision service is gone"
-    assert "StoryStatus.HIDDEN" in inspect.getsource(actions.resolve_flag), (
+    assert "REGISTRY" in inspect.getsource(actions.resolve_flag), (
+        "resolve_flag no longer takes its take-downs from the target registry"
+    )
+    assert "StoryStatus.HIDDEN" in inspect.getsource(targets), (
         "story-hiding is no longer in the shared service — it must not live only in a UI layer"
     )
     admin_source = inspect.getsource(moderation_admin)

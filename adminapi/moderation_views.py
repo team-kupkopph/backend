@@ -3,7 +3,6 @@
 ⚠️ `ModerationFlag` is one of the three registered model admins, so this track is what US-X1
 demands before US-X2 can switch the Django admin off. It is not de-scopable.
 """
-from django.apps import apps
 from django.db import transaction
 from rest_framework.response import Response
 
@@ -14,50 +13,9 @@ from listings.models import AdoptionListing
 from listings.moderation import ListingNotHidden, restore_listing
 from moderation.actions import DECIDABLE, ModerationError, resolve_flag
 from moderation.models import FlagStatus, FlagTarget, ModerationFlag
+from moderation.targets import describe_target
 from sagip.models import StrayReport
 from sagip.moderation import ReportNotHidden, restore_report
-
-# `target_type`/`target_id` is a GENERIC pointer with no foreign key — the targets span
-# listings, sagip, shelter, community and accounts, so one column per type was rejected in
-# favour of this. Resolution is therefore an explicit dispatch, not a join.
-#
-# ⚠️ `message` is absent ON PURPOSE: messaging is Phase 2 and no model exists. A flag of that
-# type is describable but not resolvable, which is a different state from "the row was
-# deleted" and is reported differently below.
-TARGETS = {
-    FlagTarget.ACCOUNT: ("accounts", "Account", lambda o: o.display_name or o.email),
-    FlagTarget.LISTING: ("listings", "AdoptionListing", lambda o: getattr(o, "title", "") or str(o.pk)),
-    FlagTarget.REPORT:  ("sagip", "StrayReport", lambda o: getattr(o, "notes", "") or str(o.pk)),
-    FlagTarget.QR:      ("shelter", "DonationQr", lambda o: str(o.pk)),
-    FlagTarget.STORY:   ("community", "StoryPost", lambda o: getattr(o, "caption", "") or str(o.pk)),
-    FlagTarget.SHIFT:   ("volunteer", "VolunteerShift", lambda o: getattr(o, "title", "") or str(o.pk)),
-}
-
-
-def resolve_target(flag):
-    """Describe what a flag points at, without ever raising.
-
-    ⚠️ A missing target is NORMAL — it is often *why* something was flagged, and moderation
-    frequently ends with the target gone. Rendering that as a 500 would make the queue
-    unusable exactly when it matters.
-    """
-    spec = TARGETS.get(flag.target_type)
-    if spec is None:
-        return {"kind": flag.target_type, "state": "unsupported",
-                "label": "This target type has no surface yet."}
-    app, model, describe = spec
-    try:
-        obj = apps.get_model(app, model).objects.filter(pk=flag.target_id).first()
-    except Exception:
-        obj = None
-    if obj is None:
-        return {"kind": flag.target_type, "state": "gone",
-                "label": "Target no longer exists."}
-    try:
-        label = str(describe(obj))[:200]
-    except Exception:
-        label = str(flag.target_id)
-    return {"kind": flag.target_type, "state": "present", "label": label}
 
 
 def flag_row(flag, *, with_target=False):
@@ -78,7 +36,7 @@ def flag_row(flag, *, with_target=False):
              "email": flag.reporter_account.email}
             if flag.reporter_account_id else None
         ),
-        **({"target": resolve_target(flag)} if with_target else {}),
+        **({"target": describe_target(flag.target_type, flag.target_id)} if with_target else {}),
     }
 
 
