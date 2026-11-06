@@ -6,7 +6,10 @@ from rest_framework.response import Response
 
 from accounts.models import Account, AccountStatus, AccountType
 from adminapi.pagination import decode_cursor, paginate
+from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
+from community.badges import revoke_badge
+from community.models import AccountBadge, Badge, BadgeRevocation
 from moderation.models import ModerationFlag
 from verifications.models import AccountCapability, VerificationRequest
 
@@ -51,6 +54,14 @@ def member_detail(account):
                           for v in verifications],
         "flags_about": [{"flag_id": str(f.flag_id), "reason": f.reason, "status": f.status,
                          "created_at": f.created_at.isoformat()} for f in flags],
+        # NT-9 · what a reviewer needs to act on a badge: what they hold, and what staff already took back.
+        "badges": [{"badge_code": b.badge_id, "name": b.badge.name, "earned_at": b.earned_at.isoformat()}
+                   for b in AccountBadge.objects.filter(account=account).select_related("badge")
+                   .order_by("badge__sort_order", "badge_id")],
+        "revoked_badges": [{"badge_code": r.badge_id, "name": r.badge.name, "reason": r.reason,
+                            "revoked_at": r.revoked_at.isoformat()}
+                           for r in BadgeRevocation.objects.filter(account=account).select_related("badge")
+                           .order_by("-revoked_at")],
     }
 
 
@@ -163,4 +174,21 @@ class ReinstateView(StaffView):
             # again is the correct cost.
             account.save(update_fields=["status"])
 
+        return Response(member_detail(account))
+
+
+class RevokeBadgeView(StaffView):
+    """POST /admin-api/members/{id}/badges/{code}/revoke {reason}: take a badge for confirmed fraud. Silent to the holder, and it stays taken (NT-9)."""
+
+    def post(self, request, account_id, badge_code):
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"error": {"code": "reason_required"}}, status=422)
+        account = Account.objects.filter(account_id=account_id).first()
+        if account is None or not Badge.objects.filter(pk=badge_code).exists():
+            return Response({"error": {"code": "not_found"}}, status=404)
+        try:
+            revoke_badge(account, badge_code, reason, staff=admin_account_for(request))
+        except LookupError:
+            return Response({"error": {"code": "not_held"}}, status=409)
         return Response(member_detail(account))
