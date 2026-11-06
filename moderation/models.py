@@ -22,6 +22,13 @@ class FlagStatus(models.TextChoices):
     DISMISSED = "dismissed"
 
 
+# Statuses a flag can still be moved from. `open` and `reviewed` are working states; `actioned` and `dismissed` are
+# terminal, and a second decision would overwrite the first reviewer's stamp with no record that it happened. Also what
+# counts as a flag still "live" about a target (review step 5). Lives here so both moderation.actions and
+# moderation.targets read one definition.
+DECIDABLE = {FlagStatus.OPEN, FlagStatus.REVIEWED}
+
+
 class ModerationFlag(models.Model):
     """A "report this" flag on some other row (matches kupkop_mvp_schema.sql
     `moderation_flag`). `target_type`/`target_id` point at the flagged row generically

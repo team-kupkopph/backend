@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from django.apps import apps
 from django.utils import timezone
 
-from moderation.models import FlagTarget
+from moderation.models import DECIDABLE, FlagTarget, ModerationFlag
 
 logger = logging.getLogger("kupkop.moderation")
 
@@ -248,6 +248,34 @@ def _qr_done(qr):
     return None if qr.status == QrStatus.LIVE else "It isn't live, so donors can't see it. Nothing to take down."
 
 
+# ---- what restoring would do (review step 4), for a target a takedown is holding. The console POSTs `path` with a
+# reason; the restore routes themselves are in adminapi/moderation_views.py. None = nothing to restore.
+def _restorable(hidden, path, label, consequences):
+    return {"path": path, "label": label, "consequences": consequences} if hidden else None
+
+
+def _restore_listing(listing):
+    return _restorable(listing.hidden_at is not None, f"/listings/{listing.pk}/restore", "Restore listing", [
+        "It goes back on the feed if it is still available and its poster still qualifies.",
+        "The inquiries the takedown closed stay closed.",
+        "Nobody is notified."])
+
+
+def _restore_report(report):
+    return _restorable(report.hidden_at is not None, f"/reports/{report.pk}/restore", "Restore report", [
+        "It is back on the map and on its public page.",
+        "If the takedown ended a claim, the report reopens as reported so another rescuer can claim it.",
+        "Expired offers and dismissed matches stay as they are.",
+        "Nobody is notified."])
+
+
+def _restore_story(story):
+    from community.models import StoryStatus
+    return _restorable(story.status == StoryStatus.HIDDEN, f"/stories/{story.pk}/restore", "Restore story", [
+        "It goes back in the feed.",
+        "The author is not told."])
+
+
 HANDLED = "Mark handled"
 ALREADY_HIDDEN = "Already hidden. Nothing more will change."
 
@@ -262,6 +290,7 @@ class TargetSpec:
     consequences: Callable | None = None  # (obj) -> list[str] · what actioning will do, said before the click
     action_label: str | None = None    # the take-down button, named for the type: "Remove listing"
     already_done: Callable | None = None  # (obj) -> the line saying there is nothing left to take down, else None
+    restore: Callable | None = None    # (obj) -> {"path","label","consequences"} while a takedown holds it, else None
 
     @property
     def supported(self):
@@ -281,14 +310,15 @@ REGISTRY = {
                                    consequences=_account_consequences),
     FlagTarget.LISTING: TargetSpec("listings.AdoptionListing", "listing_id", _describe_listing,
                                    _hide_listing, "listing_hidden", _listing_consequences, "Remove listing",
-                                   _listing_done),
+                                   _listing_done, _restore_listing),
     FlagTarget.REPORT: TargetSpec("sagip.StrayReport", "report_id", _describe_report,
                                   _hide_report, "report_hidden", _report_consequences, "Remove report",
-                                  _report_done),
+                                  _report_done, _restore_report),
     FlagTarget.QR: TargetSpec("shelter.DonationQr", "donation_qr_id", _describe_qr,
                               _take_down_qr, "qr_taken_down", _qr_consequences, "Take down QR", _qr_done),
     FlagTarget.STORY: TargetSpec("community.StoryPost", "story_id", _describe_story,
-                                 _hide_story, "story_hidden", _story_consequences, "Hide story", _story_done),
+                                 _hide_story, "story_hidden", _story_consequences, "Hide story", _story_done,
+                                 _restore_story),
     FlagTarget.SHIFT: TargetSpec("volunteer.VolunteerShift", "shift_id", _describe_shift,
                                  _close_shift, "shift_closed", _shift_consequences, "Close shift", _shift_done),
     FlagTarget.MESSAGE: TargetSpec(None, None, None),
@@ -302,11 +332,14 @@ def target_exists(target_type, target_id):
     return spec is None or not spec.supported or spec.exists(target_id)
 
 
-def describe_target(target_type, target_id):
+def describe_target(target_type, target_id, flag_id=None):
     """Describe what a flag points at. A missing target is NORMAL (it is often why something was flagged),
     so `gone` is an answer, never an error. A describer that fails on an odd row degrades to a plain
     message and is logged; a database error is NOT swallowed into `gone`, because telling a moderator the
-    target no longer exists when the database blinked invites them to dismiss a live flag."""
+    target no longer exists when the database blinked invites them to dismiss a live flag.
+
+    `flag_id` is the flag being looked at: it lets the answer say how many OTHER live flags about the same target
+    actioning will close (review step 5). Without it that count is not claimed."""
     spec = REGISTRY.get(target_type)
     if spec is None or not spec.supported:
         return {"kind": target_type, "state": "unsupported", "label": "This target type has no surface yet.",
@@ -321,7 +354,8 @@ def describe_target(target_type, target_id):
         logger.exception("could not describe a %s target", target_type)
         view = _view("", DEGRADED)
     return {"kind": target_type, "state": "present", "label": view["title"], **view,
-            "on_action": _on_action(spec, obj)}
+            "restore": spec.restore(obj) if spec.restore else None,
+            "on_action": _on_action(spec, obj, _other_live_flags(target_type, target_id, flag_id))}
 
 
 def _unavailable(why):
@@ -331,7 +365,15 @@ def _unavailable(why):
             "consequences": [f"{why}, so there is nothing to action. Dismiss the flag, or mark it reviewed."]}
 
 
-def _on_action(spec, obj):
+def _other_live_flags(target_type, target_id, flag_id):
+    """How many other open or reviewed flags are about this target. Counted the way `resolve_flag` closes them."""
+    if flag_id is None:
+        return 0
+    return (ModerationFlag.objects.filter(target_type=target_type, target_id=target_id, status__in=DECIDABLE)
+            .exclude(pk=flag_id).count())
+
+
+def _on_action(spec, obj, others=0):
     """What the Action button will do for this target, so the console can say it before the click.
 
     A type with no take-down offers `Mark handled`, never a remove button, and says it records the decision
@@ -341,9 +383,11 @@ def _on_action(spec, obj):
     if spec.take_down is None:
         return {**base, "consequences": _said(spec, obj)}
     done = spec.already_done(obj) if spec.already_done else None
+    # Review step 5 · actioning a target held down closes the other live flags about it; say how many.
+    closing = [f"{_n(others, 'other flag', 'other flags')} about this will be closed as actioned too."] if others else []
     if done:
-        return {**base, "already_done": True, "consequences": [done]}
-    return {**base, "changes": True, "label": spec.action_label, "consequences": _said(spec, obj)}
+        return {**base, "already_done": True, "consequences": [done, *closing]}
+    return {**base, "changes": True, "label": spec.action_label, "consequences": [*_said(spec, obj), *closing]}
 
 
 def _said(spec, obj):

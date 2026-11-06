@@ -9,6 +9,8 @@ from rest_framework.response import Response
 from adminapi.pagination import decode_cursor, paginate
 from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
+from community.models import StoryPost, StoryStatus
+from community.moderation import StoryNotHidden, restore_story
 from listings.models import AdoptionListing
 from listings.moderation import ListingNotHidden, restore_listing
 from moderation.actions import DECIDABLE, ModerationError, TargetUnavailable, resolve_flag
@@ -36,7 +38,7 @@ def flag_row(flag, *, with_target=False):
              "email": flag.reporter_account.email}
             if flag.reporter_account_id else None
         ),
-        **({"target": describe_target(flag.target_type, flag.target_id)} if with_target else {}),
+        **({"target": describe_target(flag.target_type, flag.target_id, flag_id=flag.flag_id)} if with_target else {}),
     }
 
 
@@ -117,64 +119,71 @@ class FlagDismissView(FlagDecisionView):
     action = "dismiss"
 
 
-class ReportRestoreView(StaffView):
+class _RestoreView(StaffView):
+    """The shared shape of a staff restore: undo a moderation takedown that was a mistake.
+
+    The reason is required, as for every staff action that reverses another's decision, and is audited by length
+    like the other decisions. Errors are checked in this order: 404 unknown id, 422 `reason_required`, 409
+    `not_hidden`. (Final review #5: an id that names nothing is "no such thing" whatever the body says, so the reason
+    check only ever talks about something that exists.) Subclasses name the model, the restore function and what
+    they answer; the order and the audit line live here once, so a third restore cannot drift from the first two."""
+    model = None
+    url_kwarg = None
+    noun = ""
+    not_hidden = None
+    restore = None
+
+    def answer(self, obj):
+        raise NotImplementedError
+
+    def post(self, request, **kwargs):
+        obj = self.model.objects.filter(pk=kwargs[self.url_kwarg]).first()
+        if obj is None:
+            return Response({"error": {"code": "not_found", "message": f"No such {self.noun}."}}, status=404)
+        reason = request.data.get("reason") if isinstance(request.data, dict) else None
+        reason = reason.strip() if isinstance(reason, str) else ""
+        if not reason:
+            return Response({"error": {"code": "reason_required",
+                                       "message": f"Say why the {self.noun} is being restored."}}, status=422)
+        try:
+            obj = self.restore(obj, admin_account_for(request), reason)
+        except self.not_hidden:
+            return Response({"error": {"code": "not_hidden", "message": f"That {self.noun} isn't hidden."}}, status=409)
+        # The audit middleware reads the Django request, and a DRF `Request` doesn't forward attribute writes to it,
+        # so `request._audit_body = ...` never reaches it; set it on the wrapped request so `notes_len` is recorded.
+        request._request._audit_body = {"notes": reason}
+        return Response(self.answer(obj))
+
+
+class ReportRestoreView(_RestoreView):
     """POST /admin-api/reports/{report_id}/restore {"reason"} · U1.
 
-    A takedown (C13) is one-way for everyone but staff; this is how a mistaken one is undone.
-    The reason is required, as for every staff action that reverses another's decision, and
-    is audited by length like the other decisions. Un-hiding is all it does to the public
-    surface: the report is back on the map and in public detail, and the rescuer who lost a
-    claim to the takedown is not told, so a reopened report is simply claimable again."""
+    A takedown (C13) is one-way for everyone but staff; this is how a mistaken one is undone. Un-hiding is all it does
+    to the public surface: the report is back on the map and in public detail, and the rescuer who lost a claim to the
+    takedown is not told, so a reopened report is simply claimable again."""
+    model, url_kwarg, noun = StrayReport, "report_id", "report"
+    not_hidden, restore = ReportNotHidden, staticmethod(restore_report)
 
-    def post(self, request, report_id):
-        # Final review #5 · 404 before 422: an id that names nothing is "no such report" whatever
-        # the body says, so the reason check only ever talks about a report that exists.
-        report = StrayReport.objects.filter(pk=report_id).first()
-        if report is None:
-            return Response({"error": {"code": "not_found", "message": "No such report."}},
-                            status=404)
-        reason = request.data.get("reason") if isinstance(request.data, dict) else None
-        reason = reason.strip() if isinstance(reason, str) else ""
-        if not reason:
-            return Response({"error": {"code": "reason_required",
-                                       "message": "Say why the report is being restored."}},
-                            status=422)
-        try:
-            report = restore_report(report, admin_account_for(request), reason)
-        except ReportNotHidden:
-            return Response({"error": {"code": "not_hidden",
-                                       "message": "That report isn't hidden."}}, status=409)
-        # The audit middleware reads the Django request, and a DRF `Request` doesn't forward
-        # attribute writes to it, so the escalation-partner views' `request._audit_body = ...`
-        # never reaches it; set it on the wrapped request so `notes_len` really is recorded.
-        request._request._audit_body = {"notes": reason}
-        return Response({"report_id": str(report.pk), "status": report.status,
-                         "hidden": report.hidden_at is not None})
+    def answer(self, report):
+        return {"report_id": str(report.pk), "status": report.status, "hidden": report.hidden_at is not None}
 
 
-class ListingRestoreView(StaffView):
+class ListingRestoreView(_RestoreView):
     """POST /admin-api/listings/{listing_id}/restore {"reason"} · AD7.
 
-    The way back for a mistaken listing takedown. A reason is required, as for every staff action
-    that reverses another's decision. It only un-hides: the inquiries the takedown closed stay
-    closed and nobody is notified."""
+    The way back for a mistaken listing takedown. It only un-hides: the inquiries the takedown closed stay closed and
+    nobody is notified."""
+    model, url_kwarg, noun = AdoptionListing, "listing_id", "listing"
+    not_hidden, restore = ListingNotHidden, staticmethod(restore_listing)
 
-    def post(self, request, listing_id):
-        listing = AdoptionListing.objects.filter(pk=listing_id).first()
-        if listing is None:
-            return Response({"error": {"code": "not_found", "message": "No such listing."}},
-                            status=404)
-        reason = request.data.get("reason") if isinstance(request.data, dict) else None
-        reason = reason.strip() if isinstance(reason, str) else ""
-        if not reason:
-            return Response({"error": {"code": "reason_required",
-                                       "message": "Say why the listing is being restored."}},
-                            status=422)
-        try:
-            listing = restore_listing(listing, admin_account_for(request), reason)
-        except ListingNotHidden:
-            return Response({"error": {"code": "not_hidden",
-                                       "message": "That listing isn't hidden."}}, status=409)
-        request._request._audit_body = {"notes": reason}
-        return Response({"listing_id": str(listing.pk), "status": listing.status,
-                         "hidden": listing.hidden_at is not None})
+    def answer(self, listing):
+        return {"listing_id": str(listing.pk), "status": listing.status, "hidden": listing.hidden_at is not None}
+
+
+class StoryRestoreView(_RestoreView):
+    """POST /admin-api/stories/{story_id}/restore {"reason"} · review step 4. It only un-hides: the author is not told."""
+    model, url_kwarg, noun = StoryPost, "story_id", "story"
+    not_hidden, restore = StoryNotHidden, staticmethod(restore_story)
+
+    def answer(self, story):
+        return {"story_id": str(story.pk), "status": story.status, "hidden": story.status == StoryStatus.HIDDEN}
