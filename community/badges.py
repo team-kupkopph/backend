@@ -19,6 +19,7 @@ import logging
 from django.db import transaction
 from django.db.models import Count, Exists, F, OuterRef, Q
 
+from accounts.models import Account, AccountStatus
 from common.analytics import emit
 from listings.models import AdoptionListing, ListingStatus
 from notifications.models import Notification
@@ -119,6 +120,10 @@ def award_badges_for(account, source="sweep"):
     IB3 · a badge and its notice land together or not at all: a badge that outlived a failed
     notice was held, so no rerun could ever tell its owner. One failure stops only that badge.
     """
+    # IB17 · the caller's copy of the account may be stale (the sweep reads status once per batch),
+    # so a deleted or suspended account is re-checked here, where the award is decided.
+    if not Account.objects.filter(pk=account.pk, status=AccountStatus.ACTIVE).exists():
+        return []
     # The catalog is the rules, so a badge that isn't seeded can't be earned, and an absent
     # catalog is a no-op (never an FK error).
     badges = {b.pk: b for b in Badge.objects.all()}

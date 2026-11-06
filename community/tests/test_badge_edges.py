@@ -350,10 +350,7 @@ def test_f8_a_deadlock_on_one_account_is_logged_skipped_and_retried_next_run(cap
     assert failed == [] and _held(unlucky) == {"first_shift"}
 
 
-# ── NT-6 · F14: an account deleted between the sweep's read and its award ───────────────────────────────────────
-@pytest.mark.xfail(strict=True, reason="FINDING (plan NT-12): the sweep filters on status once per batch and `award_badges_for` does not "
-                   "re-check, so an account deleted in that window is still badged and told. Harmless but the row asks for none. "
-                   "Strict: when someone fixes it this fails, and the marker comes off.")
+# ── NT-6 · F14 (fixed): an account deleted between the sweep's read and its award ───────────────────────────────────────
 @pytest.mark.django_db
 def test_f14_an_account_deleted_after_the_sweep_read_it_is_not_badged_or_told():
     volunteer = _volunteer(1)
