@@ -67,6 +67,14 @@ class ModerationFlag(models.Model):
         db_table = "moderation_flag"
         indexes = [models.Index(fields=["status"], name="idx_flag_status"),
                   models.Index(fields=["target_type", "target_id"], name="idx_flag_target")]
+        constraints = [
+            # Review step 15 (MO12) · one LIVE report per person per target, held by the database: two taps in the same instant
+            # cannot write two rows. Decided reports are history and do not count; a system flag has no reporter, and NULLs are
+            # distinct, so those are unaffected. See moderation/reports.py.
+            models.UniqueConstraint(fields=["reporter_account", "target_type", "target_id"],
+                                    condition=models.Q(status__in=["open", "reviewed"]),
+                                    name="uq_flag_one_live_per_reporter_target"),
+        ]
 
 
 class AccountBlock(models.Model):
