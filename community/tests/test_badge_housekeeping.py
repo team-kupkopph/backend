@@ -3,6 +3,7 @@
 IB19 (the event's own time on `earned_at`) and the composite primary key (IB21) are decisions, not built: see the model.
 """
 import pytest
+from django.db.models import ProtectedError
 from django.test import Client
 from django.utils import timezone
 
@@ -86,3 +87,13 @@ def test_an_undo_that_revokes_every_badge_in_a_shared_notice_removes_it():
     VolunteerSignup.objects.filter(volunteer_account=volunteer).delete()
     assert sorted(reconcile_shift_badges(volunteer)) == ["first_shift", "shifts_10"]
     assert _notices(volunteer).count() == 0
+
+
+# ── NT-8 · a badge someone holds cannot be deleted: retiring is the way out (IB22) ──────────────────────────────
+@pytest.mark.django_db
+def test_a_badge_with_holders_cannot_be_deleted():
+    volunteer = _volunteer_with_shifts(1)
+    award_badges_for(volunteer)
+    with pytest.raises(ProtectedError):
+        Badge.objects.get(pk="first_shift").delete()
+    assert _held(volunteer) == {"first_shift"}
