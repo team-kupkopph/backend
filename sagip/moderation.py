@@ -24,13 +24,14 @@ class ReportNotHidden(Exception):
 
 @transaction.atomic
 def hide_report(report, by):
+    """Returns True if it hid the report, False if it was already hidden."""
     # Lock order: case, then report — the same as CaseStatusView, CaseReleaseView and _expire_case,
     # so a takedown that overlaps a status update or a lapse can't deadlock.
     case = (RescueCase.objects.select_for_update()
             .filter(report_id=report.pk, expired_at__isnull=True).first())
     report = StrayReport.objects.select_for_update().get(pk=report.pk)
     if report.hidden_at is not None:
-        return
+        return False
     if report.status == StrayStatus.CLAIMED and case is None:
         # C13 · the one documented exception to case-then-report: the lookup above can't see a
         # case whose claim hasn't committed yet, so it found nothing to lock; we then blocked on
@@ -59,6 +60,7 @@ def hide_report(report, by):
         notify(case.claimed_by_account, "report_removed", title="A report you claimed was removed",
                body="Our moderators removed it, so there's nothing left to do on it.",
                data={"report_id": str(report.pk)})
+    return True
 
 
 @transaction.atomic

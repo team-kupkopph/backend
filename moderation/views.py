@@ -3,29 +3,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.throttles import ModerationFlagCreateThrottle
-from moderation.models import FlagStatus, FlagTarget, ModerationFlag
+from moderation.models import FlagStatus, ModerationFlag
 from moderation.serializers import ModerationFlagCreateSerializer
-
-
-def target_exists(target_type, target_id):
-    """AT28 · a flag must name a row that exists as the type it claims, or flags on nothing pile up in the moderators' queue. `message` has no
-    model in this codebase, so it cannot be checked and is accepted as before."""
-    from accounts.models import Account
-    from community.models import StoryPost
-    from listings.models import AdoptionListing
-    from sagip.models import StrayReport
-    from shelter.models import DonationQr
-    from volunteer.models import VolunteerShift
-
-    model = {
-        FlagTarget.ACCOUNT: (Account, "account_id"), FlagTarget.LISTING: (AdoptionListing, "listing_id"),
-        FlagTarget.REPORT: (StrayReport, "report_id"), FlagTarget.QR: (DonationQr, "donation_qr_id"),
-        FlagTarget.STORY: (StoryPost, "story_id"), FlagTarget.SHIFT: (VolunteerShift, "shift_id"),
-    }.get(target_type)
-    if model is None:
-        return True
-    cls, pk = model
-    return cls.objects.filter(**{pk: target_id}).exists()
+from moderation.targets import target_exists
 
 
 class ModerationFlagCreateView(APIView):

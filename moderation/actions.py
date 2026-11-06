@@ -13,7 +13,8 @@ the decision survives the UI that happened to invoke it first.
 from django.db import transaction
 from django.utils import timezone
 
-from moderation.models import FlagStatus, FlagTarget
+from moderation.models import FlagStatus
+from moderation.targets import REGISTRY
 
 # Statuses a flag can still be moved from. `open` and `reviewed` are working states; `actioned`
 # and `dismissed` are terminal, and a second decision would overwrite the first reviewer's
@@ -42,32 +43,12 @@ def resolve_flag(flag, reviewer, status, notes=""):
 
     side_effects = {}
 
-    if status == FlagStatus.ACTIONED and flag.target_type == FlagTarget.STORY:
-        # US-T3 / D-S6-4 · hiding, NOT deletion. The row and its photos survive, the feed
-        # excludes it, and the author sees a "hidden by moderation" state rather than a
-        # vanished post. The flag stays as the audit trail.
-        from community.models import StoryPost, StoryStatus
-        hidden = StoryPost.objects.filter(pk=flag.target_id).update(status=StoryStatus.HIDDEN)
-        if hidden:
-            side_effects["story_hidden"] = str(flag.target_id)
-
-    if status == FlagStatus.ACTIONED and flag.target_type == FlagTarget.REPORT:
-        # C13 · hide, never delete — the report and its history are the audit trail.
-        from sagip.models import StrayReport
-        from sagip.moderation import hide_report
-        report = StrayReport.objects.filter(pk=flag.target_id).first()
-        if report is not None:
-            hide_report(report, reviewer)
-            side_effects["report_hidden"] = str(report.pk)
-
-    if status == FlagStatus.ACTIONED and flag.target_type == FlagTarget.LISTING:
-        # AD7 / AQ7 · hide, never delete — same shape as the report takedown above.
-        from listings.models import AdoptionListing
-        from listings.moderation import hide_listing
-        listing = AdoptionListing.objects.filter(pk=flag.target_id).first()
-        if listing is not None:
-            hide_listing(listing, reviewer)
-            side_effects["listing_hidden"] = str(listing.pk)
+    if status == FlagStatus.ACTIONED:
+        spec = REGISTRY.get(flag.target_type)
+        if spec is not None and spec.take_down is not None:
+            target = spec.fetch(flag.target_id)
+            if target is not None and spec.take_down(target, reviewer):
+                side_effects[spec.effect] = str(flag.target_id)
 
     # ⚠️ Actioning a flag does NOT suspend an account, even for target_type='account'.
     # Suspension has its own side effects (token revocation, US-E2) and its own audit trail.
