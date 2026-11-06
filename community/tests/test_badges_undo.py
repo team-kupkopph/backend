@@ -103,7 +103,8 @@ def test_eleven_down_to_ten_keeps_every_badge():
     volunteer, shelter_account, signup = _volunteer_with(11)
     _undo(shelter_account, signup)
     assert _held(volunteer) == {"first_shift", "shifts_10"}
-    assert _notices(volunteer).count() == 2
+    # IB27 · both were won together, so they share one notice, and an undo that revokes nothing leaves it alone.
+    assert _notices(volunteer).get().data == {"badge_codes": ["first_shift", "shifts_10"]}
 
 
 @pytest.mark.django_db

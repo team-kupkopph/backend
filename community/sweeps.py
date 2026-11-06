@@ -54,7 +54,7 @@ def award_badges():
     """
     touched, failed, scanned, awarded = [], [], 0, 0
     ids = sorted(_candidate_account_ids(), key=str)
-    catalog = list(Badge.objects.all())
+    catalog = list(Badge.objects.filter(retired_at__isnull=True))
     for start in range(0, len(ids), BATCH):
         accounts = list(Account.objects.filter(pk__in=ids[start:start + BATCH],
                                                status=AccountStatus.ACTIVE).order_by("pk"))

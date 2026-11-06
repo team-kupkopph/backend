@@ -126,11 +126,20 @@ def award_badges_for(account, source="sweep"):
         return []
     # The catalog is the rules, so a badge that isn't seeded can't be earned, and an absent
     # catalog is a no-op (never an FK error).
-    badges = {b.pk: b for b in Badge.objects.all()}
+    badges = {b.pk: b for b in Badge.objects.filter(retired_at__isnull=True)}
     earned = earned_codes(impact_counts(account), badges.values())
     have = set(AccountBadge.objects.filter(account=account).values_list("badge_id", flat=True))
+    new = sorted(earned - have)
+    if len(new) > 1:
+        # IB27 · several at once (a catalog rollout, or a backfill) is one notice, not one each. If the batch fails
+        # for any reason it falls back to one at a time, so a single bad badge still stops only itself (IB3).
+        awarded = _award_together(account, new, badges)
+        if awarded is not None:
+            for code in awarded:
+                emit("badge_earned", badge_code=code, source=source)
+            return awarded
     awarded = []
-    for code in sorted(earned - have):
+    for code in new:
         try:
             with transaction.atomic():
                 # A concurrent award is absorbed by uq_account_badge; only the real insert notifies.
@@ -147,6 +156,26 @@ def award_badges_for(account, source="sweep"):
     return awarded
 
 
+def _award_together(account, codes, badges):
+    """Insert every badge in `codes` and tell `account` once. Returns the codes newly inserted, or None when anything
+    went wrong (nothing is kept then). A badge a concurrent award already inserted is left out of the notice."""
+    try:
+        with transaction.atomic():
+            created = [code for code in codes
+                       if AccountBadge.objects.get_or_create(account=account, badge_id=code)[1]]
+            if len(created) > 1:
+                names = ", ".join(f"“{badges[code].name}”" for code in created)
+                notify(account, "badge_earned", title="New badges!", body=f"You earned {names}.",
+                       data={"badge_codes": created})
+            elif created:
+                notify(account, "badge_earned", title="New badge!",
+                       body=f"You earned “{badges[created[0]].name}”.", data={"badge_code": created[0]})
+    except Exception:
+        logger.exception("badges %s not awarded together to %s", codes, account.pk)
+        return None
+    return created
+
+
 def award_after_commit(account, source):
     """What a qualifying writer calls (IB2). Runs once the writer's transaction commits, so a
     rollback awards nothing and no phantom `badge_earned` is counted, and it never raises."""
@@ -156,6 +185,29 @@ def award_after_commit(account, source):
         except Exception:
             logger.exception("badge award failed for %s", account.pk)
     transaction.on_commit(run)
+
+
+def _take_back_from_shared_notices(account, revoked):
+    """IB27 · a notice for badges won together names several; take `revoked` out of it, and drop the notice when none are
+    left. What remains is worded as the notice for those badges would have been."""
+    if not revoked:
+        return
+    for note in Notification.objects.filter(account=account, type="badge_earned",
+                                            data__has_key="badge_codes"):
+        left = [code for code in note.data["badge_codes"] if code not in revoked]
+        if len(left) == len(note.data["badge_codes"]):
+            continue
+        if not left:
+            note.delete()
+            continue
+        names = {b.pk: b.name for b in Badge.objects.filter(pk__in=left)}
+        if len(left) == 1:
+            note.title, note.data = "New badge!", {"badge_code": left[0]}
+            note.body = f"You earned “{names[left[0]]}”."
+        else:
+            note.data = {"badge_codes": left}
+            note.body = "You earned " + ", ".join(f"“{names[c]}”" for c in left) + "."
+        note.save(update_fields=["title", "body", "data"])
 
 
 def reconcile_shift_badges(account):
@@ -177,6 +229,7 @@ def reconcile_shift_badges(account):
     held.delete()
     Notification.objects.filter(account=account, type="badge_earned",
                                 data__badge_code__in=revoked).delete()
+    _take_back_from_shared_notices(account, revoked)
     for code in revoked:
         transaction.on_commit(lambda code=code: emit("badge_revoked", badge_code=code,
                                                      reason="attendance_undo"))
