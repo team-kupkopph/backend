@@ -241,7 +241,7 @@ class ShiftsBrowseView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        qs = (public_shifts()
+        qs = (public_shifts(request.user)
               .select_related("shelter_account")
               .annotate(approved_count=_APPROVED_COUNT)
               .order_by("starts_at"))
@@ -261,7 +261,7 @@ class ShiftDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, shift_id):
-        shift = public_shifts().filter(pk=shift_id).select_related("shelter_account").first()
+        shift = public_shifts(request.user).filter(pk=shift_id).select_related("shelter_account").first()
         if shift is None:
             return _not_found()
         body = shift_public(shift)
@@ -323,7 +323,7 @@ class ShiftSignupView(APIView):
         return [SignupCreateThrottle()]
 
     def post(self, request, shift_id):
-        shift = public_shifts().filter(pk=shift_id).first()
+        shift = public_shifts(request.user).filter(pk=shift_id).first()
         if shift is None:
             return _not_found()
         if request.user.account_type == "shelter":

@@ -15,6 +15,16 @@ class FlagTarget(models.TextChoices):
     SHIFT = "shift"   # P6 · G21 — volunteers can report a bad shift listing
 
 
+class ReasonCode(models.TextChoices):
+    """Review step 7g (MQ3) · what kind of problem a report is. Welfare concerns can be sorted ahead of spam, and a
+    report can be broken down by type. `other` needs a note; the rest do not."""
+    SPAM_SCAM = "spam_scam"
+    ANIMAL_WELFARE = "animal_welfare"
+    HARASSMENT = "harassment"
+    MISLEADING = "misleading"
+    OTHER = "other"
+
+
 class FlagStatus(models.TextChoices):
     OPEN = "open"
     REVIEWED = "reviewed"
@@ -45,7 +55,8 @@ class ModerationFlag(models.Model):
                                          blank=True, related_name="moderation_flags_raised")
     target_type = models.CharField(max_length=10, choices=FlagTarget.choices)
     target_id = models.UUIDField()
-    reason = models.TextField()
+    reason = models.TextField(blank=True)   # the reporter's note: required only for `other` (the API enforces it)
+    reason_code = models.CharField(max_length=20, choices=ReasonCode.choices, default=ReasonCode.OTHER)
     status = models.CharField(max_length=10, choices=FlagStatus.choices, default=FlagStatus.OPEN)
     reviewed_by = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True,
                                     related_name="+", db_column="reviewed_by")
@@ -56,3 +67,24 @@ class ModerationFlag(models.Model):
         db_table = "moderation_flag"
         indexes = [models.Index(fields=["status"], name="idx_flag_status"),
                   models.Index(fields=["target_type", "target_id"], name="idx_flag_target")]
+
+
+class AccountBlock(models.Model):
+    """Review step 7d · `blocker` does not want to see, or be seen by, `blocked`. Both stores require a way to block
+    abusive users. A block is one row and works in BOTH directions (see `moderation.blocks.hidden_from`); it never
+    tells the blocked person, and it never touches something already under way between the two.
+
+    Deleted with either account: a block about a departed person is not a record worth keeping."""
+
+    block_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    blocker = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="blocks_made")
+    blocked = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="blocks_received")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "account_block"
+        constraints = [
+            models.UniqueConstraint(fields=["blocker", "blocked"], name="uq_account_block_pair"),
+            models.CheckConstraint(condition=~models.Q(blocker=models.F("blocked")), name="account_block_not_self"),
+        ]
+        indexes = [models.Index(fields=["blocked"], name="idx_account_block_blocked")]

@@ -153,6 +153,13 @@ def _entries():
                                        "must not be rewritten")),
         ("moderation.ModerationFlag", "reviewed_by"):
             E(_STAFF, _AUDIT),
+        # Review step 7d · a block is the blocker's own list. It goes with either account: a block about a person who
+        # has left is not a record worth keeping, and the blocker's half is theirs to export.
+        ("moderation.AccountBlock", "blocker"):
+            E("blocks", Delete()),
+        ("moderation.AccountBlock", "blocked"):
+            E(Excluded("a block against you is the blocker's choice, not data you gave, and naming who blocked you "
+                       "would defeat it"), Delete()),
         # ------------------------------------------------------------- notifications
         ("notifications.Notification", "account"):
             E("notifications", Delete()),
