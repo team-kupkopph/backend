@@ -4,7 +4,8 @@ from rest_framework.views import APIView
 
 from accounts.models import Account
 from common.throttles import BlockCreateThrottle, ModerationFlagCreateThrottle
-from moderation.models import AccountBlock, FlagStatus, FlagTarget, ModerationFlag
+from moderation.models import AccountBlock, FlagTarget
+from moderation.reports import file_report
 from moderation.serializers import BlockCreateSerializer, ModerationFlagCreateSerializer
 from moderation.targets import resolve_person, target_exists
 
@@ -41,16 +42,9 @@ class ModerationFlagCreateView(APIView):
         if not target_exists(d["target_type"], target_id):
             return Response({"error": {"code": "not_found", "message": "That item no longer exists."}}, status=404)
 
-        existing = ModerationFlag.objects.filter(
-            reporter_account=request.user, target_type=d["target_type"],
-            target_id=target_id, status=FlagStatus.OPEN).first()
-        if existing is not None:
-            return Response({"flag_id": str(existing.pk)}, status=200)
-
-        flag = ModerationFlag.objects.create(
-            reporter_account=request.user, target_type=d["target_type"], target_id=target_id,
-            reason=d["reason"], reason_code=d["reason_code"])
-        return Response({"flag_id": str(flag.pk)}, status=201)
+        # One live report per person per target. A repeat is added to it, not dropped: see moderation/reports.py.
+        flag, created = file_report(request.user, d["target_type"], target_id, d["reason_code"], d["reason"])
+        return Response({"flag_id": str(flag.pk)}, status=201 if created else 200)
 
 
 class BlocksView(APIView):
