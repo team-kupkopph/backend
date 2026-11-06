@@ -174,19 +174,14 @@ def test_a_second_takedown_of_a_hidden_report_or_story_reports_no_side_effect():
 
 
 @pytest.mark.django_db
-def test_types_with_no_takedown_report_no_side_effect_and_change_nothing():
-    """MO5's current truth, pinned so step 6 changes it on purpose."""
+def test_an_account_flag_still_changes_nothing_on_the_account():
+    """MQ2 · actioning an account flag records the judgement and never suspends: suspension is its own deliberate
+    act. (Shifts and QRs used to be pinned here as changing nothing, MO5; review step 6 made them real, and
+    moderation/tests/test_real_actions.py holds that.)"""
     owner = AccountFactory(account_type="shelter")
-    qr = DonationQr.objects.create(account=owner, provider="gcash", account_name="X",
-                                   qr_image_url="u", verified=True)
-    shift = _shift(owner)
-    reviewer = AccountFactory()
-    for target_type, pk in ((FlagTarget.QR, qr.pk), (FlagTarget.SHIFT, shift.pk),
-                            (FlagTarget.ACCOUNT, owner.pk)):
-        flag, effects = resolve_flag(_flag(target_type, pk), reviewer, "actioned")
-        assert effects == {} and flag.status == "actioned"
-    qr.refresh_from_db(), shift.refresh_from_db()
-    assert qr.verified and shift.status == "open"
+    flag, effects = resolve_flag(_flag(FlagTarget.ACCOUNT, owner.pk), AccountFactory(), "actioned")
+    owner.refresh_from_db()
+    assert effects == {} and flag.status == "actioned" and owner.status == "active"
 
 
 @pytest.mark.django_db

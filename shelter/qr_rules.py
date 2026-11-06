@@ -49,6 +49,21 @@ def notify_decision(qr, decision, note=""):
 
 
 
+def unverify_qr(qr, by, note):
+    """live -> withdrawn: take a donation QR down. The one writer of this transition, shared by the reviewer's
+    Unverify and a moderation takedown (review step 6), so the two cannot drift: the image is discarded (AT21),
+    the decision is stamped and stored (AT26), the shelter is told (AT11), and the `verified` mirror follows
+    `status` through `save()`. The caller holds the row's lock and has checked it is live."""
+    from shelter.models import QrStatus
+    qr.status = QrStatus.WITHDRAWN
+    discard_image(qr)
+    qr.decision_note = note
+    qr.decided_at = timezone.now()
+    qr.decided_by = by
+    qr.save()
+    notify_decision(qr, "taken_down", note)
+
+
 def donation_qr_url_error(url, account):
     """AT10 · `file_url` is stored and later rendered to donors and in the reviewer's browser, so it must be THIS account's own `donation_qr`
     upload. The rule itself lives in `common.uploads.own_upload_url_error` (a shelter's logo needs it too); the wording is unchanged."""

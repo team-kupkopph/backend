@@ -11,7 +11,7 @@ from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
 from listings.models import AdoptionListing
 from listings.moderation import ListingNotHidden, restore_listing
-from moderation.actions import DECIDABLE, ModerationError, resolve_flag
+from moderation.actions import DECIDABLE, ModerationError, TargetUnavailable, resolve_flag
 from moderation.models import FlagStatus, FlagTarget, ModerationFlag
 from moderation.targets import describe_target
 from sagip.models import StrayReport
@@ -95,6 +95,9 @@ class FlagDecisionView(StaffView):
                     return Response(
                         {"error": {"code": "already_decided", "status": flag.status}}, status=409)
                 flag, effects = resolve_flag(flag, admin_account_for(request), target_status)
+        except TargetUnavailable as exc:
+            # Nothing to action: the target is gone, or has no surface. Dismiss and review are still allowed.
+            return Response({"error": {"code": f"target_{exc.state}", "message": str(exc)}}, status=422)
         except ModerationError as exc:
             return Response({"error": {"code": "invalid_decision", "message": str(exc)}}, status=422)
 

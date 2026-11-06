@@ -6,7 +6,7 @@ import pytest
 from listings.models import AdoptionListing, InquiryStatus, ListingStatus
 from listings.moderation import ListingNotHidden, hide_listing, restore_listing
 from listings.tests.adoption_helpers import c, inquire, listing, person, post, types
-from moderation.actions import resolve_flag
+from moderation.actions import TargetUnavailable, resolve_flag
 from moderation.models import FlagStatus, FlagTarget, ModerationFlag
 
 
@@ -130,8 +130,15 @@ def test_actioning_a_listing_flag_takes_it_down_and_dismissing_does_not():
 
 
 @pytest.mark.django_db
-def test_a_flag_on_a_listing_that_is_gone_is_still_resolvable():
+def test_a_flag_on_a_listing_that_is_gone_cannot_be_actioned_but_is_still_resolvable():
+    """A gone target must never break the queue. Review step 6 changed what 'resolvable' means here: `actioned` claims
+    something was done about the target and nothing can be, so it is refused (TargetUnavailable, a 422 in the console);
+    the flag is still closed by dismissing it, with no crash. It used to be actioned into a record of work nobody did."""
     flag = ModerationFlag.objects.create(reporter_account=person(), target_type=FlagTarget.LISTING,
                                          target_id="00000000-0000-0000-0000-000000000001", reason="x")
-    resolve_flag(flag, _staff(), FlagStatus.ACTIONED)
+    with pytest.raises(TargetUnavailable):
+        resolve_flag(flag, _staff(), FlagStatus.ACTIONED)
+    resolve_flag(flag, _staff(), FlagStatus.DISMISSED)
+    flag.refresh_from_db()
+    assert flag.status == FlagStatus.DISMISSED
 

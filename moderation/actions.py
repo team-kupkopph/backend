@@ -26,6 +26,19 @@ class ModerationError(Exception):
     """A decision that cannot be applied as asked."""
 
 
+class TargetUnavailable(ModerationError):
+    """`actioned` was asked of a flag whose target is gone (`state == "gone"`) or has no surface
+    (`"unsupported"`). Actioning records that something was done about the target; nothing can be, so the flag
+    would claim work nobody did. It can still be dismissed or marked reviewed."""
+
+    def __init__(self, state):
+        self.state = state
+        super().__init__("The target no longer exists, so there is nothing to action. Dismiss the flag, or mark it reviewed."
+                         if state == "gone" else
+                         "This type of target has no surface yet, so there is nothing to action. Dismiss the flag, "
+                         "or mark it reviewed.")
+
+
 @transaction.atomic
 def resolve_flag(flag, reviewer, status, notes=""):
     """Move a flag to `status`, stamping the reviewer, and apply the status's side effects.
@@ -45,10 +58,13 @@ def resolve_flag(flag, reviewer, status, notes=""):
 
     if status == FlagStatus.ACTIONED:
         spec = REGISTRY.get(flag.target_type)
-        if spec is not None and spec.take_down is not None:
-            target = spec.fetch(flag.target_id)
-            if target is not None and spec.take_down(target, reviewer):
-                side_effects[spec.effect] = str(flag.target_id)
+        if spec is None or not spec.supported:
+            raise TargetUnavailable("unsupported")
+        target = spec.fetch(flag.target_id)
+        if target is None:
+            raise TargetUnavailable("gone")
+        if spec.take_down is not None and spec.take_down(target, reviewer):
+            side_effects[spec.effect] = str(flag.target_id)
 
     # ⚠️ Actioning a flag does NOT suspend an account, even for target_type='account'.
     # Suspension has its own side effects (token revocation, US-E2) and its own audit trail.

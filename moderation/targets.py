@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from django.apps import apps
+from django.utils import timezone
 
 from moderation.models import FlagTarget
 
@@ -67,8 +68,10 @@ def _describe_report(r):
 
 
 def _describe_qr(q):
+    from shelter.models import QrStatus
     return _view(f"{q.get_provider_display()} · {q.account_name}", "Donation QR with no payee",
-                 photos=[q.qr_image_url] if q.qr_image_url else [], owner=_owner(q.account))
+                 photos=[q.qr_image_url] if q.qr_image_url else [], owner=_owner(q.account),
+                 hidden=q.status != QrStatus.LIVE)
 
 
 def _describe_story(s):
@@ -78,7 +81,9 @@ def _describe_story(s):
 
 
 def _describe_shift(s):
-    return _view(s.title, "Shift with no title", s.description, owner=_owner(s.shelter_account))
+    from volunteer.models import ShiftStatus
+    return _view(s.title, "Shift with no title", s.description, owner=_owner(s.shelter_account),
+                 hidden=s.status == ShiftStatus.CLOSED)
 
 
 # ---- takedowns. Each returns True only when it changed something, so `side_effects` never claims
@@ -99,6 +104,35 @@ def _hide_report(report, reviewer):
 def _hide_listing(listing, reviewer):
     from listings.moderation import hide_listing  # AD7 / AQ7 · hide, never delete
     return hide_listing(listing, reviewer)
+
+
+def _close_shift(shift, reviewer):
+    """MQ2 · close it through the existing path: the shelter's own cancel cascade, so signups are cancelled and told
+    the activity is no longer running, never why (adminapi ShiftCloseView). An activity that already happened is
+    never cancelled after the fact."""
+    from volunteer.models import ShiftStatus, VolunteerShift
+    from volunteer.services import cancel_activity
+    locked = VolunteerShift.objects.select_for_update().filter(pk=shift.pk).first()
+    if locked is None or locked.status == ShiftStatus.CLOSED or locked.ends_at <= timezone.now():
+        return False
+    cancel_activity(locked, by="platform", body="This activity is no longer running.")
+    return True
+
+
+# The decision note a QR take-down stores and the shelter reads (AT26). A constant, on purpose: the reporter's own
+# words are about the shelter and must never be copied into a note the shelter sees. Step 8 adds the moderator's note.
+QR_TAKEDOWN_NOTE = "Taken down after a report was reviewed."
+
+
+def _take_down_qr(qr, reviewer):
+    """MQ2 · donors stop seeing it. The reviewer's own Unverify, through the one shared writer."""
+    from shelter.models import DonationQr, QrStatus
+    from shelter.qr_rules import unverify_qr
+    locked = DonationQr.objects.select_for_update().filter(pk=qr.pk).first()
+    if locked is None or locked.status != QrStatus.LIVE:
+        return False
+    unverify_qr(locked, reviewer, QR_TAKEDOWN_NOTE)
+    return True
 
 
 # ---- what actioning will do, in plain words, BEFORE the click (review step 3, MO3). Each function reads
@@ -166,19 +200,56 @@ def _account_consequences(account):
 
 
 def _qr_consequences(qr):
-    from shelter.models import QrStatus
-    return [_RECORDS_ONLY, "The QR stays live and donors can still see it." if qr.status == QrStatus.LIVE
-            else "The QR is not changed."]
+    return ["Donors can no longer see this QR, and its image is deleted.",
+            "The shelter is told it was taken down.",
+            "To bring it back the shelter has to upload a new one."]
 
 
 def _shift_consequences(shift):
+    from volunteer.models import VolunteerShift
+    from volunteer.services import LIVE
+    live = VolunteerShift.objects.get(pk=shift.pk).signups.filter(status__in=LIVE).count()
+    lines = []
+    if live:
+        lines.append(f"{_n(live, 'signup', 'signups')} will be cancelled and each volunteer told the activity "
+                     "is no longer running.")
+    lines += ["The shift is closed and takes no more signups.",
+              "The shelter that posted it is not told.",
+              "Closing it can't be undone from the console."]
+    return lines
+
+
+# ---- when a take-down has nothing left to do, and the line that says so (the target's own rule, kept beside
+# its take-down so the two agree). None = there is still something to do.
+def _listing_done(listing):
+    return ALREADY_HIDDEN if listing.hidden_at is not None else None
+
+
+def _report_done(report):
+    return ALREADY_HIDDEN if report.hidden_at is not None else None
+
+
+def _story_done(story):
+    from community.models import StoryStatus
+    return ALREADY_HIDDEN if story.status == StoryStatus.HIDDEN else None
+
+
+def _shift_done(shift):
     from volunteer.models import ShiftStatus
-    return [_RECORDS_ONLY, "The shift stays open for signups." if shift.status == ShiftStatus.OPEN
-            else "The shift is not changed."]
+    if shift.status == ShiftStatus.CLOSED:
+        return "Already closed. Nothing more will change."
+    if shift.ends_at <= timezone.now():
+        return "This activity has already happened, so there is nothing to close."
+    return None
+
+
+def _qr_done(qr):
+    from shelter.models import QrStatus
+    return None if qr.status == QrStatus.LIVE else "It isn't live, so donors can't see it. Nothing to take down."
 
 
 HANDLED = "Mark handled"
-ALREADY_HIDDEN = ["Already hidden. Nothing more will change."]
+ALREADY_HIDDEN = "Already hidden. Nothing more will change."
 
 
 @dataclass
@@ -190,6 +261,7 @@ class TargetSpec:
     effect: str | None = None          # the `side_effects` key a successful take_down reports
     consequences: Callable | None = None  # (obj) -> list[str] · what actioning will do, said before the click
     action_label: str | None = None    # the take-down button, named for the type: "Remove listing"
+    already_done: Callable | None = None  # (obj) -> the line saying there is nothing left to take down, else None
 
     @property
     def supported(self):
@@ -208,15 +280,17 @@ REGISTRY = {
     FlagTarget.ACCOUNT: TargetSpec("accounts.Account", "account_id", _describe_account,
                                    consequences=_account_consequences),
     FlagTarget.LISTING: TargetSpec("listings.AdoptionListing", "listing_id", _describe_listing,
-                                   _hide_listing, "listing_hidden", _listing_consequences, "Remove listing"),
+                                   _hide_listing, "listing_hidden", _listing_consequences, "Remove listing",
+                                   _listing_done),
     FlagTarget.REPORT: TargetSpec("sagip.StrayReport", "report_id", _describe_report,
-                                  _hide_report, "report_hidden", _report_consequences, "Remove report"),
+                                  _hide_report, "report_hidden", _report_consequences, "Remove report",
+                                  _report_done),
     FlagTarget.QR: TargetSpec("shelter.DonationQr", "donation_qr_id", _describe_qr,
-                              consequences=_qr_consequences),
+                              _take_down_qr, "qr_taken_down", _qr_consequences, "Take down QR", _qr_done),
     FlagTarget.STORY: TargetSpec("community.StoryPost", "story_id", _describe_story,
-                                 _hide_story, "story_hidden", _story_consequences, "Hide story"),
+                                 _hide_story, "story_hidden", _story_consequences, "Hide story", _story_done),
     FlagTarget.SHIFT: TargetSpec("volunteer.VolunteerShift", "shift_id", _describe_shift,
-                                 consequences=_shift_consequences),
+                                 _close_shift, "shift_closed", _shift_consequences, "Close shift", _shift_done),
     FlagTarget.MESSAGE: TargetSpec(None, None, None),
 }
 
@@ -235,30 +309,41 @@ def describe_target(target_type, target_id):
     target no longer exists when the database blinked invites them to dismiss a live flag."""
     spec = REGISTRY.get(target_type)
     if spec is None or not spec.supported:
-        return {"kind": target_type, "state": "unsupported", "label": "This target type has no surface yet."}
+        return {"kind": target_type, "state": "unsupported", "label": "This target type has no surface yet.",
+                "on_action": _unavailable("This type of target has no surface yet")}
     obj = spec.fetch(target_id)
     if obj is None:
-        return {"kind": target_type, "state": "gone", "label": "Target no longer exists."}
+        return {"kind": target_type, "state": "gone", "label": "Target no longer exists.",
+                "on_action": _unavailable("The target no longer exists")}
     try:
         view = spec.describe(obj)
     except Exception:
         logger.exception("could not describe a %s target", target_type)
         view = _view("", DEGRADED)
     return {"kind": target_type, "state": "present", "label": view["title"], **view,
-            "on_action": _on_action(spec, obj, view["hidden"])}
+            "on_action": _on_action(spec, obj)}
 
 
-def _on_action(spec, obj, hidden):
+def _unavailable(why):
+    """A flag on a target that is gone or has no surface: there is nothing to action, so no action is offered.
+    The server refuses `action` for it too (`TargetUnavailable`); dismiss and review still work."""
+    return {"label": None, "changes": False, "already_done": False, "unavailable": True,
+            "consequences": [f"{why}, so there is nothing to action. Dismiss the flag, or mark it reviewed."]}
+
+
+def _on_action(spec, obj):
     """What the Action button will do for this target, so the console can say it before the click.
 
     A type with no take-down offers `Mark handled`, never a remove button, and says it records the decision
-    only (MO5: it used to read as if it did something). An already hidden target offers the same, so a
-    second flag on a taken-down listing does not invite taking it down again (MO4's visible edge)."""
+    only. A target with nothing left to take down (already hidden, closed, not live) offers the same, so a second
+    flag on a taken-down listing does not invite taking it down again (MO4's visible edge)."""
+    base = {"unavailable": False, "already_done": False, "changes": False, "label": HANDLED}
     if spec.take_down is None:
-        return {"label": HANDLED, "changes": False, "already_done": False, "consequences": _said(spec, obj)}
-    if hidden:
-        return {"label": HANDLED, "changes": False, "already_done": True, "consequences": ALREADY_HIDDEN}
-    return {"label": spec.action_label, "changes": True, "already_done": False, "consequences": _said(spec, obj)}
+        return {**base, "consequences": _said(spec, obj)}
+    done = spec.already_done(obj) if spec.already_done else None
+    if done:
+        return {**base, "already_done": True, "consequences": [done]}
+    return {**base, "changes": True, "label": spec.action_label, "consequences": _said(spec, obj)}
 
 
 def _said(spec, obj):

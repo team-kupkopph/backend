@@ -10,7 +10,7 @@ from adminapi.verifications_views import StaffView
 from listings.models import AdoptionListing
 from sagip.geo import centroid_for
 from shelter.models import DonationQr, QrStatus, ShelterProfile, ShelterProfileChange, ShelterTier
-from shelter.qr_rules import discard_image, is_overdue, notify_decision, swap_in
+from shelter.qr_rules import is_overdue, notify_decision, swap_in, unverify_qr
 from verifications.models import VerificationRequest
 
 
@@ -254,19 +254,19 @@ class DonationQrDecisionView(StaffView):
             if qr.status != allowed:
                 return Response({"error": {"code": "already_decided", "verified": qr.verified,
                                            "status": qr.status}}, status=409)
-            if self.action == "verify":
-                # One transaction: there is never a moment with two live rows (the constraint forbids it) or none; the old image is discarded (AT21).
-                swap_in(qr)
-            elif self.action == "unverify":
-                qr.status = QrStatus.WITHDRAWN
-                discard_image(qr)
+            if self.action == "unverify":
+                unverify_qr(qr, admin_account_for(request), notes)   # shared with a moderation takedown
             else:
-                qr.status = QrStatus.REFUSED
-            qr.decision_note = notes
-            qr.decided_at = timezone.now()
-            qr.decided_by = admin_account_for(request)
-            qr.save()
-            notify_decision(qr, {"verify": "verified", "unverify": "taken_down", "refuse": "refused"}[self.action], notes)
+                if self.action == "verify":
+                    # One transaction: there is never a moment with two live rows (the constraint forbids it) or none; the old image is discarded (AT21).
+                    swap_in(qr)
+                else:
+                    qr.status = QrStatus.REFUSED
+                qr.decision_note = notes
+                qr.decided_at = timezone.now()
+                qr.decided_by = admin_account_for(request)
+                qr.save()
+                notify_decision(qr, {"verify": "verified", "refuse": "refused"}[self.action], notes)
 
         qr.refresh_from_db()
         return Response(DonationQrQueueView.row(qr))
