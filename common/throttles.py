@@ -113,6 +113,11 @@ class ModerationFlagCreateThrottle(AccountScopedThrottle):
     scope = "moderation_flag_create"
 
 
+class BlockCreateThrottle(AccountScopedThrottle):
+    """Review step 7d · blocking is harmless, but an unbounded write is still an unbounded write."""
+    scope = "block_create"
+
+
 class ExportRequestThrottle(AccountScopedThrottle):
     """US-N3 · the widest authenticated read in the app, and a free amplification primitive
     if left open. Pinned low on purpose: portability is a right people exercise rarely."""

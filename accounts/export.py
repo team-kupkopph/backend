@@ -295,6 +295,13 @@ def _devices(account):
     ]
 
 
+def _blocks(account):
+    from moderation.models import AccountBlock
+    # The people YOU blocked, by the name you saw. Never the blocked person's account id, and never who blocked you.
+    return [{"display_name": b.blocked.display_name, "blocked_at": _dt(b.created_at)}
+            for b in AccountBlock.objects.filter(blocker=account).select_related("blocked").order_by("-created_at")]
+
+
 def _moderation_flags(account):
     from moderation.models import ModerationFlag
     # Flags the caller RAISED, including the free text they typed. Not the flags raised
@@ -397,6 +404,7 @@ SECTIONS = {
     "badges": _badges,
     "notifications": _notifications,
     "moderation_flags": _moderation_flags,
+    "blocks": _blocks,
     "shelter_profile": _shelter_profile,
     "shelter_profile_changes": _shelter_profile_changes,
     "needs": _needs,

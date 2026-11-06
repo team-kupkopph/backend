@@ -14,6 +14,7 @@ from accounts.models import Account
 from accounts.visibility import account_is_public, public_account_q
 from common.analytics import emit
 from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCreateThrottle
+from moderation.blocks import hidden_from
 from notifications.service import notify
 from shelter.permissions import IsShelter, IsVerifiedShelterForNeeds
 
@@ -365,6 +366,7 @@ class StoriesView(APIView):
         # welfare record and come back on reinstatement; the public surface does not show them).
         qs = (StoryPost.objects.filter(status=StoryStatus.PUBLISHED)
               .filter(public_account_q("author_account__"))
+              .exclude(author_account_id__in=hidden_from(request.user))     # review step 7d · a block, both ways
               .select_related("author_account")
               .prefetch_related("photos", "author_account__addresses")
               .annotate(_rcount=Count("reactions")).order_by("-created_at"))
@@ -416,6 +418,8 @@ class StoryDetailView(APIView):
                  .filter(pk=story_id).first())
         if story is None or not account_is_public(story.author_account):
             return _err("not_found", "No such story.", 404)      # AS5: a suspended or deleted author's story is gone for everyone
+        if story.author_account_id in hidden_from(request.user):  # 7d · a block answers as a missing story does
+            return _err("not_found", "No such story.", 404)
         is_author = (request.user and request.user.is_authenticated
                      and request.user.pk == story.author_account_id)
         if story.status == StoryStatus.HIDDEN and not is_author:
@@ -436,7 +440,8 @@ class StoryReactionView(APIView):
 
     def post(self, request, story_id):
         story = (StoryPost.objects.filter(pk=story_id, status=StoryStatus.PUBLISHED)
-                 .filter(public_account_q("author_account__")).first())
+                 .filter(public_account_q("author_account__"))
+                 .exclude(author_account_id__in=hidden_from(request.user)).first())
         if story is None:
             return _err("not_found", "No such story.", 404)
         _, created = StoryReaction.objects.get_or_create(story=story, account=request.user)

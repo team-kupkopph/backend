@@ -135,6 +135,42 @@ def _take_down_qr(qr, reviewer):
     return True
 
 
+# ---- the person behind a thing (review step 7c/7d). A story's author, a volunteer and a shelter are shown without an
+# account id, so "report this person" and "block this person" name WHAT THEY POSTED and the server works out who;
+# an account id never has to be put into a public payload. A stray report is deliberately absent: an anonymous report
+# hides its reporter from everyone else, and resolving them here would unmask them.
+def _person_self(account):
+    return account
+
+
+def _person_listing(listing):
+    return listing.posted_by
+
+
+def _person_story(story):
+    return story.author_account
+
+
+def _person_shift(shift):
+    return shift.shelter_account
+
+
+def _person_qr(qr):
+    return qr.account
+
+
+#: What a person can be reached through. `account` has its own id, and `qr` has no entry point in the app.
+VIA_TYPES = (FlagTarget.LISTING, FlagTarget.STORY, FlagTarget.SHIFT)
+
+
+def resolve_person(via_type, via_id):
+    """The Account behind `via_type`/`via_id`, or None when that thing is gone (or has no person). Callers have
+    validated `via_type` against `VIA_TYPES`."""
+    spec = REGISTRY[via_type]
+    obj = spec.fetch(via_id)
+    return spec.person(obj) if obj is not None and spec.person is not None else None
+
+
 # ---- what actioning will do, in plain words, BEFORE the click (review step 3, MO3). Each function reads
 # the same rows the take-down above is about to change, with the same filters, and
 # `test_on_action.py` holds the stated numbers to what the take-down then really changes: a warning
@@ -291,6 +327,7 @@ class TargetSpec:
     action_label: str | None = None    # the take-down button, named for the type: "Remove listing"
     already_done: Callable | None = None  # (obj) -> the line saying there is nothing left to take down, else None
     restore: Callable | None = None    # (obj) -> {"path","label","consequences"} while a takedown holds it, else None
+    person: Callable | None = None     # (obj) -> the Account behind it, for "report / block this person"
 
     @property
     def supported(self):
@@ -307,20 +344,23 @@ class TargetSpec:
 # resolvable, which is a different state from "the row was deleted".
 REGISTRY = {
     FlagTarget.ACCOUNT: TargetSpec("accounts.Account", "account_id", _describe_account,
-                                   consequences=_account_consequences),
+                                   consequences=_account_consequences, person=_person_self),
     FlagTarget.LISTING: TargetSpec("listings.AdoptionListing", "listing_id", _describe_listing,
                                    _hide_listing, "listing_hidden", _listing_consequences, "Remove listing",
-                                   _listing_done, _restore_listing),
+                                   _listing_done, _restore_listing,
+                                   person=_person_listing),
     FlagTarget.REPORT: TargetSpec("sagip.StrayReport", "report_id", _describe_report,
                                   _hide_report, "report_hidden", _report_consequences, "Remove report",
                                   _report_done, _restore_report),
     FlagTarget.QR: TargetSpec("shelter.DonationQr", "donation_qr_id", _describe_qr,
-                              _take_down_qr, "qr_taken_down", _qr_consequences, "Take down QR", _qr_done),
+                              _take_down_qr, "qr_taken_down", _qr_consequences, "Take down QR", _qr_done,
+                              person=_person_qr),
     FlagTarget.STORY: TargetSpec("community.StoryPost", "story_id", _describe_story,
                                  _hide_story, "story_hidden", _story_consequences, "Hide story", _story_done,
-                                 _restore_story),
+                                 _restore_story, person=_person_story),
     FlagTarget.SHIFT: TargetSpec("volunteer.VolunteerShift", "shift_id", _describe_shift,
-                                 _close_shift, "shift_closed", _shift_consequences, "Close shift", _shift_done),
+                                 _close_shift, "shift_closed", _shift_consequences, "Close shift", _shift_done,
+                                 person=_person_shift),
     FlagTarget.MESSAGE: TargetSpec(None, None, None),
 }
 

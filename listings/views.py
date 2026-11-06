@@ -41,6 +41,7 @@ from listings.visibility import (
     listing_is_public,
     public_poster_q,
 )
+from moderation.blocks import hidden_from
 from notifications.service import notify
 from pets import service as pets
 from pets.representations import pet_photo_urls, sex_out
@@ -228,6 +229,7 @@ class ListingsView(APIView):
         qs = (AdoptionListing.objects.filter(status="available", hidden_at__isnull=True)
               .filter(public_account_q("posted_by__"))
               .filter(public_poster_q()).select_related("posted_by").distinct().order_by("-created_at"))
+        qs = qs.exclude(posted_by_id__in=hidden_from(request.user))       # review step 7d · a block, both ways
         city = request.query_params.get("city")
         if city:
             # ⚠️ Not `city=city`. The listing form is free text while the mobile picker has a
@@ -513,6 +515,9 @@ class ListingDetailView(APIView):
                 and not listing_is_public(listing)):
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
+        if listing.posted_by_id in hidden_from(request.user):     # 7d · a block answers as a missing listing does
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
         return Response({
             "listing_id": str(listing.pk), "pet": _pet_fields(listing),
             "description": listing.story or None, "adoption_fee": str(listing.adoption_fee),
@@ -604,6 +609,9 @@ class ListingInquiriesView(APIView):
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
         if not listing_is_public(listing):                  # AD16
+            return Response({"error": {"code": "not_found", "message": "No such listing"}},
+                            status=404)
+        if listing.posted_by_id in hidden_from(request.user):   # 7d · no new inquiry across a block
             return Response({"error": {"code": "not_found", "message": "No such listing"}},
                             status=404)
         if listing.posted_by_id == request.user.pk:         # AD13
@@ -981,6 +989,7 @@ class ShortlistListingsView(APIView):
                       status__in=(ListingStatus.AVAILABLE, ListingStatus.PENDING, ListingStatus.ADOPTED))
               .filter(public_account_q("posted_by__"))
               .filter(public_poster_q()).select_related("posted_by").distinct()
+              .exclude(posted_by_id__in=hidden_from(request.user))
               .annotate(saved_at=Max("preferences__updated_at", filter=Q(preferences__account=request.user)))
               .order_by("-saved_at"))
         page_items, next_page = _paginate(qs, request)

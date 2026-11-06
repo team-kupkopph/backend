@@ -26,6 +26,7 @@ def flag_row(flag, *, with_target=False):
         "target_type": flag.target_type,
         "target_id": str(flag.target_id),
         "reason": flag.reason,
+        "reason_code": flag.reason_code,   # review step 7g
         "status": flag.status,
         "created_at": flag.created_at.isoformat(),
         "reviewed_at": flag.reviewed_at.isoformat() if flag.reviewed_at else None,

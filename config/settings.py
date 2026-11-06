@@ -189,7 +189,7 @@ REST_FRAMEWORK = {
         # OTP_MAX_ATTEMPTS; these rates bound grinding across many codes.
         "password_code_check_ip": "30/hour", "password_code_check_identifier": "15/hour",
         "report_create": "20/day", "offer_create": "20/hour",
-        "moderation_flag_create": "20/day",
+        "moderation_flag_create": "20/day", "block_create": "60/day",
         "export_request": "3/day",
         "password_change": "10/hour", "email_change": "5/hour", "step_up": "5/hour",
         # US-K2 · ceilings for the Sprint 4-6 write paths. Sized so no plausible
