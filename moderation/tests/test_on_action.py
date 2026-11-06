@@ -25,8 +25,6 @@ from sagip.models import (
     StrayReport,
     StrayStatus,
 )
-from shelter.models import DonationQr
-from volunteer.models import VolunteerShift
 
 
 def _on_action(target_type, pk):
@@ -156,28 +154,14 @@ def test_a_story_says_it_is_hidden_kept_and_that_the_author_is_not_told():
 
 
 @pytest.mark.django_db
-def test_types_with_no_takedown_say_so_instead_of_offering_a_remove_button():
-    """MO5, said honestly until step 6 wires real actions: 'Action it' used to read as if it did something."""
+def test_an_account_flag_says_it_records_the_decision_only_and_never_suspends():
+    """MQ2 · the one type left with no take-down: suspension is its own deliberate act. Shifts and QRs now
+    take real action (test_real_actions.py)."""
     owner = AccountFactory(account_type="shelter")
-    qr = DonationQr.objects.create(account=owner, provider="gcash", account_name="X", qr_image_url="u",
-                                    status="live", verified=True)
-    shift = VolunteerShift.objects.create(
-        shelter_account=owner, type="walking", capacity=2, status="open",
-        starts_at=timezone.now() + timezone.timedelta(days=2), ends_at=timezone.now() + timezone.timedelta(days=2, hours=2))
-    for target_type, pk in ((FlagTarget.QR, qr.pk), (FlagTarget.SHIFT, shift.pk), (FlagTarget.ACCOUNT, owner.pk)):
-        out = _on_action(target_type, pk)
-        assert out["label"] == "Mark handled" and out["changes"] is False and out["already_done"] is False
-        assert "records your decision only" in _text(out).lower()
-    assert "stays live" in _text(_on_action(FlagTarget.QR, qr.pk))
-    assert "stays open" in _text(_on_action(FlagTarget.SHIFT, shift.pk))
-    assert "does not suspend" in _text(_on_action(FlagTarget.ACCOUNT, owner.pk)).lower()
-
-
-@pytest.mark.django_db
-def test_a_target_that_is_gone_or_unsupported_has_no_on_action():
-    import uuid
-    assert "on_action" not in targets.describe_target(FlagTarget.LISTING, uuid.uuid4())
-    assert "on_action" not in targets.describe_target(FlagTarget.MESSAGE, uuid.uuid4())
+    out = _on_action(FlagTarget.ACCOUNT, owner.pk)
+    assert out["label"] == "Mark handled" and out["changes"] is False and out["already_done"] is False
+    assert "records your decision only" in _text(out).lower()
+    assert "does not suspend" in _text(out).lower()
 
 
 @pytest.mark.django_db
@@ -186,14 +170,6 @@ def test_every_supported_type_has_a_consequences_source():
     for target_type, spec in targets.REGISTRY.items():
         if spec.supported:
             assert spec.consequences is not None, target_type
-
-
-@pytest.mark.django_db
-def test_a_pending_qr_is_not_described_as_live():
-    qr = DonationQr.objects.create(account=AccountFactory(account_type="shelter"), provider="gcash",
-                                   account_name="X", qr_image_url="u")
-    text = _text(_on_action(FlagTarget.QR, qr.pk))
-    assert "stays live" not in text and "not changed" in text
 
 
 @pytest.mark.django_db
