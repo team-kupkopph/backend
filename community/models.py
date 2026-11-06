@@ -136,6 +136,9 @@ class Badge(models.Model):
     threshold = models.PositiveIntegerField(null=True, blank=True)
     # The grid's order. Earned or not, a badge keeps its place, so the list does not shuffle.
     sort_order = models.PositiveSmallIntegerField(default=0)
+    # IB22 · a retired badge is no longer awarded and is hidden from anyone who does not hold it. A holder keeps it: the
+    # row is never deleted (PROTECT), so retiring is how a badge goes away.
+    retired_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "badge"
@@ -147,8 +150,9 @@ class AccountBadge(models.Model):
     catch-up sweep (D-S6-3) without double-awarding.
 
     The DDL's PRIMARY KEY (account_id, badge_code) is enforced here as a UNIQUE constraint over
-    Django's implicit surrogate key: Django 5.1 has no composite primary key (added in 5.2).
-    Revisit as a real composite PK on the 5.2 upgrade; the uniqueness invariant is identical.
+    Django's implicit surrogate key. Decided to keep it (IB21, step 20) now that Django has a composite primary key: it
+    cannot be the target of a foreign key, `get_or_create` and the admin lean on a single `pk`, and switching means
+    rewriting a table that holds real awards for no change in behaviour. The uniqueness invariant is identical.
     """
 
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="badges")

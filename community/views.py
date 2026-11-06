@@ -5,7 +5,7 @@ Every change to a need or a pledge — status, `quantity_received`, `decided_at`
 (create_pledge / cancel_pledge / apply_received / edit_need / complete_need) under the need's
 row lock (D-S6-7). The views validate, call one writer, and notify AFTER it has committed.
 """
-from django.db.models import Count
+from django.db.models import Count, Q
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -321,7 +321,8 @@ class MeImpactView(APIView):
                    "earned": b.pk in earned,
                    "earned_at": earned.get(b.pk),
                    "progress": badge_progress(b, counts)}
-                  for b in Badge.objects.order_by("sort_order", "badge_code")]
+                  for b in Badge.objects.filter(Q(retired_at__isnull=True) | Q(pk__in=earned))
+                  .order_by("sort_order", "badge_code")]
         # IB26 · the response is its serializer, so what the app reads is one declared shape (and `earned_at` is UTC with a Z).
         return Response(MeImpactSerializer({"impact": counts, "badges": badges}).data)
 
