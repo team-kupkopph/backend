@@ -180,3 +180,20 @@ def test_dismissing_a_story_flag_leaves_the_story_published(client, auth):
                 content_type="application/json", **auth)
     story.refresh_from_db()
     assert story.status == StoryStatus.PUBLISHED
+
+
+@pytest.mark.django_db
+def test_the_flag_detail_says_what_actioning_will_do(client, auth):
+    """Review step 3 · the console shows this before the click; the queue rows stay light."""
+    from listings.tests.adoption_helpers import inquire, listing, person
+    live = listing(person())
+    inquire(person(), live)
+    flag = make_flag(target_type="listing", target_id=live.pk)
+
+    detail = client.get(f"/admin-api/flags/{flag.flag_id}", **auth).json()
+    on_action = detail["target"]["on_action"]
+    assert on_action["label"] == "Remove listing" and on_action["changes"] is True
+    assert any("1 open inquiry will be closed" in line for line in on_action["consequences"])
+
+    queue = client.get("/admin-api/flags", **auth).json()["results"][0]
+    assert "target" not in queue
