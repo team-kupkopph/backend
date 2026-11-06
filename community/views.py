@@ -21,6 +21,7 @@ from .badges import award_after_commit, badge_progress, impact_counts
 from .models import (
     AccountBadge,
     Badge,
+    BadgeRevocation,
     NeedPledge,
     NeedStatus,
     ShelterNeed,
@@ -322,6 +323,7 @@ class MeImpactView(APIView):
                    "earned_at": earned.get(b.pk),
                    "progress": badge_progress(b, counts)}
                   for b in Badge.objects.filter(Q(retired_at__isnull=True) | Q(pk__in=earned))
+                  .exclude(pk__in=BadgeRevocation.objects.filter(account=request.user).values("badge_id"))   # NT-9 · taken back: not on their screen
                   .order_by("sort_order", "badge_code")]
         # IB26 · the response is its serializer, so what the app reads is one declared shape (and `earned_at` is UTC with a Z).
         return Response(MeImpactSerializer({"impact": counts, "badges": badges}).data)

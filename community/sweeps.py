@@ -19,7 +19,7 @@ from sagip.models import RescueCase
 from volunteer.models import SignupStatus, VolunteerSignup
 
 from .badges import award_badges_for, earned_codes, impact_counts_many
-from .models import AccountBadge, Badge, NeedPledge, PledgeStatus
+from .models import AccountBadge, Badge, BadgeRevocation, NeedPledge, PledgeStatus
 
 logger = logging.getLogger("kupkop.badges")
 
@@ -61,6 +61,10 @@ def award_badges():
         counts = impact_counts_many(accounts)
         held = {}
         for account_id, code in (AccountBadge.objects.filter(account__in=accounts)
+                                 .values_list("account_id", "badge_id")):
+            held.setdefault(account_id, set()).add(code)
+        # NT-9 · a revoked badge counts as held, so the sweep does not re-award it or visit the account for it.
+        for account_id, code in (BadgeRevocation.objects.filter(account__in=accounts)
                                  .values_list("account_id", "badge_id")):
             held.setdefault(account_id, set()).add(code)
         for account in accounts:

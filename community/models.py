@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.utils import timezone
 
 from accounts.models import Account
 
@@ -158,12 +159,35 @@ class AccountBadge(models.Model):
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="badges")
     badge = models.ForeignKey(Badge, on_delete=models.PROTECT, related_name="+",
                               db_column="badge_code")
-    earned_at = models.DateTimeField(auto_now_add=True)
+    # IB19 · when the qualifying event happened, set by the award (see `badges.event_time`), never later than now. The default covers a row
+    # written without one.
+    earned_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         db_table = "account_badge"
         constraints = [
             models.UniqueConstraint(fields=["account", "badge"], name="uq_account_badge"),
+        ]
+
+
+class BadgeRevocation(models.Model):
+    """NT-9 · staff took this badge from this account (`badge_revocation`), and it stays taken.
+
+    The award path counts a revoked badge as held, so neither an event nor the sweep gives it back while the person still meets the rule. The
+    holder is told nothing (owner decision 2026-11-06). `reason` is the staff's, for a later review of the decision.
+    """
+
+    revocation_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name="badge_revocations")
+    badge = models.ForeignKey(Badge, on_delete=models.PROTECT, related_name="+", db_column="badge_code")
+    reason = models.TextField()
+    revoked_by = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    revoked_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "badge_revocation"
+        constraints = [
+            models.UniqueConstraint(fields=["account", "badge"], name="uq_badge_revocation"),
         ]
 
 

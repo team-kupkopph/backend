@@ -105,6 +105,11 @@ def _entries():
         # ----------------------------------------------------------------- community
         ("community.AccountBadge", "account"):
             E("badges", Keep("a badge was earned; the welfare record of what the person did")),
+        ("community.BadgeRevocation", "account"):
+            E(Excluded("staff's fraud decision about the account, not data the person gave; withheld from the export like a moderation outcome"),
+              Keep("must outlive the evidence and the account's erasure, or deleting the account would clear the revocation")),
+        ("community.BadgeRevocation", "revoked_by"):
+            E(_STAFF, _AUDIT),
         ("community.NeedPledge", "pledger_account"):
             E("pledges", Scrub({"note": ""})),      # R10 · the note may hold a phone number or a name
         ("community.ShelterNeed", "shelter_account"):
