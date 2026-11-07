@@ -155,7 +155,7 @@ def test_a_decided_flag_cannot_be_decided_again_by_any_caller(final):
     first, second = AccountFactory(), AccountFactory()
     flag = ModerationFlag.objects.create(reporter_account=AccountFactory(), target_type="listing",
                                          target_id=listing(person()).pk, reason="x")
-    resolve_flag(flag, first, final)
+    resolve_flag(flag, first, final, reason_code="spam_scam")
     with pytest.raises(AlreadyDecided) as err:
         resolve_flag(flag, second, FlagStatus.DISMISSED)
     assert err.value.status == final
@@ -171,7 +171,7 @@ def test_a_stale_copy_of_the_flag_is_not_trusted():
     ModerationFlag.objects.filter(pk=flag.pk).update(status=FlagStatus.DISMISSED)
     assert flag.status == FlagStatus.OPEN
     with pytest.raises(AlreadyDecided):
-        resolve_flag(flag, AccountFactory(), FlagStatus.ACTIONED)
+        resolve_flag(flag, AccountFactory(), FlagStatus.ACTIONED, reason_code="spam_scam")
 
 
 @pytest.mark.django_db
@@ -202,7 +202,7 @@ def test_closing_siblings_stamps_their_first_look_too():
     reviewer = AccountFactory()
     main = ModerationFlag.objects.create(reporter_account=AccountFactory(), target_type="listing", target_id=target.pk, reason="x")
     sibling = ModerationFlag.objects.create(reporter_account=AccountFactory(), target_type="listing", target_id=target.pk, reason="y")
-    resolve_flag(main, reviewer, FlagStatus.ACTIONED)
+    resolve_flag(main, reviewer, FlagStatus.ACTIONED, reason_code="spam_scam")
     sibling.refresh_from_db()
     assert sibling.first_reviewed_by_id == reviewer.pk and sibling.first_reviewed_at is not None
 

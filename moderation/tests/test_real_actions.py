@@ -52,7 +52,7 @@ def test_actioning_a_shift_flag_closes_the_shift_and_cancels_and_tells_its_signu
     shift = _shift()
     people = [_signup(shift), _signup(shift, SignupStatus.APPROVED)]
 
-    flag, effects = resolve_flag(_flag("shift", shift.pk), AccountFactory(), "actioned")
+    flag, effects = resolve_flag(_flag("shift", shift.pk), AccountFactory(), "actioned", reason_code="spam_scam")
 
     shift.refresh_from_db()
     assert shift.status == ShiftStatus.CLOSED
@@ -68,7 +68,7 @@ def test_the_shift_numbers_are_the_numbers_the_close_then_changes():
     shift = _shift()
     _signup(shift), _signup(shift, SignupStatus.APPROVED), _signup(shift, SignupStatus.DECLINED)
     out = _on_action(FlagTarget.SHIFT, shift.pk)
-    resolve_flag(_flag("shift", shift.pk), AccountFactory(), "actioned")
+    resolve_flag(_flag("shift", shift.pk), AccountFactory(), "actioned", reason_code="spam_scam")
     cancelled = VolunteerSignup.objects.filter(shift=shift, status=SignupStatus.CANCELLED, cancelled_by="platform").count()
     assert out["label"] == "Close shift" and out["changes"] is True
     assert cancelled == 2 and "2 signups will be cancelled" in _text(out)
@@ -91,7 +91,7 @@ def test_a_closed_or_ended_shift_says_nothing_more_will_change_and_is_left_alone
     assert _on_action(FlagTarget.SHIFT, ended.pk)["already_done"] is True
     assert "already happened" in _text(_on_action(FlagTarget.SHIFT, ended.pk))
     for shift in (closed, ended):
-        _, effects = resolve_flag(_flag("shift", shift.pk), AccountFactory(), "actioned")
+        _, effects = resolve_flag(_flag("shift", shift.pk), AccountFactory(), "actioned", reason_code="spam_scam")
         assert effects == {}
     ended.refresh_from_db()
     assert ended.status == ShiftStatus.OPEN          # an activity that already happened is never cancelled after the fact
@@ -103,7 +103,7 @@ def test_actioning_a_live_qr_flag_takes_it_down_and_tells_the_shelter():
     qr = _qr()
     reviewer = AccountFactory()
 
-    _, effects = resolve_flag(_flag("qr", qr.pk), reviewer, "actioned")
+    _, effects = resolve_flag(_flag("qr", qr.pk), reviewer, "actioned", reason_code="spam_scam")
 
     qr.refresh_from_db()
     assert qr.status == QrStatus.WITHDRAWN and qr.verified is False
@@ -119,10 +119,23 @@ def test_the_reporters_words_never_reach_the_shelter():
     qr = _qr()
     flag = ModerationFlag.objects.create(reporter_account=AccountFactory(), target_type="qr", target_id=qr.pk,
                                          reason="this shelter is run by a thief called Marco")
-    resolve_flag(flag, AccountFactory(), "actioned")
+    resolve_flag(flag, AccountFactory(), "actioned", reason_code="spam_scam")
     qr.refresh_from_db()
     assert "Marco" not in qr.decision_note
     assert "Marco" not in Notification.objects.get(account=qr.account, type="donation_qr_decided").body
+
+
+@pytest.mark.django_db
+def test_the_shelter_is_told_the_safe_reason_the_moderator_chose_and_never_the_internal_note():
+    """Review step 8 · the decision note a shelter reads carries the fixed sentence for the category, not the moderator's own note."""
+    from moderation import notices
+    qr = _qr()
+    resolve_flag(_flag("qr", qr.pk), AccountFactory(), "actioned", reason_code="misleading", note="internal: owner was warned twice")
+    qr.refresh_from_db()
+    assert notices.REMOVAL_REASONS["misleading"] in qr.decision_note
+    assert "internal" not in qr.decision_note
+    body = Notification.objects.get(account=qr.account, type="donation_qr_decided").body
+    assert notices.REMOVAL_REASONS["misleading"] in body and "internal" not in body
 
 
 @pytest.mark.django_db
@@ -140,7 +153,7 @@ def test_a_qr_that_is_not_live_has_nothing_to_take_down(status):
     qr = _qr(status)
     out = _on_action(FlagTarget.QR, qr.pk)
     assert out["already_done"] is True and out["changes"] is False and "isn't live" in _text(out)
-    _, effects = resolve_flag(_flag("qr", qr.pk), AccountFactory(), "actioned")
+    _, effects = resolve_flag(_flag("qr", qr.pk), AccountFactory(), "actioned", reason_code="spam_scam")
     qr.refresh_from_db()
     assert effects == {} and qr.status == status
     assert not Notification.objects.filter(account=qr.account, type="donation_qr_decided").exists()
@@ -152,7 +165,7 @@ def test_an_account_flag_is_still_record_only():
     owner = AccountFactory()
     out = _on_action(FlagTarget.ACCOUNT, owner.pk)
     assert out["label"] == "Mark handled" and out["changes"] is False
-    assert resolve_flag(_flag("account", owner.pk), AccountFactory(), "actioned")[1] == {}
+    assert resolve_flag(_flag("account", owner.pk), AccountFactory(), "actioned", reason_code="spam_scam")[1] == {}
 
 
 # ---- a target that is gone or has no surface ----------------------------------------------------
@@ -160,7 +173,7 @@ def test_an_account_flag_is_still_record_only():
 def test_a_flag_on_a_deleted_target_cannot_be_actioned_but_can_still_be_dismissed_or_reviewed():
     flag = _flag("listing", uuid.uuid4())
     with pytest.raises(TargetUnavailable) as err:
-        resolve_flag(flag, AccountFactory(), "actioned")
+        resolve_flag(flag, AccountFactory(), "actioned", reason_code="spam_scam")
     assert err.value.state == "gone" and isinstance(err.value, ModerationError)
     flag.refresh_from_db()
     assert flag.status == FlagStatus.OPEN and flag.reviewed_by is None
@@ -174,7 +187,7 @@ def test_a_flag_on_a_deleted_target_cannot_be_actioned_but_can_still_be_dismisse
 def test_a_flag_on_a_type_with_no_surface_cannot_be_actioned():
     flag = _flag("message", uuid.uuid4())
     with pytest.raises(TargetUnavailable) as err:
-        resolve_flag(flag, AccountFactory(), "actioned")
+        resolve_flag(flag, AccountFactory(), "actioned", reason_code="spam_scam")
     assert err.value.state == "unsupported"
     assert resolve_flag(flag, AccountFactory(), "dismissed")[0].status == FlagStatus.DISMISSED
 

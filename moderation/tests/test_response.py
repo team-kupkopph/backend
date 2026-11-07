@@ -38,7 +38,7 @@ def _flag(reporter=None, target=None, status=FlagStatus.OPEN, code="harassment",
 def test_the_reporter_is_told_their_report_was_looked_at(decision):
     reporter = AccountFactory()
     flag = _flag(reporter)
-    resolve_flag(flag, AccountFactory(), decision)
+    resolve_flag(flag, AccountFactory(), decision, reason_code="spam_scam")
     note = Notification.objects.get(account=reporter, type="report_reviewed")
     assert note.title == notices.TITLE and note.body == notices.BODY and note.data == {"flag_id": str(flag.pk)}
 
@@ -46,7 +46,7 @@ def test_the_reporter_is_told_their_report_was_looked_at(decision):
 @pytest.mark.django_db
 def test_the_notice_is_the_same_whatever_was_decided_so_it_cannot_leak_the_outcome():
     a, b = AccountFactory(), AccountFactory()
-    resolve_flag(_flag(a), AccountFactory(), "actioned")
+    resolve_flag(_flag(a), AccountFactory(), "actioned", reason_code="spam_scam")
     resolve_flag(_flag(b), AccountFactory(), "dismissed")
     first, second = (Notification.objects.get(account=x, type="report_reviewed") for x in (a, b))
     assert (first.title, first.body) == (second.title, second.body)
@@ -67,7 +67,7 @@ def test_every_reporter_whose_report_was_closed_with_the_target_is_told_once():
     target = listing(person())
     first, second, third = AccountFactory(), AccountFactory(), AccountFactory()
     main, sibling, reviewed = _flag(first, target), _flag(second, target), _flag(third, target, FlagStatus.REVIEWED)
-    resolve_flag(main, AccountFactory(), "actioned")
+    resolve_flag(main, AccountFactory(), "actioned", reason_code="spam_scam")
     for who in (first, second, third):
         assert Notification.objects.filter(account=who, type="report_reviewed").count() == 1
     assert sibling.pk and reviewed.pk
@@ -96,7 +96,7 @@ def test_a_notice_that_fails_does_not_undo_the_decision(monkeypatch):
 def test_a_takedown_tells_the_poster_how_to_ask_for_a_second_look():
     poster = person()
     flag = _flag(target=listing(poster))
-    resolve_flag(flag, AccountFactory(), "actioned")
+    resolve_flag(flag, AccountFactory(), "actioned", reason_code="spam_scam")
     body = Notification.objects.get(account=poster, type="listing_removed").body
     assert notices.appeal_line() in body and "hello@kupkop.ph" in body
 

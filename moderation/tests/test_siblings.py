@@ -33,7 +33,7 @@ def test_actioning_a_flag_closes_the_open_and_reviewed_flags_about_the_same_targ
     dismissed = _flag("listing", live.pk, FlagStatus.DISMISSED)
     elsewhere = _flag("listing", other.pk)
 
-    flag, effects = resolve_flag(first, reviewer, "actioned")
+    flag, effects = resolve_flag(first, reviewer, "actioned", reason_code="spam_scam")
 
     assert effects == {"listing_hidden": str(live.pk), "flags_resolved": "2"}
     assert flag.status == FlagStatus.ACTIONED
@@ -52,7 +52,7 @@ def test_the_count_said_before_the_click_is_the_count_closed():
     first = _flag("listing", live.pk)
     _flag("listing", live.pk), _flag("listing", live.pk), _flag("listing", live.pk, FlagStatus.REVIEWED)
     said = targets.describe_target(FlagTarget.LISTING, live.pk, flag_id=first.pk)["on_action"]
-    _, effects = resolve_flag(first, AccountFactory(), "actioned")
+    _, effects = resolve_flag(first, AccountFactory(), "actioned", reason_code="spam_scam")
     assert "3 other flags about this will be closed as actioned too" in " ".join(said["consequences"])
     assert effects["flags_resolved"] == "3"
 
@@ -82,7 +82,7 @@ def test_a_record_only_action_does_not_close_the_others():
     """An account flag takes nothing down, so there is nothing that settles the other reports about it."""
     owner = AccountFactory()
     first, other = _flag("account", owner.pk), _flag("account", owner.pk)
-    _, effects = resolve_flag(first, AccountFactory(), "actioned")
+    _, effects = resolve_flag(first, AccountFactory(), "actioned", reason_code="spam_scam")
     assert effects == {} and _status(other) == FlagStatus.OPEN
     said = " ".join(targets.describe_target("account", owner.pk, flag_id=first.pk)["on_action"]["consequences"])
     assert "other flag" not in said
@@ -97,7 +97,7 @@ def test_a_flag_left_open_on_an_already_hidden_target_closes_its_siblings_too():
     first, other = _flag("listing", live.pk), _flag("listing", live.pk)
     said = targets.describe_target("listing", live.pk, flag_id=first.pk)["on_action"]
     assert said["already_done"] is True and "1 other flag about this will be closed" in " ".join(said["consequences"])
-    _, effects = resolve_flag(first, AccountFactory(), "actioned")
+    _, effects = resolve_flag(first, AccountFactory(), "actioned", reason_code="spam_scam")
     assert effects == {"flags_resolved": "1"} and _status(other) == FlagStatus.ACTIONED
 
 
@@ -107,13 +107,13 @@ def test_a_take_down_that_fails_leaves_every_flag_open():
     live = listing(person())
     first, other = _flag("listing", live.pk), _flag("listing", live.pk)
 
-    def boom(obj, reviewer):
+    def boom(obj, reviewer, reason=""):
         raise RuntimeError("takedown failed")
     original = targets.REGISTRY[FlagTarget.LISTING].take_down
     targets.REGISTRY[FlagTarget.LISTING].take_down = boom
     try:
         with pytest.raises(RuntimeError):
-            resolve_flag(first, AccountFactory(), "actioned")
+            resolve_flag(first, AccountFactory(), "actioned", reason_code="spam_scam")
     finally:
         targets.REGISTRY[FlagTarget.LISTING].take_down = original
     assert _status(first) == FlagStatus.OPEN and _status(other) == FlagStatus.OPEN
@@ -123,7 +123,7 @@ def test_a_take_down_that_fails_leaves_every_flag_open():
 def test_stories_and_other_types_work_the_same_way():
     story = StoryPost.objects.create(author_account=AccountFactory(), story_type="general", caption="x")
     first, other = _flag("story", story.pk), _flag("story", story.pk)
-    _, effects = resolve_flag(first, AccountFactory(), "actioned")
+    _, effects = resolve_flag(first, AccountFactory(), "actioned", reason_code="spam_scam")
     assert effects == {"story_hidden": str(story.pk), "flags_resolved": "1"} and _status(other) == FlagStatus.ACTIONED
 
 
@@ -133,5 +133,5 @@ def test_a_flag_about_a_different_target_type_with_the_same_id_is_not_a_sibling(
     live = listing(person())
     first = _flag("listing", live.pk)
     stranger = _flag("report", shared)
-    resolve_flag(first, AccountFactory(), "actioned")
+    resolve_flag(first, AccountFactory(), "actioned", reason_code="spam_scam")
     assert _status(stranger) == FlagStatus.OPEN

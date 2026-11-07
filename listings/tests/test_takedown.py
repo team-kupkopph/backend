@@ -122,7 +122,7 @@ def test_actioning_a_listing_flag_takes_it_down_and_dismissing_does_not():
                                        target_id=live.pk, reason="selling a pet")
     f2 = ModerationFlag.objects.create(reporter_account=reporter, target_type=FlagTarget.LISTING,
                                        target_id=other.pk, reason="meh")
-    _, effects = resolve_flag(f1, staff, FlagStatus.ACTIONED)
+    _, effects = resolve_flag(f1, staff, FlagStatus.ACTIONED, reason_code="spam_scam")
     resolve_flag(f2, staff, FlagStatus.DISMISSED)
     live.refresh_from_db(); other.refresh_from_db()
     assert live.hidden_at is not None and effects == {"listing_hidden": str(live.pk)}
@@ -137,7 +137,7 @@ def test_a_flag_on_a_listing_that_is_gone_cannot_be_actioned_but_is_still_resolv
     flag = ModerationFlag.objects.create(reporter_account=person(), target_type=FlagTarget.LISTING,
                                          target_id="00000000-0000-0000-0000-000000000001", reason="x")
     with pytest.raises(TargetUnavailable):
-        resolve_flag(flag, _staff(), FlagStatus.ACTIONED)
+        resolve_flag(flag, _staff(), FlagStatus.ACTIONED, reason_code="spam_scam")
     resolve_flag(flag, _staff(), FlagStatus.DISMISSED)
     flag.refresh_from_db()
     assert flag.status == FlagStatus.DISMISSED

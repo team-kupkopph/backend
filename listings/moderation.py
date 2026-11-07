@@ -17,7 +17,7 @@ class ListingNotHidden(Exception):
 
 
 @transaction.atomic
-def hide_listing(listing, by):
+def hide_listing(listing, by, reason=""):
     """Hide `listing` and close the inquiries a takedown strands. Returns True if it hid it, False if there
     was nothing to do (already hidden, or gone), so the caller's `side_effects` stays honest.
 
@@ -50,7 +50,8 @@ def hide_listing(listing, by):
                                     "updated_at"])
         notices.listing_withdrawn(locked, inquiry)
     notify(locked.posted_by, "listing_removed", title="A listing of yours was removed",
-           body=f"Our moderators removed {locked.name or 'your listing'}, so it's no longer on Kupkop. {appeal_line()}",
+           body=" ".join(p for p in (f"Our moderators removed {locked.name or 'your listing'}, so it's no longer on Kupkop.",
+                                     reason, appeal_line()) if p),
            data={"listing_id": str(locked.pk)})
     listing.hidden_at = now
     return True

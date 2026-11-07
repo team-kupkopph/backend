@@ -72,6 +72,11 @@ class ModerationFlag(models.Model):
     alerted_at = models.DateTimeField(null=True, blank=True)
     # Review step 19 (MO22) · who first looked at it, and when. `reviewed_by/at` are replaced by every later decision; these
     # never are, so "how long did a report wait for a first response" can still be answered.
+    # Review step 8 (MO8) · why a takedown was ordered, and what the moderator wrote about it. `decision_reason_code` is the category
+    # the POSTER is told (as a fixed sentence, never the reporter's words); `decision_note` is internal and is shown to no one outside
+    # the console. Both blank on a flag that was dismissed or only reviewed.
+    decision_reason_code = models.CharField(max_length=20, choices=ReasonCode.choices, blank=True)
+    decision_note = models.TextField(blank=True)
     first_reviewed_at = models.DateTimeField(null=True, blank=True)
     first_reviewed_by = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
                                           db_column="first_reviewed_by")

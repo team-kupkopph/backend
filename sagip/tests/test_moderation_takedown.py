@@ -57,7 +57,7 @@ def _offer(report):
 def _action(report):
     flag = ModerationFlag.objects.create(reporter_account=AccountFactory(), target_type=FlagTarget.REPORT,
                                          target_id=report.pk, reason="fake")
-    return resolve_flag(flag, AccountFactory(), FlagStatus.ACTIONED)
+    return resolve_flag(flag, AccountFactory(), FlagStatus.ACTIONED, reason_code="spam_scam")
 
 
 @pytest.mark.django_db

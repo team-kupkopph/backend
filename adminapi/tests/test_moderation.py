@@ -121,7 +121,7 @@ def test_actioning_a_story_flag_hides_the_story(client, auth):
                                      caption="spam spam")
     flag = make_flag(target_type="story", target_id=story.story_id)
 
-    body = client.post(f"/admin-api/flags/{flag.flag_id}/action", {},
+    body = client.post(f"/admin-api/flags/{flag.flag_id}/action", {"reason_code": "spam_scam"},
                        content_type="application/json", **auth).json()
 
     story.refresh_from_db()
@@ -138,7 +138,7 @@ def test_actioning_an_account_flag_does_not_suspend_the_account(client, auth):
     revocation, US-E2) and is taken separately, by someone who chose to take it."""
     account = AccountFactory(display_name="Reported Person")
     flag = make_flag(target_type="account", target_id=account.account_id)
-    client.post(f"/admin-api/flags/{flag.flag_id}/action", {},
+    client.post(f"/admin-api/flags/{flag.flag_id}/action", {"reason_code": "spam_scam"},
                 content_type="application/json", **auth)
     account.refresh_from_db()
     assert account.status == "active"
@@ -149,7 +149,7 @@ def test_a_second_decision_is_409(client, auth):
     flag = make_flag()
     assert client.post(f"/admin-api/flags/{flag.flag_id}/dismiss", {},
                        content_type="application/json", **auth).status_code == 200
-    res = client.post(f"/admin-api/flags/{flag.flag_id}/action", {},
+    res = client.post(f"/admin-api/flags/{flag.flag_id}/action", {"reason_code": "spam_scam"},
                       content_type="application/json", **auth)
     assert res.status_code == 409 and res.json()["error"]["code"] == "already_decided"
     flag.refresh_from_db()
@@ -162,7 +162,7 @@ def test_reviewed_is_not_terminal(client, auth):
     # A real target: actioning a flag whose target is gone is refused (review step 6), which is not what this tests.
     flag = make_flag(target_type="account", target_id=AccountFactory().account_id)
     client.post(f"/admin-api/flags/{flag.flag_id}/review", {}, content_type="application/json", **auth)
-    assert client.post(f"/admin-api/flags/{flag.flag_id}/action", {},
+    assert client.post(f"/admin-api/flags/{flag.flag_id}/action", {"reason_code": "spam_scam"},
                        content_type="application/json", **auth).status_code == 200
 
 
@@ -207,7 +207,7 @@ def test_actioning_a_flag_with_nothing_to_action_is_refused_but_dismissing_is_no
     claims work nobody did. 422 with a code the console can read; the flag stays open; dismiss still works."""
     flag = make_flag(target_type=target_type)
 
-    res = client.post(f"/admin-api/flags/{flag.flag_id}/action", {}, content_type="application/json", **auth)
+    res = client.post(f"/admin-api/flags/{flag.flag_id}/action", {"reason_code": "spam_scam"}, content_type="application/json", **auth)
 
     assert res.status_code == 422 and res.json()["error"]["code"] == code
     assert "nothing to action" in res.json()["error"]["message"]
@@ -227,7 +227,7 @@ def test_actioning_a_shift_flag_through_the_console_closes_it_and_says_so(client
         starts_at=timezone.now() + timezone.timedelta(days=2), ends_at=timezone.now() + timezone.timedelta(days=2, hours=2))
     flag = make_flag(target_type="shift", target_id=shift.shift_id)
 
-    body = client.post(f"/admin-api/flags/{flag.flag_id}/action", {}, content_type="application/json", **auth).json()
+    body = client.post(f"/admin-api/flags/{flag.flag_id}/action", {"reason_code": "spam_scam"}, content_type="application/json", **auth).json()
 
     shift.refresh_from_db()
     assert shift.status == "closed" and body["side_effects"] == {"shift_closed": str(shift.shift_id)}

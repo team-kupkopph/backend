@@ -105,25 +105,33 @@ def _describe_signup(s):
 
 # ---- takedowns. Each returns True only when it changed something, so `side_effects` never claims
 # work that did not happen (MO17: a second flag on an already hidden listing used to say it hid it).
-def _hide_story(story, reviewer):
+def _hide_story(story, reviewer, reason=""):
     from community.models import StoryPost, StoryStatus
+    from moderation.notices import appeal_line
+    from notifications.service import notify
     # US-T3 / D-S6-4 · hiding, NOT deletion. The row and its photos survive, the feed excludes it, the
     # author sees a "hidden by moderation" state rather than a vanished post. The flag stays as the audit trail.
-    return bool(StoryPost.objects.filter(pk=story.pk).exclude(status=StoryStatus.HIDDEN)
-                .update(status=StoryStatus.HIDDEN))
+    changed = bool(StoryPost.objects.filter(pk=story.pk).exclude(status=StoryStatus.HIDDEN).update(status=StoryStatus.HIDDEN))
+    if changed:
+        # Review step 9 (MO7) · the author is told, why, and how to ask for a second look. A takedown used to be a silent vanish.
+        notify(story.author_account, "story_removed", title="Your story was hidden",
+               body=" ".join(p for p in ("Our moderators hid your story, so it's no longer in the feed. You can still open it.",
+                                         reason, appeal_line()) if p),
+               data={"story_id": str(story.pk)})
+    return changed
 
 
-def _hide_report(report, reviewer):
+def _hide_report(report, reviewer, reason=""):
     from sagip.moderation import hide_report  # C13 · hide, never delete
     return hide_report(report, reviewer)
 
 
-def _hide_listing(listing, reviewer):
+def _hide_listing(listing, reviewer, reason=""):
     from listings.moderation import hide_listing  # AD7 / AQ7 · hide, never delete
-    return hide_listing(listing, reviewer)
+    return hide_listing(listing, reviewer, reason)
 
 
-def _close_shift(shift, reviewer):
+def _close_shift(shift, reviewer, reason=""):
     """MQ2 · close it through the existing path: the shelter's own cancel cascade, so signups are cancelled and told
     the activity is no longer running, never why (adminapi ShiftCloseView). An activity that already happened is
     never cancelled after the fact."""
@@ -141,14 +149,15 @@ def _close_shift(shift, reviewer):
 QR_TAKEDOWN_NOTE = "Taken down after a report was reviewed."
 
 
-def _take_down_qr(qr, reviewer):
+def _take_down_qr(qr, reviewer, reason=""):
     """MQ2 · donors stop seeing it. The reviewer's own Unverify, through the one shared writer."""
     from shelter.models import DonationQr, QrStatus
     from shelter.qr_rules import unverify_qr
     locked = DonationQr.objects.select_for_update().filter(pk=qr.pk).first()
     if locked is None or locked.status != QrStatus.LIVE:
         return False
-    unverify_qr(locked, reviewer, QR_TAKEDOWN_NOTE)
+    # The shelter reads this note (AT26): the poster-safe sentence, never the reporter's words or the moderator's note.
+    unverify_qr(locked, reviewer, f"{QR_TAKEDOWN_NOTE} {reason}".strip())
     return True
 
 
@@ -264,7 +273,7 @@ def _report_consequences(report):
 def _story_consequences(story):
     return ["It will be hidden from the feed. The post and its photos are kept, and the author sees a "
             "hidden banner on it.",
-            "The author is not told."]  # MO7 · said plainly until step 9 sends a notice
+            "The author is told, with the reason you choose, and how to ask for a second look."]   # step 9 (MO7)
 
 
 _RECORDS_ONLY = "Records your decision only."
