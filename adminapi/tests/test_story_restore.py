@@ -39,7 +39,7 @@ def test_restoring_a_hidden_story_puts_it_back_in_the_feed(client, auth):
     assert res.status_code == 200, res.content
     assert res.json() == {"story_id": str(story.pk), "status": "published", "hidden": False}
     assert [s["story_id"] for s in client.get("/api/v1/stories").json()["results"]] == [str(story.pk)]
-    assert AdminAuditLog.objects.filter(action="stories/{id}/restore").first().detail == {"notes_len": 40}
+    assert AdminAuditLog.objects.filter(action="stories/{id}/restore").first().detail == {"notes_len": 40, "restored": "story"}
 
 
 @pytest.mark.django_db

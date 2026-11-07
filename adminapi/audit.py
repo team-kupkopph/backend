@@ -16,6 +16,11 @@ PREFIX = "/admin-api/"
 # being listed — they simply are not on this list.
 DETAIL_FIELDS = ("status", "type", "q", "cursor", "notes_len")
 
+# Review step 14 (MO21) · what a VIEW may add about the thing it acted on. The audit row's own target is the first id in the path, which for
+# a flag decision is the FLAG, so "who took down this listing?" needed a join to a table with no key to the content. A view that decides
+# something puts what it decided here (`request._request._audit_extra`), and only these keys are kept. Ids and words, never text.
+EXTRA_FIELDS = ("flagged_type", "flagged_id", "decision", "reason_code", "effects", "restored", "warned")
+
 # Path -> a stable action name. Ids are collapsed so the action is groupable; the id itself
 # goes to target_id, where it belongs.
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
@@ -49,6 +54,9 @@ def _detail(request):
             if key in body:
                 out["notes_len"] = len(str(body.get(key) or "").strip())
                 break
+    extra = getattr(request, "_audit_extra", None)
+    if isinstance(extra, dict):
+        out.update({k: extra[k] for k in EXTRA_FIELDS if k in extra})
     return out or None
 
 

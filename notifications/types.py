@@ -79,6 +79,8 @@ _TYPES = [
     NotificationType("report_reviewed", "{flag_id}", True, ""),
     # Review step 9 (MO7) · the author hears that a story of theirs was hidden, and why, and can still open it (marked hidden).
     NotificationType("story_removed", "{story_id}", True, "kupkop://stories/{story_id}"),
+    # Review step 12 (MO10) · a moderator's warning: a reminder of the rules, short of taking anything down.
+    NotificationType("account_warned", "{warning_id}", True, ""),
     # AD7: the poster hears a moderation takedown of their listing.
     NotificationType("listing_removed", "{listing_id}", True, "kupkop://listings/{listing_id}"),
     # Adoption poster loop (dev/adoption-build-review.md AD2): the placement recipient's push,

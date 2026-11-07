@@ -37,6 +37,14 @@ def removal_reason(code):
     return REMOVAL_REASONS.get(code, "")
 
 
+def warning_body(code):
+    """What a member is told when a moderator warns them (review step 12). A reminder, short of taking anything down: it names the
+    category, never a post, a reporter or the moderator's note, and says what could follow without promising it."""
+    return " ".join(p for p in (
+        "Our moderators reviewed something you posted and want to remind you of our community rules.",
+        removal_reason(code), "If this keeps happening, we may remove your posts or limit your account.", appeal_line()) if p)
+
+
 def appeal_line():
     """The sentence added to a takedown notice. One place, so every notice offers the same way back."""
     return f"If you think this was a mistake, write to {settings.SUPPORT_EMAIL}."

@@ -75,6 +75,9 @@ class ModerationFlag(models.Model):
     # Review step 8 (MO8) · why a takedown was ordered, and what the moderator wrote about it. `decision_reason_code` is the category
     # the POSTER is told (as a fixed sentence, never the reporter's words); `decision_note` is internal and is shown to no one outside
     # the console. Both blank on a flag that was dismissed or only reviewed.
+    # Review step 13 (MO9) · set only on a flag the PLATFORM raised (no reporter), naming the rule that raised it. Lets a rule see its own
+    # flags and the console say why a person is in the queue without parsing prose.
+    rule = models.CharField(max_length=30, blank=True)
     decision_reason_code = models.CharField(max_length=20, choices=ReasonCode.choices, blank=True)
     decision_note = models.TextField(blank=True)
     first_reviewed_at = models.DateTimeField(null=True, blank=True)
@@ -103,6 +106,24 @@ class ModerationFlag(models.Model):
                                     condition=models.Q(status__in=["open", "reviewed"]),
                                     name="uq_flag_one_live_per_reporter_target"),
         ]
+
+
+class ModerationWarning(models.Model):
+    """Review step 12 (MO10, V8) · "Warn poster". A moderator tells a member, in the platform's words, that something of theirs broke the
+    rules, short of taking anything down. The member is notified; the row is the record, so the next moderator can see they were
+    warned and how often. Kept when the account is erased (it is the platform's own record, like a badge revocation)."""
+
+    warning_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="moderation_warnings")
+    issued_by = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True, related_name="+", db_column="issued_by")
+    reason_code = models.CharField(max_length=20, choices=ReasonCode.choices)
+    note = models.TextField(blank=True)                    # internal: never shown to the member
+    flag = models.ForeignKey(ModerationFlag, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "moderation_warning"
+        indexes = [models.Index(fields=["account", "-created_at"], name="idx_warning_account")]
 
 
 class AccountBlock(models.Model):

@@ -10,7 +10,10 @@ from adminapi.permissions import admin_account_for
 from adminapi.verifications_views import StaffView
 from community.badges import revoke_badge
 from community.models import AccountBadge, Badge, BadgeRevocation
-from moderation.models import ModerationFlag
+from moderation import offenders, telemetry
+from moderation.models import ModerationFlag, ModerationWarning, ReasonCode
+from moderation.notices import warning_body
+from notifications.service import notify
 from verifications.models import AccountCapability, VerificationRequest
 
 
@@ -42,6 +45,8 @@ def member_detail(account):
     # Flags raised ABOUT this member — the context a reviewer needs before suspending.
     flags = list(ModerationFlag.objects.filter(target_type="account", target_id=account.account_id)
                  .order_by("-created_at")[:20])
+    content_flags = list(ModerationFlag.objects.filter(offenders.about_person(account)).order_by("-created_at")[:50])
+    warnings = list(ModerationWarning.objects.filter(account=account).select_related("issued_by").order_by("-created_at")[:20])
     return {
         **member_row(account),
         "sessions_revoked_at": (account.sessions_revoked_at.isoformat()
@@ -54,6 +59,16 @@ def member_detail(account):
                           for v in verifications],
         "flags_about": [{"flag_id": str(f.flag_id), "reason": f.reason, "status": f.status,
                          "created_at": f.created_at.isoformat()} for f in flags],
+        # Review step 12 (MO10) · every flag about anything of theirs (a person with ten removed listings looked clean when only `account`
+        # flags were read), what was actually taken down lately, and whether a moderator has already warned them.
+        "content_flags": [{"flag_id": str(f.flag_id), "target_type": f.target_type, "status": f.status,
+                           "reason_code": f.reason_code, "decision_reason_code": f.decision_reason_code,
+                           "rule": f.rule or None, "created_at": f.created_at.isoformat()} for f in content_flags],
+        "takedowns_90d": offenders.takedown_count(account),
+        "takedown_threshold": offenders.THRESHOLD,
+        "warnings": [{"warning_id": str(w.warning_id), "reason_code": w.reason_code,
+                      "issued_by": w.issued_by.display_name if w.issued_by_id else None,
+                      "created_at": w.created_at.isoformat()} for w in warnings],
         # NT-9 · what a reviewer needs to act on a badge: what they hold, and what staff already took back.
         "badges": [{"badge_code": b.badge_id, "name": b.badge.name, "earned_at": b.earned_at.isoformat()}
                    for b in AccountBadge.objects.filter(account=account).select_related("badge")
@@ -105,6 +120,39 @@ class MemberDetailView(StaffView):
         if account is None:
             return Response({"error": {"code": "not_found"}}, status=404)
         return Response(member_detail(account))
+
+
+class WarnView(StaffView):
+    """POST /admin-api/members/{id}/warn {reason_code, note?, flag_id?} · review step 12 (MO10).
+
+    A warning is the step between nothing and a takedown: the member is told, in the platform's words, which rule, and the row is the
+    record. The category is required (the member is told a fixed sentence for it); the note is internal. It never suspends anyone."""
+
+    def post(self, request, account_id):
+        body = request.data if isinstance(request.data, dict) else {}
+        code, note, flag_id = body.get("reason_code"), body.get("note") or "", body.get("flag_id")
+        if not code:
+            return Response({"error": {"code": "reason_required", "message": "Choose which rule this is about."}}, status=422)
+        if code not in ReasonCode.values:
+            return Response({"error": {"code": "invalid_reason_code", "message": "That is not a reason we know."}}, status=422)
+        if not isinstance(note, str) or len(note.strip()) > 2000:
+            return Response({"error": {"code": "note_too_long", "message": "The note can be at most 2,000 characters."}}, status=422)
+        if code == ReasonCode.OTHER and not note.strip():
+            return Response({"error": {"code": "note_required", "message": "Say what is wrong when the reason is something else."}}, status=422)
+        account = Account.objects.filter(account_id=account_id).exclude(account_type=AccountType.ADMIN).first()
+        if account is None:
+            return Response({"error": {"code": "not_found"}}, status=404)
+        if account.status == AccountStatus.DELETED or account.anonymized_at is not None:
+            return Response({"error": {"code": "account_deleted"}}, status=409)
+        flag = ModerationFlag.objects.filter(flag_id=flag_id).first() if isinstance(flag_id, str) else None
+        with transaction.atomic():
+            warning = ModerationWarning.objects.create(account=account, issued_by=admin_account_for(request), reason_code=code,
+                                                       note=note.strip(), flag=flag)
+            notify(account, "account_warned", title="A reminder about our community rules", body=warning_body(code),
+                   data={"warning_id": str(warning.pk)})
+            telemetry.warned(code)
+        request._request._audit_extra = {"warned": True, "reason_code": code}
+        return Response(member_detail(account), status=201)
 
 
 class SuspendView(StaffView):

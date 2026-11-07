@@ -5,6 +5,7 @@ from rest_framework.views import APIView
 
 from accounts.models import Account
 from common.throttles import BlockCreateThrottle, ModerationFlagCreateThrottle
+from moderation import telemetry
 from moderation.models import AccountBlock, FlagTarget
 from moderation.reports import file_report, has_live
 from moderation.serializers import BlockCreateSerializer, ModerationFlagCreateSerializer
@@ -63,6 +64,9 @@ class ModerationFlagCreateView(APIView):
         flag, created = file_report(request.user, d["target_type"], target_id, d["reason_code"], d["reason"])
         if created:
             allowance.record()
+            telemetry.flag_created(d["target_type"], d["reason_code"], bool(d.get("via_type")) or d["target_type"] == FlagTarget.ACCOUNT)
+        else:
+            telemetry.flag_folded(d["target_type"])
         return Response({"flag_id": str(flag.pk)}, status=201 if created else 200)
 
 

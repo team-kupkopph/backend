@@ -13,6 +13,7 @@ the decision survives the UI that happened to invoke it first.
 from django.db import transaction
 from django.utils import timezone
 
+from moderation import offenders, telemetry
 from moderation.models import DECIDABLE, FlagStatus, ModerationFlag, ReasonCode
 from moderation.notices import removal_reason, tell_reporters
 from moderation.targets import REGISTRY
@@ -108,6 +109,7 @@ def resolve_flag(flag, reviewer, status, *, reason_code="", note=""):
         raise AlreadyDecided(flag.status)
 
     side_effects = {}
+    changed, owner = False, None
 
     if status == FlagStatus.ACTIONED:
         spec = REGISTRY.get(flag.target_type)
@@ -126,6 +128,7 @@ def resolve_flag(flag, reviewer, status, *, reason_code="", note=""):
         changed = spec.take_down is not None and spec.take_down(target, reviewer, removal_reason(reason_code))
         if changed:
             side_effects[spec.effect] = str(flag.target_id)
+            owner = spec.person(target) if spec.person is not None else None
         # Review step 5 (MO4) · a decision is about the target. Once it is held down (just now, or already), every other
         # live flag about it is moot, and leaving them open lets a stale one hide it again after a restore. A type that
         # takes nothing down (an account flag) settles nothing for the others, so they stay. Dismissing and reviewing
@@ -155,4 +158,8 @@ def resolve_flag(flag, reviewer, status, *, reason_code="", note=""):
     flag.save(update_fields=fields)
     if status != FlagStatus.REVIEWED:          # `reviewed` is a working state; the reporter hears when it is decided
         tell_reporters([flag])
+    telemetry.flag_decided(flag, status, changed, first_response=flag.first_reviewed_at == now)
+    if changed and owner is not None:
+        # Review step 12 (MQ6) · a takedown can be the third in 90 days; if so a human is asked to look at the person, never suspended.
+        offenders.escalate_if_repeat_takedown(owner, now)
     return flag, side_effects

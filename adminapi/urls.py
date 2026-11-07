@@ -9,6 +9,7 @@ from adminapi.members_views import (
     ReinstateView,
     RevokeBadgeView,
     SuspendView,
+    WarnView,
 )
 from adminapi.moderation_views import (
     FlagActionView,
@@ -90,6 +91,7 @@ urlpatterns = [
     path("members", MemberQueueView.as_view()),
     path("members/<uuid:account_id>", MemberDetailView.as_view()),
     path("members/<uuid:account_id>/suspend", SuspendView.as_view()),
+    path("members/<uuid:account_id>/warn", WarnView.as_view()),
     path("members/<uuid:account_id>/reinstate", ReinstateView.as_view()),
     path("members/<uuid:account_id>/badges/<str:badge_code>/revoke", RevokeBadgeView.as_view()),
 

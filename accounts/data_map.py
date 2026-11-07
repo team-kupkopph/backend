@@ -153,6 +153,13 @@ def _entries():
                                        "must not be rewritten")),
         ("moderation.ModerationFlag", "reviewed_by"):
             E(_STAFF, _AUDIT),
+        # Review step 12 · a warning is the platform's own record about a person, kept like a badge revocation; the person is not
+        # shown the staff member who issued it, and it is not the subject's data to export.
+        ("moderation.ModerationWarning", "account"):
+            E(Excluded("staff's warning about the account, not data the person gave; the member is told by notice, withheld from the export like a moderation outcome"),
+              Keep("a warning must outlive the account's erasure, or deleting the account would clear it")),
+        ("moderation.ModerationWarning", "issued_by"):
+            E(_STAFF, _AUDIT),
         ("moderation.ModerationFlag", "first_reviewed_by"):      # review step 19 · the reviewer who looked first
             E(_STAFF, _AUDIT),
         # Review step 7d · a block is the blocker's own list. It goes with either account: a block about a person who

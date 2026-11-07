@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account
+from accounts.terms import TermsAccepted
 from accounts.visibility import account_is_public, public_account_q
 from common.analytics import emit
 from common.throttles import NeedCreateThrottle, PledgeCreateThrottle, StoryCreateThrottle
@@ -356,7 +357,7 @@ class StoriesView(APIView):
     POST a new story (min 1 photo — a story is a picture with a caption)."""
 
     def get_permissions(self):
-        return [IsAuthenticated()] if self.request.method == "POST" else [AllowAny()]
+        return [IsAuthenticated(), TermsAccepted()] if self.request.method == "POST" else [AllowAny()]
 
     def get_throttles(self):
         return [StoryCreateThrottle()] if self.request.method == "POST" else []
