@@ -8,6 +8,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.terms import TermsAccepted
 from accounts.visibility import COUNTERPARTY_SUSPENDED, is_suspended
 from common.throttles import ShiftCreateThrottle, SignupCreateThrottle
 from listings.models import AdoptionListing
@@ -92,7 +93,7 @@ class ShelterShiftsView(APIView):
     and cancel what it already posted."""
 
     def get_permissions(self):
-        return [IsVerifiedShelter()] if self.request.method == "POST" else [IsShelter()]
+        return [IsVerifiedShelter(), TermsAccepted()] if self.request.method == "POST" else [IsShelter()]
 
     def get_throttles(self):
         # K18 · only the write is rate-limited; a shelter listing its own shifts is not.

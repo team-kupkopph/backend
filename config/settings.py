@@ -268,6 +268,9 @@ OTP_MAX_ATTEMPTS = 5
 # account.terms_consent_version). Bump whenever the user-facing terms change, so an
 # older consent is distinguishable from consent to the current text.
 TERMS_VERSION = "2026-08-01"
+# Review step 7a · whether posting requires the CURRENT terms to have been accepted. OFF until counsel's text exists (MQ10, launch gate 6):
+# see accounts/terms.py. Turning it on without bumping TERMS_VERSION asks nobody anything new, since signup already records the version.
+TERMS_ENFORCED = os.environ.get("TERMS_ENFORCED", "0") == "1"
 
 # D-S5-1 · the liability waiver is a versioned legal document, unlike the per-shift
 # contact-sharing opt-in. Bump when the waiver text changes so an older acceptance is

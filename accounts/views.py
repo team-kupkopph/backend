@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from accounts import stepup
+from accounts import stepup, terms
 from accounts.models import Account, AccountSettings, AccountStatus
 from accounts.notices import notify_email_changed
 from accounts.serializers import (
@@ -399,6 +399,39 @@ class MeView(APIView):
             _drop_replaced_photo(acc, old)
         acc.save()
         return Response(me_repr(acc))
+
+
+class TermsView(APIView):
+    """GET /terms · the version of the Terms of Use in force, and whether posting requires having accepted it (review step 7a).
+    Public: the Welcome screen shows it before an account exists."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({"version": settings.TERMS_VERSION, "enforced": bool(settings.TERMS_ENFORCED)})
+
+
+class MeTermsView(APIView):
+    """GET /me/terms · POST /me/terms {version} · what this person has accepted, and accepting the current version (review step 7a).
+
+    Accepting an OLDER version is refused with 409 and the current one, so a client that cached the document is told it moved rather
+    than being recorded as having agreed to text it did not show."""
+    permission_classes = [IsAuthenticated]
+
+    def _repr(self, account):
+        return {"accepted_version": account.terms_consent_version or None,
+                "accepted_at": account.terms_consent_at.isoformat() if account.terms_consent_at else None,
+                "current_version": settings.TERMS_VERSION, "enforced": bool(settings.TERMS_ENFORCED),
+                "needs_acceptance": not terms.accepted(account)}
+
+    def get(self, request):
+        return Response(self._repr(request.user))
+
+    def post(self, request):
+        version = request.data.get("version") if isinstance(request.data, dict) else None
+        if not isinstance(version, str) or not terms.accept(request.user, version):
+            return Response({"error": {"code": "terms_version_changed", "message": "The terms have changed. Please read the current version.",
+                                       "current_version": settings.TERMS_VERSION}}, status=409)
+        return Response(self._repr(request.user))
 
 
 class MeSettingsView(APIView):

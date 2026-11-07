@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Account, Address
+from accounts.terms import TermsAccepted
 from accounts.visibility import COUNTERPARTY_SUSPENDED, is_suspended, public_account_q
 from common.analytics import emit
 from common.cities import city_variants
@@ -197,7 +198,7 @@ class ListingsView(APIView):
     caught while wiring the mobile create form, before it shipped."""
 
     def get_permissions(self):
-        return [AllowAny()] if self.request.method == "GET" else [IsAuthenticated()]
+        return [AllowAny()] if self.request.method == "GET" else [IsAuthenticated(), TermsAccepted()]
 
     def get(self, request):
         if request.query_params.get("mine") == "true":
@@ -576,7 +577,9 @@ class ListingInquiriesView(APIView):
     with a verified phone may ask; the Verified Member badge is checked at Reserve. A shelter
     can't adopt (decision 3). The phone check exists because the inquiry leads to the
     contact-exchange moment (AQ1: phones are shared once the poster accepts for screening)."""
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        return [IsAuthenticated(), TermsAccepted()] if self.request.method == "POST" else [IsAuthenticated()]
 
     def get(self, request, listing_id):
         """AD2 · GET /listings/{id}/inquiries — the poster's applicants for one listing, newest

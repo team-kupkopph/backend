@@ -13,6 +13,7 @@ from community.models import StoryPost, StoryStatus
 from community.moderation import StoryNotHidden, restore_story
 from listings.models import AdoptionListing
 from listings.moderation import ListingNotHidden, restore_listing
+from moderation import telemetry
 from moderation.actions import (
     AlreadyDecided,
     DecisionInvalid,
@@ -21,6 +22,7 @@ from moderation.actions import (
     resolve_flag,
 )
 from moderation.models import DECIDABLE, FlagStatus, FlagTarget, ModerationFlag, ReasonCode
+from moderation.offenders import RULES
 from moderation.targets import describe_target, edited_since
 from sagip.models import StrayReport
 from sagip.moderation import ReportNotHidden, restore_report
@@ -51,6 +53,9 @@ def flag_row(flag, *, with_target=False):
         # Review step 10 (MO26) · what was flagged, from the snapshot taken when it was reported (no query per row), and how many live
         # reports are about the same thing. `report_count` is present only where the queue annotated it.
         "snippet": _snippet(flag),
+        # Review step 13 · a flag the platform raised says which rule raised it, so the console can say why a person is in the queue.
+        "rule": flag.rule or None,
+        "rule_label": RULES.get(flag.rule),
         **({"report_count": flag._live_count or 0} if hasattr(flag, "_live_count") else {}),
         "decision_reason_code": flag.decision_reason_code,
         "decision_note": flag.decision_note,
@@ -159,6 +164,9 @@ class FlagDecisionView(StaffView):
             return Response({"error": {"code": "invalid_decision", "message": str(exc)}}, status=422)
 
         flag.refresh_from_db()
+        # Review step 14 (MO21) · the audit row names what was decided about, not only the flag: target, outcome, category, what changed.
+        request._request._audit_extra = {"flagged_type": flag.target_type, "flagged_id": str(flag.target_id), "decision": target_status,
+                                          "reason_code": flag.decision_reason_code or None, "effects": sorted(effects)}
         return Response({**flag_row(flag, with_target=True), "side_effects": effects})
 
 
@@ -207,6 +215,8 @@ class _RestoreView(StaffView):
         # The audit middleware reads the Django request, and a DRF `Request` doesn't forward attribute writes to it,
         # so `request._audit_body = ...` never reaches it; set it on the wrapped request so `notes_len` is recorded.
         request._request._audit_body = {"notes": reason}
+        request._request._audit_extra = {"restored": self.noun}
+        telemetry.restored(self.noun)
         return Response(self.answer(obj))
 
 
