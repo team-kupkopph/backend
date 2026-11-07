@@ -43,6 +43,9 @@ def notify_decision(qr, decision, note=""):
     body = {"verified": "Donors can now see this QR.",
             "refused": "Your current QR stays live. " + (note or ""),
             "taken_down": "Donors can no longer see it. " + (note or "")}[decision].strip()
+    if decision == "taken_down":
+        from moderation.notices import appeal_line
+        body = f"{body} {appeal_line()}"
     notify(qr.account, "donation_qr_decided", title=title, body=body,
            data={"donation_qr_id": str(qr.pk), "provider": qr.provider, "decision": decision})
 

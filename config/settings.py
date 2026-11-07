@@ -405,3 +405,13 @@ LOGGING = {
 SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
 SENTRY_RELEASE = os.environ.get("SENTRY_RELEASE", "")
 SENTRY_ENVIRONMENT = os.environ.get("SENTRY_ENVIRONMENT", "" if DEBUG else "production")
+
+# Review step 7h / plan steps 22-24 (moderation). Apple 1.2 wants "timely responses to concerns"; neither store names a number.
+# MQ8's recommendation: 24 hours, and 4 for an animal in danger, once a person is on call. These are the thresholds the staff
+# alert uses; nothing promises them to the public until the owner confirms there is someone to meet them.
+SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "hello@kupkop.ph")   # the one address; mobile/src/support.ts names the same one
+MODERATION_ALERT_EMAILS = [e.strip() for e in os.environ.get("MODERATION_ALERT_EMAILS", "").split(",") if e.strip()]
+MODERATION_RESPONSE_HOURS = int(os.environ.get("MODERATION_RESPONSE_HOURS", "24"))
+MODERATION_WELFARE_HOURS = int(os.environ.get("MODERATION_WELFARE_HOURS", "4"))
+# MQ9 · how long a DISMISSED report's free text is kept after it was decided. Upheld reports keep theirs with the welfare record.
+MODERATION_REASON_RETENTION_DAYS = int(os.environ.get("MODERATION_REASON_RETENTION_DAYS", "365"))

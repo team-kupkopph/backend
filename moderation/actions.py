@@ -14,6 +14,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from moderation.models import DECIDABLE, FlagStatus, ModerationFlag
+from moderation.notices import tell_reporters
 from moderation.targets import REGISTRY
 
 
@@ -44,9 +45,10 @@ def _close_siblings(flag, reviewer):
                .filter(target_type=flag.target_type, target_id=flag.target_id, status__in=DECIDABLE)
                .exclude(pk=flag.pk).values_list("pk", flat=True))
     if not ids:
-        return 0
-    return ModerationFlag.objects.filter(pk__in=ids).update(
+        return []
+    ModerationFlag.objects.filter(pk__in=ids).update(
         status=FlagStatus.ACTIONED, reviewed_by=reviewer, reviewed_at=timezone.now())
+    return list(ModerationFlag.objects.filter(pk__in=ids).select_related("reporter_account"))
 
 
 @transaction.atomic
@@ -85,7 +87,8 @@ def resolve_flag(flag, reviewer, status, notes=""):
         if held:
             closed = _close_siblings(flag, reviewer)
             if closed:
-                side_effects["flags_resolved"] = str(closed)
+                side_effects["flags_resolved"] = str(len(closed))
+                tell_reporters(closed)
 
     # ⚠️ Actioning a flag does NOT suspend an account, even for target_type='account'.
     # Suspension has its own side effects (token revocation, US-E2) and its own audit trail.
@@ -96,4 +99,6 @@ def resolve_flag(flag, reviewer, status, notes=""):
     flag.reviewed_by = reviewer
     flag.reviewed_at = timezone.now()
     flag.save(update_fields=["status", "reviewed_by", "reviewed_at"])
+    if status != FlagStatus.REVIEWED:          # `reviewed` is a working state; the reporter hears when it is decided
+        tell_reporters([flag])
     return flag, side_effects

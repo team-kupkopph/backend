@@ -64,6 +64,9 @@ class ModerationFlag(models.Model):
                                     related_name="+", db_column="reviewed_by")
     created_at = models.DateTimeField(auto_now_add=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
+    # Review step 23 (MQ8) · set when staff were told this flag has waited past the response target, so the hourly alert
+    # tells them once, not every hour.
+    alerted_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "moderation_flag"
