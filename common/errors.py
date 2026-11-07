@@ -6,6 +6,14 @@ from rest_framework.views import exception_handler
 from common.observability import request_id_var
 
 
+def _first_message(msgs):
+    """The first plain sentence in a field's errors. A nested serializer (`application.experience`) nests its errors as
+    a dict, and `str()` of that is a Python repr on a person's screen; walk down to the first string instead."""
+    while isinstance(msgs, (list, tuple, dict)) and msgs:
+        msgs = next(iter(msgs.values())) if isinstance(msgs, dict) else msgs[0]
+    return str(msgs)
+
+
 def _shape_error(exc, context):
     response = exception_handler(exc, context)
     if response is None:
@@ -27,7 +35,7 @@ def _shape_error(exc, context):
         code = getattr(detail["detail"], "code", code)
     elif isinstance(detail, dict):
         field, msgs = next(iter(detail.items()))
-        message = msgs[0] if isinstance(msgs, list) else str(msgs)
+        message = _first_message(msgs)
         details = {
             f: (m if isinstance(m, list) else [m])
             for f, m in detail.items()

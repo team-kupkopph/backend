@@ -3,6 +3,8 @@ from datetime import UTC
 from rest_framework import serializers
 from rest_framework.exceptions import APIException
 
+from moderation.textfilter import ModeratedCharField
+
 from .models import NeedCategory, NeedStatus, StoryType
 from .needs import MAX_QTY
 
@@ -63,7 +65,7 @@ class StoryPhotoSerializer(serializers.Serializer):
 
 
 class StoryCreateSerializer(serializers.Serializer):
-    caption = serializers.CharField(required=False, allow_blank=True, default="")
+    caption = ModeratedCharField(required=False, allow_blank=True, default="")
     story_type = serializers.ChoiceField(choices=StoryType.choices, required=False)
     photos = StoryPhotoSerializer(many=True, required=False, default=list)
     adoption_listing_id = serializers.UUIDField(required=False, allow_null=True)

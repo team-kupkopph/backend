@@ -13,6 +13,8 @@ class FlagTarget(models.TextChoices):
     MESSAGE = "message"
     STORY = "story"   # D-S6-4 · stories are UGC and must be flaggable via the same pipeline
     SHIFT = "shift"   # P6 · G21 — volunteers can report a bad shift listing
+    INQUIRY = "inquiry"   # review step 7e · an adopter's message to a poster: the one free-text channel between users
+    SIGNUP = "signup"     # review step 7c/7e · a volunteer's request, as the shelter sees it: report or block that person
 
 
 class ReasonCode(models.TextChoices):

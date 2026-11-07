@@ -31,7 +31,7 @@ class ModerationFlagCreateView(APIView):
         s.is_valid(raise_exception=True)
         d = s.validated_data
         if d.get("via_type"):
-            person = resolve_person(d["via_type"], d["via_id"])
+            person = resolve_person(d["via_type"], d["via_id"], request.user)
             if person is None:
                 return Response({"error": {"code": "not_found", "message": "That item no longer exists."}}, status=404)
             target_id = person.pk
@@ -39,7 +39,7 @@ class ModerationFlagCreateView(APIView):
             target_id = d["target_id"]
         if d["target_type"] == FlagTarget.ACCOUNT and target_id == request.user.pk:
             return _own_account()
-        if not target_exists(d["target_type"], target_id):
+        if not target_exists(d["target_type"], target_id, request.user):
             return Response({"error": {"code": "not_found", "message": "That item no longer exists."}}, status=404)
 
         # One live report per person per target. A repeat is added to it, not dropped: see moderation/reports.py.
@@ -66,7 +66,7 @@ class BlocksView(APIView):
         s = BlockCreateSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         d = s.validated_data
-        person = (resolve_person(d["via_type"], d["via_id"]) if d.get("via_type")
+        person = (resolve_person(d["via_type"], d["via_id"], request.user) if d.get("via_type")
                   else Account.objects.filter(pk=d["account_id"]).first())
         if person is None:
             return Response({"error": {"code": "not_found", "message": "That person is no longer here."}}, status=404)

@@ -3,6 +3,7 @@ from django.utils.dateparse import parse_datetime
 from rest_framework import serializers
 from rest_framework.response import Response
 
+from moderation.textfilter import ModeratedCharField
 from volunteer.models import VolunteerType
 
 
@@ -27,12 +28,12 @@ class AwareDateTimeField(serializers.DateTimeField):
 
 class ShiftCreateSerializer(serializers.Serializer):
     type = serializers.ChoiceField(choices=VolunteerType.values)
-    title = serializers.CharField(max_length=80)
+    title = ModeratedCharField(max_length=80)
     starts_at = AwareDateTimeField()
     ends_at = AwareDateTimeField()
     capacity = serializers.IntegerField(min_value=1, max_value=500)
-    description = serializers.CharField(max_length=1000, required=False, allow_blank=True)
-    meeting_point = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    description = ModeratedCharField(max_length=1000, required=False, allow_blank=True)
+    meeting_point = ModeratedCharField(max_length=160, required=False, allow_blank=True)
     address_line1 = serializers.CharField(max_length=200, required=False, allow_blank=True)
     barangay = serializers.CharField(max_length=80, required=False, allow_blank=True)
     city = serializers.CharField(max_length=80, required=False, allow_blank=True)
@@ -41,12 +42,12 @@ class ShiftCreateSerializer(serializers.Serializer):
 
 class ShiftPatchSerializer(serializers.Serializer):
     type = serializers.ChoiceField(choices=VolunteerType.values, required=False)
-    title = serializers.CharField(max_length=80, required=False)
+    title = ModeratedCharField(max_length=80, required=False)
     starts_at = AwareDateTimeField(required=False)
     ends_at = AwareDateTimeField(required=False)
     capacity = serializers.IntegerField(min_value=1, max_value=500, required=False)
-    description = serializers.CharField(max_length=1000, required=False, allow_blank=True)
-    meeting_point = serializers.CharField(max_length=160, required=False, allow_blank=True)
+    description = ModeratedCharField(max_length=1000, required=False, allow_blank=True)
+    meeting_point = ModeratedCharField(max_length=160, required=False, allow_blank=True)
     address_line1 = serializers.CharField(max_length=200, required=False, allow_blank=True)
     barangay = serializers.CharField(max_length=80, required=False, allow_blank=True)
     city = serializers.CharField(max_length=80, required=False, allow_blank=True)

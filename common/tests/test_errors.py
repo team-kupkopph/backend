@@ -84,3 +84,10 @@ def test_an_api_500_is_the_envelope_and_a_non_api_500_keeps_djangos_page(rf):
     assert json.loads(api.content)["error"]["code"] == "server_error"
     page = api_server_error(rf.get("/admin/"))
     assert page.status_code == 500 and not page["Content-Type"].startswith("application/json")
+
+
+def test_an_error_inside_a_nested_serializer_reads_as_a_sentence_not_a_python_dict():
+    """`application.experience` fails as {"application": {"experience": ["..."]}}; str() of that put a repr on a screen."""
+    exc = ValidationError({"application": {"experience": ["Please reword it."]}})
+    error = error_handler(exc, {"view": None, "request": None}).data["error"]
+    assert error["message"] == "Please reword it." and error["field"] == "application"

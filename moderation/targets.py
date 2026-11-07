@@ -86,6 +86,23 @@ def _describe_shift(s):
                  hidden=s.status == ShiftStatus.CLOSED)
 
 
+def _describe_inquiry(i):
+    """What the poster read: the adopter's own words and their quick answers, nothing else about them."""
+    answers = i.application if isinstance(i.application, dict) else {}
+    lines = [i.message or ""] + [f"{label}: {answers[key]}" for key, label in _ANSWER_LABELS if answers.get(key)]
+    return _view(f"Message from {i.adopter_account.display_name}", "Message with no name", "\n".join(line for line in lines if line),
+                 owner=_owner(i.adopter_account))
+
+
+_ANSWER_LABELS = (("other_pets", "Other pets"), ("experience", "Experience"), ("schedule", "Schedule"))
+
+
+def _describe_signup(s):
+    """A volunteer's request has no free text; the report is about the person, so this names who and for what."""
+    return _view(f"{s.volunteer_account.display_name} · {s.shift.title or 'a shift'}", "Volunteer request",
+                 owner=_owner(s.volunteer_account))
+
+
 # ---- takedowns. Each returns True only when it changed something, so `side_effects` never claims
 # work that did not happen (MO17: a second flag on an already hidden listing used to say it hid it).
 def _hide_story(story, reviewer):
@@ -159,16 +176,38 @@ def _person_qr(qr):
     return qr.account
 
 
+def _person_inquiry(inquiry):
+    return inquiry.adopter_account
+
+
+def _person_signup(signup):
+    return signup.volunteer_account
+
+
+# ---- who may report a thing (review step 7c/7e). Almost everything is public, so anyone signed in may report it. An
+# inquiry message and a volunteer's request are NOT: only the one who received them can see them, so only that person can
+# report them, and anyone else gets the same 404 a missing thing gets (it never says the thing exists).
+def _only_the_poster(inquiry, account):
+    return inquiry.listing.posted_by_id == account.pk
+
+
+def _only_the_shelter(signup, account):
+    return signup.shift.shelter_account_id == account.pk
+
+
 #: What a person can be reached through. `account` has its own id, and `qr` has no entry point in the app.
-VIA_TYPES = (FlagTarget.LISTING, FlagTarget.STORY, FlagTarget.SHIFT)
+VIA_TYPES = (FlagTarget.LISTING, FlagTarget.STORY, FlagTarget.SHIFT, FlagTarget.INQUIRY, FlagTarget.SIGNUP)
 
 
-def resolve_person(via_type, via_id):
-    """The Account behind `via_type`/`via_id`, or None when that thing is gone (or has no person). Callers have
-    validated `via_type` against `VIA_TYPES`."""
+def resolve_person(via_type, via_id, viewer=None):
+    """The Account behind `via_type`/`via_id`, or None when that thing is gone, has no person, or `viewer` may not
+    see it (the same answer for all three, so it never says a private thing exists). Callers have validated `via_type`
+    against `VIA_TYPES`."""
     spec = REGISTRY[via_type]
     obj = spec.fetch(via_id)
-    return spec.person(obj) if obj is not None and spec.person is not None else None
+    if obj is None or spec.person is None or not spec.may_report(obj, viewer):
+        return None
+    return spec.person(obj)
 
 
 # ---- what actioning will do, in plain words, BEFORE the click (review step 3, MO3). Each function reads
@@ -239,6 +278,15 @@ def _qr_consequences(qr):
     return ["Donors can no longer see this QR, and its image is deleted.",
             "The shelter is told it was taken down.",
             "To bring it back the shelter has to upload a new one."]
+
+
+def _inquiry_consequences(inquiry):
+    return [_RECORDS_ONLY, "The inquiry stays as it is. The poster can decline it, and can block the adopter from "
+            "their own screen."]
+
+
+def _signup_consequences(signup):
+    return [_RECORDS_ONLY, "The request stays as it is. The shelter can decline it, and can block the volunteer."]
 
 
 def _shift_consequences(shift):
@@ -328,6 +376,7 @@ class TargetSpec:
     already_done: Callable | None = None  # (obj) -> the line saying there is nothing left to take down, else None
     restore: Callable | None = None    # (obj) -> {"path","label","consequences"} while a takedown holds it, else None
     person: Callable | None = None     # (obj) -> the Account behind it, for "report / block this person"
+    reporter_may: Callable | None = None  # (obj, account) -> bool · who may report it; None = anyone signed in
 
     @property
     def supported(self):
@@ -335,6 +384,10 @@ class TargetSpec:
 
     def fetch(self, target_id):
         return apps.get_model(self.model).objects.filter(**{self.pk_field: target_id}).first()
+
+    def may_report(self, obj, account):
+        """False only for a private thing the viewer has no part in. No viewer (a caller that has no account) is not asked."""
+        return account is None or self.reporter_may is None or self.reporter_may(obj, account)
 
     def exists(self, target_id):
         return apps.get_model(self.model).objects.filter(**{self.pk_field: target_id}).exists()
@@ -361,15 +414,29 @@ REGISTRY = {
     FlagTarget.SHIFT: TargetSpec("volunteer.VolunteerShift", "shift_id", _describe_shift,
                                  _close_shift, "shift_closed", _shift_consequences, "Close shift", _shift_done,
                                  person=_person_shift),
+    FlagTarget.INQUIRY: TargetSpec("listings.AdoptionInquiry", "inquiry_id", _describe_inquiry,
+                                   consequences=_inquiry_consequences, person=_person_inquiry,
+                                   reporter_may=_only_the_poster),
+    FlagTarget.SIGNUP: TargetSpec("volunteer.VolunteerSignup", "signup_id", _describe_signup,
+                                  consequences=_signup_consequences, person=_person_signup,
+                                  reporter_may=_only_the_shelter),
     FlagTarget.MESSAGE: TargetSpec(None, None, None),
 }
 
 
-def target_exists(target_type, target_id):
+def target_exists(target_type, target_id, viewer=None):
     """AT28 · a flag must name a row that exists as the type it claims, or flags on nothing pile up in the
-    moderators' queue. An unsupported type (`message`) cannot be checked and is accepted."""
+    moderators' queue. An unsupported type (`message`) cannot be checked and is accepted.
+
+    With a `viewer`, a private thing (an inquiry message, a volunteer's request) also has to be one the viewer may report:
+    otherwise it counts as not existing, so nobody can probe for private ids."""
     spec = REGISTRY.get(target_type)
-    return spec is None or not spec.supported or spec.exists(target_id)
+    if spec is None or not spec.supported:
+        return True
+    if viewer is None or spec.reporter_may is None:
+        return spec.exists(target_id)
+    obj = spec.fetch(target_id)
+    return obj is not None and spec.may_report(obj, viewer)
 
 
 def describe_target(target_type, target_id, flag_id=None):
