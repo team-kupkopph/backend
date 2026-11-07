@@ -22,6 +22,15 @@ class ModerationError(Exception):
     """A decision that cannot be applied as asked."""
 
 
+class AlreadyDecided(ModerationError):
+    """The flag was already actioned or dismissed. A decision is final: a second one would overwrite the first reviewer's
+    stamp with no record that it happened (review step 18, MO16: the guard used to live in one caller, not here)."""
+
+    def __init__(self, status):
+        self.status = status
+        super().__init__(f"This flag was already {status}.")
+
+
 class TargetUnavailable(ModerationError):
     """`actioned` was asked of a flag whose target is gone (`state == "gone"`) or has no surface
     (`"unsupported"`). Actioning records that something was done about the target; nothing can be, so the flag
@@ -46,8 +55,10 @@ def _close_siblings(flag, reviewer):
                .exclude(pk=flag.pk).values_list("pk", flat=True))
     if not ids:
         return []
-    ModerationFlag.objects.filter(pk__in=ids).update(
-        status=FlagStatus.ACTIONED, reviewed_by=reviewer, reviewed_at=timezone.now())
+    now = timezone.now()
+    ModerationFlag.objects.filter(pk__in=ids, first_reviewed_at__isnull=True).update(
+        first_reviewed_at=now, first_reviewed_by=reviewer)
+    ModerationFlag.objects.filter(pk__in=ids).update(status=FlagStatus.ACTIONED, reviewed_by=reviewer, reviewed_at=now)
     return list(ModerationFlag.objects.filter(pk__in=ids).select_related("reporter_account"))
 
 
@@ -65,6 +76,12 @@ def resolve_flag(flag, reviewer, status, notes=""):
         # decision. The console refuses a token without a StaffProfile, so this is the
         # defence-in-depth copy rather than the only check.
         raise ModerationError("A moderation decision must be attributed to a reviewer.")
+
+    # Lock the row and check it HERE, so every caller (the console, the retired Django admin, whatever comes next) gets the
+    # same guard. Two moderators on one flag is normal; without the lock the second silently overwrites the first.
+    flag = ModerationFlag.objects.select_for_update().get(pk=flag.pk)
+    if flag.status not in DECIDABLE:
+        raise AlreadyDecided(flag.status)
 
     side_effects = {}
 
@@ -95,10 +112,15 @@ def resolve_flag(flag, reviewer, status, notes=""):
     # A flag resolved as `actioned` records the JUDGEMENT; the action is taken separately and
     # deliberately, by someone who chose to take it.
 
+    now = timezone.now()
     flag.status = status
     flag.reviewed_by = reviewer
-    flag.reviewed_at = timezone.now()
-    flag.save(update_fields=["status", "reviewed_by", "reviewed_at"])
+    flag.reviewed_at = now
+    fields = ["status", "reviewed_by", "reviewed_at"]
+    if flag.first_reviewed_at is None:        # step 19 · the first look is kept, whoever decides after
+        flag.first_reviewed_at, flag.first_reviewed_by = now, reviewer
+        fields += ["first_reviewed_at", "first_reviewed_by"]
+    flag.save(update_fields=fields)
     if status != FlagStatus.REVIEWED:          # `reviewed` is a working state; the reporter hears when it is decided
         tell_reporters([flag])
     return flag, side_effects

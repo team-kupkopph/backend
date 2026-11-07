@@ -31,6 +31,13 @@ class DashboardView(StaffView):
                 "count": ModerationFlag.objects.filter(status=FlagStatus.OPEN).count(),
                 "href": "/moderation?status=open",
             },
+            # Review step 19 (MQ5) · `reviewed` leaves the Open tab and used to leave every number, so a report someone had looked
+            # at and not decided triggered nothing. It gets its own number, clickable to its own tab, rather than being folded
+            # into "open" (a sum that spans two tabs is a number a reviewer cannot act on).
+            "reviewed_flags": {
+                "count": ModerationFlag.objects.filter(status=FlagStatus.REVIEWED).count(),
+                "href": "/moderation?status=reviewed",
+            },
             "unverified_donation_qrs": {
                 "count": DonationQr.objects.filter(status="pending").count(),
                 "href": "/donations?verified=false",

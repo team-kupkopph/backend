@@ -53,7 +53,10 @@ class ModerationFlag(models.Model):
     """
 
     flag_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    reporter_account = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True,
+    # Review step 27 (MO25) · PROTECT, not SET_NULL. A NULL reporter means "raised by the system", so SET_NULL would turn a
+    # person into "System" on a hard delete: the laundering the purge comment warns about. The purge anonymises in place and
+    # never hard-deletes, so this only bites if someone starts to.
+    reporter_account = models.ForeignKey(Account, on_delete=models.PROTECT, null=True,
                                          blank=True, related_name="moderation_flags_raised")
     target_type = models.CharField(max_length=10, choices=FlagTarget.choices)
     target_id = models.UUIDField()
@@ -67,12 +70,27 @@ class ModerationFlag(models.Model):
     # Review step 23 (MQ8) · set when staff were told this flag has waited past the response target, so the hourly alert
     # tells them once, not every hour.
     alerted_at = models.DateTimeField(null=True, blank=True)
+    # Review step 19 (MO22) · who first looked at it, and when. `reviewed_by/at` are replaced by every later decision; these
+    # never are, so "how long did a report wait for a first response" can still be answered.
+    first_reviewed_at = models.DateTimeField(null=True, blank=True)
+    first_reviewed_by = models.ForeignKey(Account, on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+                                          db_column="first_reviewed_by")
+    # Review step 17 (MO14) · what the target looked like when it was reported: {title, body, photos}. A poster who sees
+    # a problem can edit the evidence away; the moderator is shown whether that happened. NULL = not captured (older flags,
+    # a gone target, a type with no surface).
+    target_snapshot = models.JSONField(null=True, blank=True)
 
     class Meta:
         db_table = "moderation_flag"
-        indexes = [models.Index(fields=["status"], name="idx_flag_status"),
+        # Review step 27 · the queue filters on status and sorts by (created_at, flag_id): one composite serves both, and its
+        # leading column serves a status-only filter, so the single-column idx_flag_status it replaces is redundant.
+        indexes = [models.Index(fields=["status", "created_at", "flag_id"], name="idx_flag_queue"),
                   models.Index(fields=["target_type", "target_id"], name="idx_flag_target")]
         constraints = [
+            # Review step 27 · the database knows what a flag can point at; the column was a free varchar(10).
+            models.CheckConstraint(condition=models.Q(target_type__in=["account", "listing", "report", "qr", "message", "story",
+                                                                         "shift", "inquiry", "signup"]),
+                                   name="moderation_flag_target_type_known"),
             # Review step 15 (MO12) · one LIVE report per person per target, held by the database: two taps in the same instant
             # cannot write two rows. Decided reports are history and do not count; a system flag has no reporter, and NULLs are
             # distinct, so those are unaffected. See moderation/reports.py.

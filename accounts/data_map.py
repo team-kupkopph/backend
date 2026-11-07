@@ -153,6 +153,8 @@ def _entries():
                                        "must not be rewritten")),
         ("moderation.ModerationFlag", "reviewed_by"):
             E(_STAFF, _AUDIT),
+        ("moderation.ModerationFlag", "first_reviewed_by"):      # review step 19 · the reviewer who looked first
+            E(_STAFF, _AUDIT),
         # Review step 7d · a block is the blocker's own list. It goes with either account: a block about a person who
         # has left is not a record worth keeping, and the blocker's half is theirs to export.
         ("moderation.AccountBlock", "blocker"):

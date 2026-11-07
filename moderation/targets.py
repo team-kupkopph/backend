@@ -377,6 +377,7 @@ class TargetSpec:
     restore: Callable | None = None    # (obj) -> {"path","label","consequences"} while a takedown holds it, else None
     person: Callable | None = None     # (obj) -> the Account behind it, for "report / block this person"
     reporter_may: Callable | None = None  # (obj, account) -> bool · who may report it; None = anyone signed in
+    owned_by: Callable | None = None   # (obj, account) -> bool · is it the viewer's own? Reporting your own thing is refused (MO29)
 
     @property
     def supported(self):
@@ -388,6 +389,13 @@ class TargetSpec:
     def may_report(self, obj, account):
         """False only for a private thing the viewer has no part in. No viewer (a caller that has no account) is not asked."""
         return account is None or self.reporter_may is None or self.reporter_may(obj, account)
+
+    def is_own(self, obj, account):
+        """True when `obj` is `account`'s own: reporting it would only add noise to the queue (MO29). Falls back to the person
+        behind it; a type with neither (a rescue report hides its reporter) names its own rule in `owned_by`."""
+        if self.owned_by is not None:
+            return self.owned_by(obj, account)
+        return self.person is not None and getattr(self.person(obj), "pk", None) == account.pk
 
     def exists(self, target_id):
         return apps.get_model(self.model).objects.filter(**{self.pk_field: target_id}).exists()
@@ -404,7 +412,8 @@ REGISTRY = {
                                    person=_person_listing),
     FlagTarget.REPORT: TargetSpec("sagip.StrayReport", "report_id", _describe_report,
                                   _hide_report, "report_hidden", _report_consequences, "Remove report",
-                                  _report_done, _restore_report),
+                                  _report_done, _restore_report,
+                                  owned_by=lambda report, account: report.reporter_account_id == account.pk),
     FlagTarget.QR: TargetSpec("shelter.DonationQr", "donation_qr_id", _describe_qr,
                               _take_down_qr, "qr_taken_down", _qr_consequences, "Take down QR", _qr_done,
                               person=_person_qr),
@@ -437,6 +446,34 @@ def target_exists(target_type, target_id, viewer=None):
         return spec.exists(target_id)
     obj = spec.fetch(target_id)
     return obj is not None and spec.may_report(obj, viewer)
+
+
+def snapshot_target(target_type, target_id):
+    """Review step 17 (MO14) · what the target looks like right now: {title, body, photos}, stored on the flag when it is filed.
+    A poster who sees a report coming can edit the evidence away; the moderator is then shown whether that happened.
+    None when there is nothing to capture (the target is gone, has no surface, or could not be read). Never raises: a snapshot
+    that cannot be taken must not stop a report being filed."""
+    spec = REGISTRY.get(target_type)
+    if spec is None or not spec.supported:
+        return None
+    try:
+        obj = spec.fetch(target_id)
+        if obj is None:
+            return None
+        view = spec.describe(obj)
+    except Exception:
+        logger.exception("could not snapshot a %s target", target_type)
+        return None
+    return {"title": view["title"], "body": view["body"], "photos": list(view["photos"])}
+
+
+def edited_since(snapshot, current):
+    """True when the target now reads differently from `snapshot`. `current` is a `describe_target` answer; only a target that is
+    still present can have been edited (a gone one has its own state). No snapshot means we cannot say, so False."""
+    if not snapshot or current.get("state") != "present":
+        return False
+    return any(snapshot.get(k) != current.get(k) for k in ("title", "body")) or \
+        list(snapshot.get("photos") or []) != list(current.get("photos") or [])
 
 
 def describe_target(target_type, target_id, flag_id=None):

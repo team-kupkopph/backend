@@ -20,7 +20,7 @@ def test_one_request_returns_every_count(client, auth):
 
     body = client.get("/admin-api/dashboard", **auth).json()
     assert body["pending_verifications"]["count"] == 3, "approved must not be counted as pending"
-    assert set(body) == {"pending_verifications", "open_flags",
+    assert set(body) == {"pending_verifications", "open_flags", "reviewed_flags",
                          "unverified_donation_qrs", "new_members_this_week"}
 
 
@@ -45,3 +45,16 @@ def test_counts_are_exact_not_estimated(client, auth):
 @pytest.mark.django_db
 def test_the_dashboard_needs_a_staff_token(client):
     assert client.get("/admin-api/dashboard").status_code in (401, 403)
+
+
+@pytest.mark.django_db
+def test_a_reviewed_flag_is_counted_on_its_own_and_opens_its_own_tab(client, auth):
+    """Review step 19 (MQ5) · `reviewed` leaves the Open tab. It used to leave every number too, so a report somebody had looked at
+    and not decided triggered nothing. Its own stat, clickable to its own tab; not folded into 'open'."""
+    from moderation.models import FlagStatus, ModerationFlag
+    for status in (FlagStatus.OPEN, FlagStatus.REVIEWED, FlagStatus.REVIEWED, FlagStatus.DISMISSED):
+        ModerationFlag.objects.create(reporter_account=AccountFactory(), target_type="listing", target_id=AccountFactory().pk,
+                                      reason="x", status=status)
+    body = client.get("/admin-api/dashboard", **auth).json()
+    assert body["open_flags"]["count"] == 1 and body["reviewed_flags"]["count"] == 2
+    assert body["reviewed_flags"]["href"] == "/moderation?status=reviewed"
