@@ -35,6 +35,8 @@ PRODUCTION = dict(
     SESSION_COOKIE_SECURE=True,
     CSRF_COOKIE_SECURE=True,
     X_FRAME_OPTIONS="DENY",
+    # A production that is meant to be complete names who is told when a report is late (moderation.W001 warns otherwise).
+    MODERATION_ALERT_EMAILS=["ops@kupkop.ph"],
 )
 
 
@@ -49,6 +51,13 @@ def test_a_production_configuration_passes_djangos_own_deployment_audit():
         issues = _deployment_issues()
 
     assert issues == [], "deployment checks: " + "; ".join(f"{i.id} {i.msg}" for i in issues)
+
+
+@pytest.mark.django_db
+def test_a_production_with_nobody_to_alert_is_flagged_by_the_deployment_audit():
+    """The same audit surfaces the moderation warning, so `manage.py check --deploy` is the one place an operator looks."""
+    with override_settings(**{**PRODUCTION, "MODERATION_ALERT_EMAILS": []}):
+        assert [i.id for i in _deployment_issues()] == ["moderation.W001"]
 
 
 def test_debug_defaults_to_off():

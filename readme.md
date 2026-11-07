@@ -236,6 +236,10 @@ Environment variables (loaded from `backend/.env` via `python-dotenv`). Create `
 | `DJANGO_DEBUG` | `1` | `1` = debug on (and OTP codes printed to the log). Set `0` outside local dev. |
 | `DATABASE_URL` | `postgres://localhost/kupkop_dev` | Only the **database name** is read from this; the host is always `localhost` in this slice (documented in `settings.py`). |
 | `TEST_DATABASE_NAME` | `kupkop_test` | Test database name. |
+| `MODERATION_ALERT_EMAILS` | *(empty)* | Comma-separated addresses told when a report passes its response target. **Empty means nobody is told**; `manage.py check --deploy` warns. |
+| `SUPPORT_EMAIL` | `hello@kupkop.ph` | The address in the support screen and every takedown notice. Must be a mailbox a person reads. |
+| `TERMS_ENFORCED` | `0` | `1` makes posting require the current Terms of Use. Leave `0` until counsel's text is in (`accounts/terms.py`). |
+| `MODERATION_REASON_RETENTION_DAYS` | `365` | Days a dismissed report's free text is kept before the nightly `scrub_flag_reasons` blanks it. |
 
 Key tunables in `config/settings.py`: JWT lifetimes (`ACCESS` 15 min, `REFRESH` 30 days, rotated +
 blacklisted), `OTP_TTL_MINUTES` (5), `OTP_MAX_ATTEMPTS` (5), and the OTP-resend throttle rates.

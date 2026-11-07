@@ -26,3 +26,24 @@ tangina
 tang ina
 pakyu
 pakshet
+# ---- second pass (2026-11-08) ----
+# Added: English slurs and insults that are abusive in any context, and stronger Filipino/Cebuano profanity.
+# Deliberately NOT here, because this is an animal app and each would refuse an honest post: pussy and cock (cats, roosters, cockatiels),
+# dick (a surname), hayop (it means "animal"), rape (a rescue report may need the word), bakla (an identity word), gago and bobo (rude, not abusive).
+asshole
+dickhead
+shithead
+bastard
+twat
+wanker
+kike
+chink
+spic
+tranny
+puta
+putragis
+punyeta
+tarantado
+tarantada
+pokpok
+yawa
