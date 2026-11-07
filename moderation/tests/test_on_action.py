@@ -101,7 +101,7 @@ def test_the_listing_numbers_are_the_numbers_the_takedown_then_changes():
     for _ in range(3):
         inquire(person(), live)
     said = _on_action(FlagTarget.LISTING, live.pk)
-    resolve_flag(_flag("listing", live.pk), AccountFactory(), "actioned")
+    resolve_flag(_flag("listing", live.pk), AccountFactory(), "actioned", reason_code="spam_scam")
     closed = AdoptionInquiry.objects.filter(listing=live, status=InquiryStatus.WITHDRAWN,
                                             end_reason=EndReason.LISTING_WITHDRAWN).count()
     assert closed == 3 and "3 open inquiries will be closed" in _text(said)
@@ -138,19 +138,19 @@ def test_the_report_numbers_are_the_numbers_the_takedown_then_changes():
     report = _claimed_report()
     _offer(report), _offer(report), _offer(report, OfferStatus.MATCHED)
     said = _text(_on_action(FlagTarget.REPORT, report.pk))
-    resolve_flag(_flag("report", report.pk), AccountFactory(), "actioned")
+    resolve_flag(_flag("report", report.pk), AccountFactory(), "actioned", reason_code="spam_scam")
     expired = ReportOffer.objects.filter(report=report, status=OfferStatus.EXPIRED).count()
     assert expired == 3 and "3 offers will expire" in said
 
 
 @pytest.mark.django_db
-def test_a_story_says_it_is_hidden_kept_and_that_the_author_is_not_told():
-    """MO7 stated plainly until step 9 changes it: the moderator should know the author hears nothing."""
+def test_a_story_says_it_is_hidden_kept_and_that_the_author_is_told():
+    """MO7, closed by step 9: the author is told, and the moderator is told that before the click."""
     story = StoryPost.objects.create(author_account=AccountFactory(), story_type="general", caption="x")
     out = _on_action(FlagTarget.STORY, story.pk)
     assert out["label"] == "Hide story" and out["changes"] is True
     text = _text(out)
-    assert "hidden from the feed" in text and "kept" in text and "not told" in text
+    assert "hidden from the feed" in text and "kept" in text and "The author is told" in text and "not told" not in text
 
 
 @pytest.mark.django_db

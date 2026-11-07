@@ -23,7 +23,7 @@ class ReportNotHidden(Exception):
 
 
 @transaction.atomic
-def hide_report(report, by):
+def hide_report(report, by, reason=""):
     """Returns True if it hid the report, False if it was already hidden."""
     # Lock order: case, then report — the same as CaseStatusView, CaseReleaseView and _expire_case,
     # so a takedown that overlaps a status update or a lapse can't deadlock.

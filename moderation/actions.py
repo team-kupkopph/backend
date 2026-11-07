@@ -13,13 +13,24 @@ the decision survives the UI that happened to invoke it first.
 from django.db import transaction
 from django.utils import timezone
 
-from moderation.models import DECIDABLE, FlagStatus, ModerationFlag
-from moderation.notices import tell_reporters
+from moderation.models import DECIDABLE, FlagStatus, ModerationFlag, ReasonCode
+from moderation.notices import removal_reason, tell_reporters
 from moderation.targets import REGISTRY
 
 
 class ModerationError(Exception):
     """A decision that cannot be applied as asked."""
+
+
+NOTE_MAX = 2000
+
+
+class DecisionInvalid(ModerationError):
+    """The decision is missing something it needs. `code` is the machine word the console keys on."""
+
+    def __init__(self, code, message):
+        self.code = code
+        super().__init__(message)
 
 
 class AlreadyDecided(ModerationError):
@@ -44,7 +55,7 @@ class TargetUnavailable(ModerationError):
                          "or mark it reviewed.")
 
 
-def _close_siblings(flag, reviewer):
+def _close_siblings(flag, reviewer, reason_code=""):
     """Mark the other open and reviewed flags about `flag`'s target as actioned, stamped like the decision itself.
 
     ⚠️ `skip_locked`: another moderator deciding one of those siblings right now holds its row lock, and waiting for
@@ -58,19 +69,32 @@ def _close_siblings(flag, reviewer):
     now = timezone.now()
     ModerationFlag.objects.filter(pk__in=ids, first_reviewed_at__isnull=True).update(
         first_reviewed_at=now, first_reviewed_by=reviewer)
-    ModerationFlag.objects.filter(pk__in=ids).update(status=FlagStatus.ACTIONED, reviewed_by=reviewer, reviewed_at=now)
+    ModerationFlag.objects.filter(pk__in=ids).update(status=FlagStatus.ACTIONED, reviewed_by=reviewer, reviewed_at=now,
+                                                     decision_reason_code=reason_code)
     return list(ModerationFlag.objects.filter(pk__in=ids).select_related("reporter_account"))
 
 
 @transaction.atomic
-def resolve_flag(flag, reviewer, status, notes=""):
+def resolve_flag(flag, reviewer, status, *, reason_code="", note=""):
     """Move a flag to `status`, stamping the reviewer, and apply the status's side effects.
+
+    Review step 8 (MO8) · ACTIONING needs a reason: a category (`reason_code`, one of ReasonCode) the poster is told as a fixed
+    sentence, and a note when the category is `other`. Restores already demanded a reason; the action that hurts someone did not.
+    The note is internal and is kept on the flag. Dismissing and reviewing take an optional note and no category.
 
     Returns (flag, side_effects) where side_effects names what else changed, so a caller can
     tell the reviewer "and the story was hidden" rather than leaving it invisible.
     """
     if status not in {FlagStatus.REVIEWED, FlagStatus.ACTIONED, FlagStatus.DISMISSED}:
         raise ModerationError(f"Unknown flag status: {status!r}")
+    note = (note or "").strip()
+    if len(note) > NOTE_MAX:
+        raise DecisionInvalid("note_too_long", f"The note can be at most {NOTE_MAX} characters.")
+    if status == FlagStatus.ACTIONED:
+        if reason_code and reason_code not in ReasonCode.values:
+            raise DecisionInvalid("invalid_reason_code", "That is not a reason we know.")
+    else:
+        reason_code = ""
     if reviewer is None:
         # The same contract accounts/staff.py states: never silently stamp an anonymous
         # decision. The console refuses a token without a StaffProfile, so this is the
@@ -92,7 +116,14 @@ def resolve_flag(flag, reviewer, status, notes=""):
         target = spec.fetch(flag.target_id)
         if target is None:
             raise TargetUnavailable("gone")
-        changed = spec.take_down is not None and spec.take_down(target, reviewer)
+        # A takedown that is about to change something needs a reason (MO8). A record-only action (an account, an inquiry) has no
+        # poster to tell, and a target already held down has nothing to explain, so neither is made to give one.
+        if spec.take_down is not None and not (spec.already_done and spec.already_done(target) is not None):
+            if not reason_code:
+                raise DecisionInvalid("reason_required", "Choose why this is being taken down.")
+            if reason_code == ReasonCode.OTHER and not note:
+                raise DecisionInvalid("note_required", "Say what is wrong when the reason is something else.")
+        changed = spec.take_down is not None and spec.take_down(target, reviewer, removal_reason(reason_code))
         if changed:
             side_effects[spec.effect] = str(flag.target_id)
         # Review step 5 (MO4) · a decision is about the target. Once it is held down (just now, or already), every other
@@ -102,7 +133,7 @@ def resolve_flag(flag, reviewer, status, notes=""):
         held = changed or (spec.take_down is not None and spec.already_done is not None
                            and spec.already_done(target) is not None)
         if held:
-            closed = _close_siblings(flag, reviewer)
+            closed = _close_siblings(flag, reviewer, reason_code)
             if closed:
                 side_effects["flags_resolved"] = str(len(closed))
                 tell_reporters(closed)
@@ -116,7 +147,8 @@ def resolve_flag(flag, reviewer, status, notes=""):
     flag.status = status
     flag.reviewed_by = reviewer
     flag.reviewed_at = now
-    fields = ["status", "reviewed_by", "reviewed_at"]
+    flag.decision_reason_code, flag.decision_note = reason_code, note
+    fields = ["status", "reviewed_by", "reviewed_at", "decision_reason_code", "decision_note"]
     if flag.first_reviewed_at is None:        # step 19 · the first look is kept, whoever decides after
         flag.first_reviewed_at, flag.first_reviewed_by = now, reviewer
         fields += ["first_reviewed_at", "first_reviewed_by"]

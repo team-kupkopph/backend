@@ -153,8 +153,8 @@ def test_a_second_takedown_of_a_hidden_listing_reports_no_side_effect():
     """P13 · MO17. side_effects said listing_hidden for a listing that was already hidden."""
     listing = _listing()
     reviewer = AccountFactory()
-    _, first = resolve_flag(_flag("listing", listing.pk), reviewer, "actioned")
-    _, second = resolve_flag(_flag("listing", listing.pk), reviewer, "actioned")
+    _, first = resolve_flag(_flag("listing", listing.pk), reviewer, "actioned", reason_code="spam_scam")
+    _, second = resolve_flag(_flag("listing", listing.pk), reviewer, "actioned", reason_code="spam_scam")
     assert first == {"listing_hidden": str(listing.pk)}
     assert second == {}
 
@@ -166,8 +166,8 @@ def test_a_second_takedown_of_a_hidden_report_or_story_reports_no_side_effect():
     story = StoryPost.objects.create(author_account=AccountFactory(), story_type="general", caption="x")
     for target_type, pk, key in ((FlagTarget.REPORT, report.pk, "report_hidden"),
                                  (FlagTarget.STORY, story.pk, "story_hidden")):
-        _, first = resolve_flag(_flag(target_type, pk), reviewer, "actioned")
-        _, second = resolve_flag(_flag(target_type, pk), reviewer, "actioned")
+        _, first = resolve_flag(_flag(target_type, pk), reviewer, "actioned", reason_code="spam_scam")
+        _, second = resolve_flag(_flag(target_type, pk), reviewer, "actioned", reason_code="spam_scam")
         assert first == {key: str(pk)} and second == {}
     story.refresh_from_db()
     assert story.status == StoryStatus.HIDDEN
@@ -179,7 +179,7 @@ def test_an_account_flag_still_changes_nothing_on_the_account():
     act. (Shifts and QRs used to be pinned here as changing nothing, MO5; review step 6 made them real, and
     moderation/tests/test_real_actions.py holds that.)"""
     owner = AccountFactory(account_type="shelter")
-    flag, effects = resolve_flag(_flag(FlagTarget.ACCOUNT, owner.pk), AccountFactory(), "actioned")
+    flag, effects = resolve_flag(_flag(FlagTarget.ACCOUNT, owner.pk), AccountFactory(), "actioned", reason_code="spam_scam")
     owner.refresh_from_db()
     assert effects == {} and flag.status == "actioned" and owner.status == "active"
 

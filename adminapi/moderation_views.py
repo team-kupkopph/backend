@@ -3,6 +3,7 @@
 ⚠️ `ModerationFlag` is one of the three registered model admins, so this track is what US-X1
 demands before US-X2 can switch the Django admin off. It is not de-scopable.
 """
+from django.db.models import Count, IntegerField, OuterRef, Q, Subquery
 from rest_framework.response import Response
 
 from adminapi.pagination import decode_cursor, paginate
@@ -12,11 +13,24 @@ from community.models import StoryPost, StoryStatus
 from community.moderation import StoryNotHidden, restore_story
 from listings.models import AdoptionListing
 from listings.moderation import ListingNotHidden, restore_listing
-from moderation.actions import AlreadyDecided, ModerationError, TargetUnavailable, resolve_flag
-from moderation.models import FlagStatus, FlagTarget, ModerationFlag
+from moderation.actions import (
+    AlreadyDecided,
+    DecisionInvalid,
+    ModerationError,
+    TargetUnavailable,
+    resolve_flag,
+)
+from moderation.models import DECIDABLE, FlagStatus, FlagTarget, ModerationFlag, ReasonCode
 from moderation.targets import describe_target, edited_since
 from sagip.models import StrayReport
 from sagip.moderation import ReportNotHidden, restore_report
+
+SNIPPET_MAX = 120
+
+
+def _snippet(flag):
+    title = ((flag.target_snapshot or {}).get("title") or "").strip()
+    return title if len(title) <= SNIPPET_MAX else title[:SNIPPET_MAX - 1].rstrip() + "…"
 
 
 def flag_row(flag, *, with_target=False):
@@ -33,6 +47,13 @@ def flag_row(flag, *, with_target=False):
         # looked first. Names only: a reviewer's email is not the reporter's business or the page's.
         "reviewed_by": ({"account_id": str(flag.reviewed_by_id), "display_name": flag.reviewed_by.display_name}
                         if flag.reviewed_by_id else None),
+        # Review step 8 · why it was taken down (the category the poster was told) and the moderator's internal note.
+        # Review step 10 (MO26) · what was flagged, from the snapshot taken when it was reported (no query per row), and how many live
+        # reports are about the same thing. `report_count` is present only where the queue annotated it.
+        "snippet": _snippet(flag),
+        **({"report_count": flag._live_count or 0} if hasattr(flag, "_live_count") else {}),
+        "decision_reason_code": flag.decision_reason_code,
+        "decision_note": flag.decision_note,
         "first_reviewed_at": flag.first_reviewed_at.isoformat() if flag.first_reviewed_at else None,
         "first_reviewed_by": ({"account_id": str(flag.first_reviewed_by_id), "display_name": flag.first_reviewed_by.display_name}
                               if flag.first_reviewed_by_id else None),
@@ -57,11 +78,17 @@ def _with_target(flag):
 
 
 class FlagQueueView(StaffView):
-    """GET /admin-api/flags?status=&target_type=&cursor="""
+    """GET /admin-api/flags?status=&target_type=&reason_code=&q=&cursor=
+
+    Review step 10 (MO26) · a queue a moderator can work: filter by kind and category, search the reporter's words, the reported
+    thing's title and the reporter's name, and page on with `next_cursor`. Each row says what was flagged (`snippet`) and how many live
+    reports are about it (`report_count`), both without a query per row."""
 
     def get(self, request):
         status = request.query_params.get("status", FlagStatus.OPEN)
         target_type = request.query_params.get("target_type")
+        reason_code = request.query_params.get("reason_code")
+        term = (request.query_params.get("q") or "").strip()
 
         qs = ModerationFlag.objects.select_related("reporter_account", "reviewed_by", "first_reviewed_by")
         if status != "all":
@@ -72,6 +99,17 @@ class FlagQueueView(StaffView):
             if target_type not in FlagTarget.values:
                 return Response({"error": {"code": "invalid_target_type"}}, status=400)
             qs = qs.filter(target_type=target_type)
+        if reason_code:
+            if reason_code not in ReasonCode.values:
+                return Response({"error": {"code": "invalid_reason_code"}}, status=400)
+            qs = qs.filter(reason_code=reason_code)
+        if term:
+            qs = qs.filter(Q(reason__icontains=term) | Q(target_snapshot__title__icontains=term)
+                           | Q(reporter_account__display_name__icontains=term))
+        live = (ModerationFlag.objects.filter(target_type=OuterRef("target_type"), target_id=OuterRef("target_id"),
+                                              status__in=DECIDABLE)
+                .order_by().values("target_type", "target_id").annotate(n=Count("pk")).values("n"))
+        qs = qs.annotate(_live_count=Subquery(live, output_field=IntegerField()))
 
         # Oldest first, for the same reason the verification queue is: a moderation backlog is
         # a backlog. Uses the existing idx_flag_status / idx_flag_target.
@@ -103,11 +141,17 @@ class FlagDecisionView(StaffView):
         flag = ModerationFlag.objects.filter(flag_id=flag_id).first()
         if flag is None:
             return Response({"error": {"code": "not_found"}}, status=404)
+        body = request.data if isinstance(request.data, dict) else {}
+        reason_code, note = body.get("reason_code") or "", body.get("note") or ""
+        if not isinstance(reason_code, str) or not isinstance(note, str):
+            return Response({"error": {"code": "invalid_decision", "message": "reason_code and note must be text."}}, status=422)
         # The lock and the "already decided" guard live in resolve_flag (review step 18); this only translates its errors.
         try:
-            flag, effects = resolve_flag(flag, admin_account_for(request), target_status)
+            flag, effects = resolve_flag(flag, admin_account_for(request), target_status, reason_code=reason_code, note=note)
         except AlreadyDecided as exc:
             return Response({"error": {"code": "already_decided", "status": exc.status}}, status=409)
+        except DecisionInvalid as exc:
+            return Response({"error": {"code": exc.code, "message": str(exc)}}, status=422)
         except TargetUnavailable as exc:
             # Nothing to action: the target is gone, or has no surface. Dismiss and review are still allowed.
             return Response({"error": {"code": f"target_{exc.state}", "message": str(exc)}}, status=422)

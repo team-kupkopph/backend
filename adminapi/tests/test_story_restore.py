@@ -114,7 +114,7 @@ def test_a_stale_sibling_flag_cannot_hide_a_restored_listing_again(client, auth)
     live = listing(person())
     a, b, c = _flag("listing", live.pk), _flag("listing", live.pk), _flag("listing", live.pk)
 
-    done = _post(client, auth, f"/admin-api/flags/{a.flag_id}/action").json()
+    done = _post(client, auth, f"/admin-api/flags/{a.flag_id}/action", {"reason_code": "spam_scam"}).json()
     assert done["side_effects"]["flags_resolved"] == "2"
 
     assert _post(client, auth, f"/admin-api/listings/{live.pk}/restore", {"reason": "mistake"}).status_code == 200

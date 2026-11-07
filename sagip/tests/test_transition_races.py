@@ -153,7 +153,7 @@ def test_a_takedown_committed_just_before_a_match_confirm_is_404(monkeypatch, go
             if gone == "taken_down":
                 flag = ModerationFlag.objects.create(reporter_account=AccountFactory(),
                     target_type=FlagTarget.REPORT, target_id=found.pk, reason="fake")
-                resolve_flag(flag, AccountFactory(), FlagStatus.ACTIONED)
+                resolve_flag(flag, AccountFactory(), FlagStatus.ACTIONED, reason_code="spam_scam")
             else:
                 StrayReport.objects.filter(pk=found.pk).delete()
         return real_atomic(*a, **kw)

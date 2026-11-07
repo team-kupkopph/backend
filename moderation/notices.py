@@ -21,6 +21,22 @@ BODY = ("Thank you for telling us. We review every report and act where somethin
         "We can't share what we decided.")
 
 
+#: Review step 8 (MQ3 categories) · what a poster is told about WHY, by the category the moderator chose. A fixed sentence per
+#: category on purpose: it can never carry the reporter's words, the moderator's internal note, or anything about who reported.
+REMOVAL_REASONS = {
+    "spam_scam": "It looked like spam or a scam.",
+    "animal_welfare": "It put an animal's welfare at risk.",
+    "harassment": "It contained harassment or abuse.",
+    "misleading": "It was misleading or fake.",
+    "other": "It broke our community rules.",
+}
+
+
+def removal_reason(code):
+    """The sentence for a poster, or "" for a code we do not know (a notice with no reason beats one with a wrong one)."""
+    return REMOVAL_REASONS.get(code, "")
+
+
 def appeal_line():
     """The sentence added to a takedown notice. One place, so every notice offers the same way back."""
     return f"If you think this was a mistake, write to {settings.SUPPORT_EMAIL}."
