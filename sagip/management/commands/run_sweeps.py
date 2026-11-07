@@ -23,6 +23,7 @@ from django.core.management.base import CommandError
 
 from common.management_base import SingletonCommand
 from listings.sweeps import close_stale_inquiries, expire_placements, nudge_stale_inquiries
+from moderation.sweeps import alert_overdue_flags
 from sagip.sweeps import escalate_reports, expire_offers, expire_stalled_claims, warn_due_claims
 from volunteer.sweeps import decline_lapsed_requests, nudge_attendance, remind_shifts
 
@@ -48,6 +49,7 @@ SWEEPS = [
     ("reminded", remind_shifts),
     ("attendance_nudged", nudge_attendance),
     ("requests_lapsed", decline_lapsed_requests),   # SH4 / SQ1 · a request whose shift ended undecided gets an answer
+    ("flags_overdue", alert_overdue_flags),   # review step 23 · staff hear when a report passes its response target
 ]
 
 

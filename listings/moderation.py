@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from listings.models import AdoptionInquiry, EndReason, InquiryStatus
+from moderation.notices import appeal_line
 from notifications.service import notify
 from sagip import notices
 
@@ -49,7 +50,7 @@ def hide_listing(listing, by):
                                     "updated_at"])
         notices.listing_withdrawn(locked, inquiry)
     notify(locked.posted_by, "listing_removed", title="A listing of yours was removed",
-           body=f"Our moderators removed {locked.name or 'your listing'}, so it's no longer on Kupkop.",
+           body=f"Our moderators removed {locked.name or 'your listing'}, so it's no longer on Kupkop. {appeal_line()}",
            data={"listing_id": str(locked.pk)})
     listing.hidden_at = now
     return True

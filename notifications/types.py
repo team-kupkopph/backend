@@ -75,6 +75,8 @@ _TYPES = [
     NotificationType("placement_decided", "{listing_id, inquiry_id, decision}", True, "kupkop://rescues"),
     NotificationType("placement_withdrawn", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
     NotificationType("listing_withdrawn", "{listing_id, inquiry_id}", True, "kupkop://inquiries"),
+    # Review step 22 (MQ7) · a reporter hears that their report was looked at, never what was decided.
+    NotificationType("report_reviewed", "{flag_id}", True, ""),
     # AD7: the poster hears a moderation takedown of their listing.
     NotificationType("listing_removed", "{listing_id}", True, "kupkop://listings/{listing_id}"),
     # Adoption poster loop (dev/adoption-build-review.md AD2): the placement recipient's push,

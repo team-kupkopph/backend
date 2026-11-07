@@ -67,3 +67,8 @@ SHELL=/bin/bash
 # anonymised slightly after its 30 days, never before. The window a user was promised — and
 # whatever the privacy policy ends up stating — is never shortened by a schedule change.
 20 19 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py purge_deleted_accounts >> /var/log/kupkop/purge.log 2>&1
+
+# Nightly moderation-report retention (review step 24, MQ9): blanks the free text of DISMISSED reports 12 months after they were
+# decided. Upheld reports keep theirs. Its own entry, like the two purges above, because it destroys data.
+# 19:35 UTC = 03:35 PHT, between the account purge and the badge sweep; asserted by test_crontab.py.
+35 19 * * * <USER> <BACKEND_DIR>/.venv/bin/python <BACKEND_DIR>/manage.py scrub_flag_reasons >> /var/log/kupkop/purge.log 2>&1
