@@ -1,0 +1,28 @@
+# Review step 7f (Apple 1.2: "a method for filtering objectionable material from being posted").
+#
+# One term per line; a line starting with # is a comment. A term matches a WHOLE WORD (or a whole run of words, for a
+# phrase), ignoring case, accents and the usual letter-for-symbol swaps (f@ck, fuuuck). It never matches inside another
+# word, so "class" and "Scunthorpe" are safe.
+#
+# This is a STARTER list of unambiguous abuse, written by engineering. The owner (and counsel, with the Terms of Use) own
+# what belongs here: add a line, deploy, done. More can be added without a deploy through settings.MODERATION_BLOCKLIST_EXTRA.
+# Keep it to words that are abusive in any context. A word that is only sometimes rude (gago, bobo) is a reviewer's call
+# on a report, not a reason to refuse someone's post.
+fuck
+fucker
+fucking
+motherfucker
+cunt
+nigger
+nigga
+faggot
+retard
+whore
+slut
+bitch
+putangina
+putang ina
+tangina
+tang ina
+pakyu
+pakshet
