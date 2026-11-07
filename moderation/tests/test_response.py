@@ -204,6 +204,19 @@ def test_a_dismissed_reports_text_is_scrubbed_after_a_year_but_an_upheld_ones_is
 
 
 @pytest.mark.django_db
+def test_the_snapshot_of_the_targets_text_goes_with_a_dismissed_reports_words():
+    """A snapshot is a copy of somebody else's text; it is held no longer than the report's own words are. An upheld one keeps it."""
+    snap = {"title": "t", "body": "someone's words", "photos": []}
+    gone = _flag(status=FlagStatus.DISMISSED, reason="", decided_days_ago=400)
+    kept = _flag(status=FlagStatus.ACTIONED, reason="", decided_days_ago=400)
+    ModerationFlag.objects.filter(pk__in=[gone.pk, kept.pk]).update(target_snapshot=snap)
+    assert retention.scrub_old_reasons() == 1
+    gone.refresh_from_db()
+    kept.refresh_from_db()
+    assert gone.target_snapshot is None and kept.target_snapshot == snap
+
+
+@pytest.mark.django_db
 def test_scrubbing_is_idempotent_and_the_window_is_a_setting():
     _flag(status=FlagStatus.DISMISSED, reason="words", decided_days_ago=40)
     assert retention.scrub_old_reasons() == 0

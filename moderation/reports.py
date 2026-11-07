@@ -53,6 +53,13 @@ def add_to_flag(flag, reason_code, note):
     return True
 
 
+def has_live(reporter, target_type, target_id):
+    """Whether the reporter has a live report about this target. A plain read, so it is safe outside a transaction
+    (`first_live` locks the row, and Django refuses a lock in autocommit)."""
+    return ModerationFlag.objects.filter(reporter_account=reporter, target_type=target_type, target_id=target_id,
+                                         status__in=DECIDABLE).exists()
+
+
 def first_live(reporter, target_type, target_id):
     """The reporter's live report about this target, locked, or None."""
     return (ModerationFlag.objects.select_for_update()
@@ -67,11 +74,13 @@ def file_report(reporter, target_type, target_id, reason_code, note):
     if existing is not None:
         add_to_flag(existing, reason_code, note)
         return existing, False
+    from moderation.targets import snapshot_target
+    snapshot = snapshot_target(target_type, target_id)      # step 17 · the evidence as it stood when it was reported
     try:
         with transaction.atomic():
             return ModerationFlag.objects.create(
                 reporter_account=reporter, target_type=target_type, target_id=target_id,
-                reason=note, reason_code=reason_code), True
+                reason=note, reason_code=reason_code, target_snapshot=snapshot), True
     except IntegrityError:
         # The same person's other tap won the race. Its row is committed by now; fold into it.
         winner = first_live(reporter, target_type, target_id)

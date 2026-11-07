@@ -6,7 +6,7 @@ from django.contrib import admin, messages
 from django.db.models import Case, IntegerField, Value, When
 
 from accounts.staff import reviewer_account
-from moderation.actions import resolve_flag
+from moderation.actions import ModerationError, resolve_flag
 from moderation.models import FlagStatus
 
 
@@ -50,12 +50,16 @@ class ModerationFlagAdmin(admin.ModelAdmin):
         # this admin. Behaviour that lives in the surface being removed goes with it, and
         # nobody notices until a story flag is actioned somewhere else and the story stays
         # visible. One writer, invoked by both surfaces.
-        n = hidden = 0
+        n = hidden = skipped = 0
         for flag in queryset:
-            _, effects = resolve_flag(flag, reviewer, status)
+            try:
+                _, effects = resolve_flag(flag, reviewer, status)
+            except ModerationError:      # already decided by someone else, or nothing left to action: leave it
+                skipped += 1
+                continue
             n += 1
             hidden += 1 if effects.get("story_hidden") else 0
-        note = f"{n} flag(s) marked {status}."
+        note = f"{n} flag(s) marked {status}." + (f" {skipped} skipped (already decided or not actionable)." if skipped else "")
         if hidden:
             note += f" {hidden} story(ies) hidden."
         self.message_user(request, note, level=messages.SUCCESS)

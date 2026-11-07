@@ -3,7 +3,6 @@
 ⚠️ `ModerationFlag` is one of the three registered model admins, so this track is what US-X1
 demands before US-X2 can switch the Django admin off. It is not de-scopable.
 """
-from django.db import transaction
 from rest_framework.response import Response
 
 from adminapi.pagination import decode_cursor, paginate
@@ -13,9 +12,9 @@ from community.models import StoryPost, StoryStatus
 from community.moderation import StoryNotHidden, restore_story
 from listings.models import AdoptionListing
 from listings.moderation import ListingNotHidden, restore_listing
-from moderation.actions import DECIDABLE, ModerationError, TargetUnavailable, resolve_flag
+from moderation.actions import AlreadyDecided, ModerationError, TargetUnavailable, resolve_flag
 from moderation.models import FlagStatus, FlagTarget, ModerationFlag
-from moderation.targets import describe_target
+from moderation.targets import describe_target, edited_since
 from sagip.models import StrayReport
 from sagip.moderation import ReportNotHidden, restore_report
 
@@ -30,6 +29,13 @@ def flag_row(flag, *, with_target=False):
         "status": flag.status,
         "created_at": flag.created_at.isoformat(),
         "reviewed_at": flag.reviewed_at.isoformat() if flag.reviewed_at else None,
+        # Review step 19 (MO22) · who decided and when (the console used to say "Already actioned." with neither), and who
+        # looked first. Names only: a reviewer's email is not the reporter's business or the page's.
+        "reviewed_by": ({"account_id": str(flag.reviewed_by_id), "display_name": flag.reviewed_by.display_name}
+                        if flag.reviewed_by_id else None),
+        "first_reviewed_at": flag.first_reviewed_at.isoformat() if flag.first_reviewed_at else None,
+        "first_reviewed_by": ({"account_id": str(flag.first_reviewed_by_id), "display_name": flag.first_reviewed_by.display_name}
+                              if flag.first_reviewed_by_id else None),
         # ⚠️ NULL reporter = system-raised (e.g. the repeat-withdrawal rule), not a person.
         # The column is nullable by schema accommodation; the UI must render "System" rather
         # than crash on a null.
@@ -39,8 +45,15 @@ def flag_row(flag, *, with_target=False):
              "email": flag.reporter_account.email}
             if flag.reporter_account_id else None
         ),
-        **({"target": describe_target(flag.target_type, flag.target_id, flag_id=flag.flag_id)} if with_target else {}),
+        **(_with_target(flag) if with_target else {}),
     }
+
+
+def _with_target(flag):
+    """The target as it is now, what it was when reported, and whether those differ (review step 17, MO14)."""
+    target = describe_target(flag.target_type, flag.target_id, flag_id=flag.flag_id)
+    return {"target": target, "snapshot": flag.target_snapshot,
+            "edited_since_reported": edited_since(flag.target_snapshot, target)}
 
 
 class FlagQueueView(StaffView):
@@ -50,7 +63,7 @@ class FlagQueueView(StaffView):
         status = request.query_params.get("status", FlagStatus.OPEN)
         target_type = request.query_params.get("target_type")
 
-        qs = ModerationFlag.objects.select_related("reporter_account")
+        qs = ModerationFlag.objects.select_related("reporter_account", "reviewed_by", "first_reviewed_by")
         if status != "all":
             if status not in FlagStatus.values:
                 return Response({"error": {"code": "invalid_status"}}, status=400)
@@ -70,7 +83,7 @@ class FlagQueueView(StaffView):
 
 class FlagDetailView(StaffView):
     def get(self, request, flag_id):
-        flag = (ModerationFlag.objects.select_related("reporter_account")
+        flag = (ModerationFlag.objects.select_related("reporter_account", "reviewed_by", "first_reviewed_by")
                 .filter(flag_id=flag_id).first())
         if flag is None:
             return Response({"error": {"code": "not_found"}}, status=404)
@@ -87,17 +100,14 @@ class FlagDecisionView(StaffView):
             "dismiss": FlagStatus.DISMISSED,
         }[self.action]
 
+        flag = ModerationFlag.objects.filter(flag_id=flag_id).first()
+        if flag is None:
+            return Response({"error": {"code": "not_found"}}, status=404)
+        # The lock and the "already decided" guard live in resolve_flag (review step 18); this only translates its errors.
         try:
-            with transaction.atomic():
-                # Same guard as US-C3: two moderators on one flag is normal, and without the
-                # lock the second silently overwrites the first reviewer's stamp.
-                flag = ModerationFlag.objects.select_for_update().filter(flag_id=flag_id).first()
-                if flag is None:
-                    return Response({"error": {"code": "not_found"}}, status=404)
-                if flag.status not in DECIDABLE:
-                    return Response(
-                        {"error": {"code": "already_decided", "status": flag.status}}, status=409)
-                flag, effects = resolve_flag(flag, admin_account_for(request), target_status)
+            flag, effects = resolve_flag(flag, admin_account_for(request), target_status)
+        except AlreadyDecided as exc:
+            return Response({"error": {"code": "already_decided", "status": exc.status}}, status=409)
         except TargetUnavailable as exc:
             # Nothing to action: the target is gone, or has no surface. Dismiss and review are still allowed.
             return Response({"error": {"code": f"target_{exc.state}", "message": str(exc)}}, status=422)

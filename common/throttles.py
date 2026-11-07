@@ -110,6 +110,30 @@ class OfferCreateThrottle(AccountScopedThrottle):
 
 
 class ModerationFlagCreateThrottle(AccountScopedThrottle):
+    """Review step 16 (MO13) · the allowance is spent by a report that was CREATED, not by every call. A repeat that folds into
+    an earlier report, a refused one (a thing that is gone, one's own, a private one), and a mistyped form all used to count,
+    so someone could be told to wait a day without having reported 20 things. `allow_request` only checks; the view calls
+    `record()` when it has made a flag."""
+
+    def allow_request(self, request, view):
+        if self.rate is None:
+            return True
+        self.key = self.get_cache_key(request, view)
+        if self.key is None:
+            return True
+        self.history = self.cache.get(self.key, [])
+        self.now = self.timer()
+        while self.history and self.history[-1] <= self.now - self.duration:
+            self.history.pop()
+        if len(self.history) >= self.num_requests:
+            return self.throttle_failure()
+        return True                      # NOT recorded here
+
+    def record(self):
+        if getattr(self, "key", None) is not None:
+            self.history.insert(0, self.now)
+            self.cache.set(self.key, self.history, self.duration)
+
     scope = "moderation_flag_create"
 
 

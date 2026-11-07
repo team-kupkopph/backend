@@ -1,3 +1,4 @@
+from rest_framework.exceptions import Throttled
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -5,9 +6,13 @@ from rest_framework.views import APIView
 from accounts.models import Account
 from common.throttles import BlockCreateThrottle, ModerationFlagCreateThrottle
 from moderation.models import AccountBlock, FlagTarget
-from moderation.reports import file_report
+from moderation.reports import file_report, has_live
 from moderation.serializers import BlockCreateSerializer, ModerationFlagCreateSerializer
-from moderation.targets import resolve_person, target_exists
+from moderation.targets import REGISTRY, resolve_person, target_exists
+
+
+def _own_content():
+    return Response({"error": {"code": "own_content", "message": "That's yours, so there is nothing to report."}}, status=422)
 
 
 def _own_account():
@@ -24,7 +29,11 @@ class ModerationFlagCreateView(APIView):
 
     Review step 7: a report carries a category, and a PERSON can be reported, by account id or by what they posted."""
     permission_classes = [IsAuthenticated]
-    throttle_classes = [ModerationFlagCreateThrottle]  # US-SEC2 pattern · per-account, 20/day
+
+    # US-SEC2 pattern · per-account, 20/day, but only a report that is CREATED is held to it (review step 16). So it is not
+    # a class-level throttle: the view checks it only when it is about to make a new report, and records it once it has. A
+    # person at their limit can still add words to a report they already filed, which creates nothing.
+    throttle_classes = []
 
     def post(self, request):
         s = ModerationFlagCreateSerializer(data=request.data)
@@ -41,9 +50,19 @@ class ModerationFlagCreateView(APIView):
             return _own_account()
         if not target_exists(d["target_type"], target_id, request.user):
             return Response({"error": {"code": "not_found", "message": "That item no longer exists."}}, status=404)
+        spec = REGISTRY[d["target_type"]]
+        if spec.supported and d["target_type"] != FlagTarget.ACCOUNT:      # MO29 · your own listing, story, QR or report
+            own = spec.fetch(target_id)
+            if own is not None and spec.is_own(own, request.user):
+                return _own_content()
 
         # One live report per person per target. A repeat is added to it, not dropped: see moderation/reports.py.
+        allowance = ModerationFlagCreateThrottle()
+        if not has_live(request.user, d["target_type"], target_id) and not allowance.allow_request(request, self):
+            raise Throttled(wait=allowance.wait())
         flag, created = file_report(request.user, d["target_type"], target_id, d["reason_code"], d["reason"])
+        if created:
+            allowance.record()
         return Response({"flag_id": str(flag.pk)}, status=201 if created else 200)
 
 
