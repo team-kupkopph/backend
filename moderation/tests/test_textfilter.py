@@ -37,6 +37,20 @@ def test_these_are_not(text):
     assert not textfilter.blocked(text)
 
 
+@pytest.mark.parametrize("text", ["you asshole", "Bastard!", "dickhead", "shitheads", "puta", "PUNYETA", "tarantado ka", "a pokpok", "yawa"])
+def test_the_second_pass_terms_are_refused(text):
+    assert textfilter.blocked(text)
+
+
+@pytest.mark.parametrize("text", [
+    "my pussycat is lost", "she calls her cat pussy", "a hen and a cock", "ask Dick Alvarez", "a cockatiel needs a home", "the rooster, a cock, crowed", "Dickson Street shelter", "hayop na gala",
+    "an injured animal, maybe raped by a pack of dogs", "Essex", "classic", "bakla is not on the list", "gago is rude but not here",
+])
+def test_an_animal_apps_ordinary_words_are_not_refused(text):
+    """The reason this list is short: every one of these is an honest post on a rescue app."""
+    assert not textfilter.blocked(text)
+
+
 def test_a_phrase_matches_only_as_a_run_of_whole_words():
     assert textfilter.blocked("putang ina") and not textfilter.blocked("putang is not ina") and not textfilter.blocked("putang")
 
